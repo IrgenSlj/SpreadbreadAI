@@ -1,0 +1,1 @@
+An AI-integrated app for working with spreadsheets

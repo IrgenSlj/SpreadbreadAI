@@ -1,0 +1,14 @@
+{
+  "name": "@spreadbreadai/shared",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared domain types and utilities",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "echo \"shared build scaffold pending\"",
+    "test": "echo \"shared test scaffold pending\""
+  }
+}
