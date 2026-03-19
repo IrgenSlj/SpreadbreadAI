@@ -9,3 +9,4 @@ build
 coverage
 *.log
 *.tsbuildinfo
+apps/mcp-server/.data/

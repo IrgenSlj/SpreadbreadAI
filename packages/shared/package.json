@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Shared domain types and utilities",
   "type": "module",
+  "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"
   },

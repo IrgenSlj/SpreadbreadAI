@@ -6,6 +6,8 @@ TypeScript MCP server scaffold for workbook automation.
 
 - `pnpm --filter @spreadbreadai/mcp-server start`
 - `pnpm --filter @spreadbreadai/mcp-server dev`
+- `pnpm --filter @spreadbreadai/mcp-server start:http`
+- `pnpm --filter @spreadbreadai/mcp-server dev:http`
 - `pnpm --filter @spreadbreadai/mcp-server health`
 - `pnpm --filter @spreadbreadai/mcp-server build`
 
@@ -16,3 +18,14 @@ TypeScript MCP server scaffold for workbook automation.
 - `workbook.apply` for approval-gated application
 
 The current implementation is intentionally minimal. It wires a real stdio MCP server and returns explicit placeholder responses so the next phase can replace them with workbook metadata, proposal storage, and the approval workflow.
+
+## Local HTTP API
+
+The local server exposes:
+
+- `GET /healthz`
+- `GET /api/workbooks`
+- `GET /api/workbooks/:id/review`
+- `POST /api/workbooks/upload`
+
+Uploads are stored under `apps/mcp-server/.data/` and are ignored by git.

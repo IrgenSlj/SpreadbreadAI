@@ -42,6 +42,11 @@ textarea {
   font: inherit;
 }
 
+strong,
+small {
+  display: block;
+}
+
 .app-shell {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
@@ -150,7 +155,10 @@ h2 {
 }
 
 .hero-metrics strong,
-.risk-list strong {
+.risk-list strong,
+.sheet-list strong,
+.proposal-meta strong,
+.link-list strong {
   display: block;
   margin-top: 8px;
   font-size: 1.05rem;
@@ -210,10 +218,19 @@ h2 {
 }
 
 .risk-list,
+.sheet-list,
+.risk-grid,
+.proposal-meta,
+.link-list,
+.workbook-list,
 .diff-card,
 .timeline {
   display: grid;
   gap: 12px;
+}
+
+.risk-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .diff-card {
@@ -221,6 +238,22 @@ h2 {
   border-radius: 20px;
   background: linear-gradient(180deg, rgba(255, 250, 242, 0.98), rgba(247, 240, 231, 0.98));
   border: 1px solid rgba(23, 19, 15, 0.08);
+}
+
+.diff-entry {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .diff-row {
@@ -243,6 +276,115 @@ h2 {
 .diff-row.neutral {
   color: var(--accent-2);
   background: rgba(49, 92, 99, 0.08);
+}
+
+.diff-row.comment {
+  color: var(--accent);
+  background: rgba(154, 79, 43, 0.08);
+}
+
+.upload-control {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px dashed rgba(154, 79, 43, 0.35);
+  border-radius: 18px;
+  background: rgba(255, 249, 240, 0.72);
+  max-width: 260px;
+}
+
+.upload-control span {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+
+.upload-control input {
+  width: 100%;
+}
+
+.status-note {
+  margin: 14px 0 0;
+  color: var(--accent-2);
+}
+
+.status-error {
+  color: var(--danger);
+}
+
+.sheet-list article,
+.proposal-meta article,
+.link-list article,
+.risk-card {
+  background: var(--panel-strong);
+  border: 1px solid rgba(23, 19, 15, 0.08);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.workbook-item {
+  text-align: left;
+  border-radius: 18px;
+  border: 1px solid rgba(23, 19, 15, 0.08);
+  background: var(--panel-strong);
+  padding: 16px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.workbook-item.active {
+  border-color: rgba(154, 79, 43, 0.34);
+  background: linear-gradient(180deg, rgba(255, 250, 242, 0.96), rgba(246, 234, 221, 0.96));
+}
+
+.workbook-item small {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.sheet-list small,
+.risk-card p,
+.risk-card small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.sheet-list small,
+.risk-card small {
+  margin-top: 8px;
+}
+
+.risk-card p {
+  margin: 12px 0 0;
+}
+
+.severity {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.severity-high {
+  color: var(--danger);
+}
+
+.severity-medium {
+  color: var(--accent);
+}
+
+.severity-low {
+  color: var(--accent-2);
+}
+
+.proposal-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 20px;
 }
 
 .timeline article {
@@ -320,6 +462,7 @@ h2 {
   .hero,
   .grid-two,
   .proposal-grid,
+  .proposal-layout,
   .sketch-panel {
     grid-template-columns: 1fr;
   }

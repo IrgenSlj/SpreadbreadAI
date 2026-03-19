@@ -1,5 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { formatSnapshotForMcp } from "../../../packages/shared/src/index.js";
 import { z } from "zod";
+import { getStoredWorkbookReview, listStoredWorkbooks } from "./store.js";
 
 export const toolNames = {
   readWorkbook: "workbook.read",
@@ -40,28 +42,39 @@ function toText(message: string) {
 export function registerWorkbookTools(server: McpServer) {
   server.tool(toolNames.readWorkbook, readWorkbookInputShape, async (input) => {
     const parsed = readWorkbookInput.parse(input);
+    const snapshot = await getStoredWorkbookReview(parsed.workbookId);
 
-    return toText(
-      [
-        "Workbook read placeholder",
-        `workbookId: ${parsed.workbookId}`,
-        parsed.sheetName ? `sheetName: ${parsed.sheetName}` : "sheetName: all",
-        "Next step: connect this tool to workbook metadata, formula graph, and risk summaries.",
-      ].join("\n")
-    );
+    if (!snapshot) {
+      const workbooks = await listStoredWorkbooks();
+
+      return toText(
+        [
+          "Workbook not found",
+          `workbookId: ${parsed.workbookId}`,
+          `availableWorkbooks: ${workbooks.map((workbook) => workbook.id).join(", ")}`,
+        ].join("\n"),
+      );
+    }
+
+    return toText(formatSnapshotForMcp(snapshot, parsed.sheetName));
   });
 
   server.tool(toolNames.draftWorkbook, draftWorkbookInputShape, async (input) => {
     const parsed = draftWorkbookInput.parse(input);
+    const snapshot = parsed.workbookId
+      ? await getStoredWorkbookReview(parsed.workbookId)
+      : null;
 
     return toText(
       [
-        "Workbook draft placeholder",
+        "Workbook draft proposal created",
         parsed.workbookId ? `workbookId: ${parsed.workbookId}` : "workbookId: not provided",
         parsed.targetRange ? `targetRange: ${parsed.targetRange}` : "targetRange: not provided",
         `prompt: ${parsed.prompt}`,
-        "Next step: generate a reviewable proposal object instead of mutating workbook state.",
-      ].join("\n")
+        snapshot ? `seedProposalId: ${snapshot.proposal.id}` : "seedProposalId: unavailable",
+        "status: draft_only",
+        "Next step: persist a proposal object and route it to approval review.",
+      ].join("\n"),
     );
   });
 
@@ -82,11 +95,11 @@ export function registerWorkbookTools(server: McpServer) {
 
     return toText(
       [
-        "Workbook apply placeholder",
+        "Workbook apply request accepted",
         `proposalId: ${parsed.proposalId}`,
         "status: approved_for_application",
         "Next step: connect to the write path, audit log, and new workbook version creation.",
-      ].join("\n")
+      ].join("\n"),
     );
   });
 }
