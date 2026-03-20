@@ -316,6 +316,62 @@ h2 {
   color: var(--danger);
 }
 
+.review-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.review-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.review-form span {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.review-form input,
+.review-form textarea {
+  width: 100%;
+  border: 1px solid rgba(23, 19, 15, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 250, 242, 0.92);
+  color: var(--text);
+}
+
+.action-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.decision-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 11px 16px;
+  color: #fff;
+  cursor: pointer;
+}
+
+.decision-button.approve {
+  background: var(--success);
+}
+
+.decision-button.reject {
+  background: var(--danger);
+}
+
+.review-meta {
+  margin: 0;
+  color: var(--accent-2);
+}
+
 .sheet-list article,
 .named-range-list article,
 .proposal-meta article,

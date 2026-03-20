@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  type ApprovalDecision,
   demoReviewSnapshot,
   type WorkbookReviewSnapshot,
   type WorkbookSummary,
@@ -146,4 +147,80 @@ export async function saveUploadedWorkbook(input: {
   await writeStore(store);
 
   return record;
+}
+
+export async function updateStoredProposalDecision(input: {
+  workbookId: string;
+  decision: ApprovalDecision;
+  reviewer: string;
+  comment?: string;
+}): Promise<WorkbookReviewSnapshot | null> {
+  if (input.workbookId === demoReviewSnapshot.workbook.id) {
+    const reviewedAt = new Date().toISOString();
+
+    return {
+      ...demoReviewSnapshot,
+      proposal: {
+        ...demoReviewSnapshot.proposal,
+        status: input.decision === "approve" ? "approved" : "rejected",
+        reviewer: input.reviewer,
+        reviewedAt,
+        reviewComment: input.comment,
+      },
+      auditEvents: [
+        ...demoReviewSnapshot.auditEvents,
+        {
+          id: `audit_${demoReviewSnapshot.auditEvents.length + 1}`,
+          workbookId: input.workbookId,
+          actor: input.reviewer,
+          action:
+            input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
+          detail:
+            input.comment?.trim() ||
+            (input.decision === "approve"
+              ? "Proposal approved in the review prototype."
+              : "Proposal rejected in the review prototype."),
+          createdAt: reviewedAt,
+        },
+      ],
+    };
+  }
+
+  const store = await readStore();
+  const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+
+  if (!record) {
+    return null;
+  }
+
+  const reviewedAt = new Date().toISOString();
+  record.snapshot = {
+    ...record.snapshot,
+    proposal: {
+      ...record.snapshot.proposal,
+      status: input.decision === "approve" ? "approved" : "rejected",
+      reviewer: input.reviewer,
+      reviewedAt,
+      reviewComment: input.comment,
+    },
+    auditEvents: [
+      ...record.snapshot.auditEvents,
+      {
+        id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
+        workbookId: input.workbookId,
+        actor: input.reviewer,
+        action:
+          input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
+        detail:
+          input.comment?.trim() ||
+          (input.decision === "approve"
+            ? "Proposal approved in the review prototype."
+            : "Proposal rejected in the review prototype."),
+        createdAt: reviewedAt,
+      },
+    ],
+  };
+
+  await writeStore(store);
+  return record.snapshot;
 }

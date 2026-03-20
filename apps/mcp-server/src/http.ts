@@ -1,7 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
+import type { ApprovalDecision } from "../../../packages/shared/src/index.js";
 import { serverName, serverVersion } from "./server.js";
-import { getStoredWorkbookReview, listStoredWorkbooks, saveUploadedWorkbook } from "./store.js";
+import {
+  getStoredWorkbookReview,
+  listStoredWorkbooks,
+  saveUploadedWorkbook,
+  updateStoredProposalDecision,
+} from "./store.js";
 
 const defaultPort = Number.parseInt(process.env.PORT ?? "4242", 10);
 const defaultHost = process.env.HOST ?? "127.0.0.1";
@@ -27,6 +33,11 @@ async function readRequestBody(request: IncomingMessage): Promise<Uint8Array> {
   }
 
   return Buffer.concat(chunks);
+}
+
+async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
+  const bytes = await readRequestBody(request);
+  return JSON.parse(Buffer.from(bytes).toString("utf8")) as T;
 }
 
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
@@ -98,6 +109,42 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       workbookId: record.snapshot.workbook.id,
       review: record.snapshot,
     });
+    return;
+  }
+
+  if (method === "POST" && url.pathname.match(/^\/api\/workbooks\/[^/]+\/proposal\/decision$/)) {
+    const workbookId = decodeURIComponent(
+      url.pathname.replace("/api/workbooks/", "").replace(/\/proposal\/decision$/, ""),
+    );
+    const body = await readJsonBody<{
+      decision?: ApprovalDecision;
+      reviewer?: string;
+      comment?: string;
+    }>(request);
+
+    if (body.decision !== "approve" && body.decision !== "reject") {
+      sendJson(response, 400, { error: "Invalid decision" });
+      return;
+    }
+
+    if (!body.reviewer || body.reviewer.trim().length === 0) {
+      sendJson(response, 400, { error: "Reviewer is required" });
+      return;
+    }
+
+    const review = await updateStoredProposalDecision({
+      workbookId,
+      decision: body.decision,
+      reviewer: body.reviewer.trim(),
+      comment: body.comment?.trim(),
+    });
+
+    if (!review) {
+      sendJson(response, 404, { error: "Workbook not found" });
+      return;
+    }
+
+    sendJson(response, 200, { review });
     return;
   }
 

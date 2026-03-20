@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
+  type ApprovalDecision,
   demoReviewSnapshot,
   type ProposalDiffEntry,
   type WorkbookSummary,
@@ -52,6 +53,8 @@ function App() {
   const [workbooks, setWorkbooks] = useState<WorkbookSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [reviewerName, setReviewerName] = useState("Finance Manager");
+  const [reviewComment, setReviewComment] = useState("");
 
   const pendingRisks = useMemo(
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
@@ -156,6 +159,43 @@ function App() {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Failed to switch workbook";
+
+      setErrorMessage(message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleProposalDecision(decision: ApprovalDecision) {
+    try {
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      const response = await fetch(
+        `/api/workbooks/${encodeURIComponent(snapshot.workbook.id)}/proposal/decision`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            decision,
+            reviewer: reviewerName,
+            comment: reviewComment,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Proposal decision failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as { review: WorkbookReviewSnapshot };
+      setSnapshot(data.review);
+      setSection("proposal");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to update proposal decision";
 
       setErrorMessage(message);
     } finally {
@@ -377,6 +417,51 @@ function App() {
                   <span>Actions</span>
                   <strong>{snapshot.proposal.diff.length} proposed review actions</strong>
                 </article>
+              </div>
+              <div className="review-form">
+                <label>
+                  <span>Reviewer</span>
+                  <input
+                    onChange={(event) => setReviewerName(event.target.value)}
+                    type="text"
+                    value={reviewerName}
+                  />
+                </label>
+                <label>
+                  <span>Decision comment</span>
+                  <textarea
+                    onChange={(event) => setReviewComment(event.target.value)}
+                    rows={3}
+                    value={reviewComment}
+                  />
+                </label>
+                <div className="action-row">
+                  <button
+                    className="decision-button approve"
+                    onClick={() => void handleProposalDecision("approve")}
+                    type="button"
+                  >
+                    Approve Proposal
+                  </button>
+                  <button
+                    className="decision-button reject"
+                    onClick={() => void handleProposalDecision("reject")}
+                    type="button"
+                  >
+                    Reject Proposal
+                  </button>
+                </div>
+                {snapshot.proposal.reviewer ? (
+                  <p className="review-meta">
+                    Reviewed by {snapshot.proposal.reviewer}
+                    {snapshot.proposal.reviewedAt
+                      ? ` at ${new Date(snapshot.proposal.reviewedAt).toLocaleString()}`
+                      : ""}
+                    {snapshot.proposal.reviewComment
+                      ? `: ${snapshot.proposal.reviewComment}`
+                      : ""}
+                  </p>
+                ) : null}
               </div>
             </div>
             <div className="diff-card">

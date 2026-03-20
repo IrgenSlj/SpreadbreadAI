@@ -12,6 +12,8 @@ export type ProposalStatus =
   | "rejected"
   | "applied";
 
+export type ApprovalDecision = "approve" | "reject";
+
 export type RiskSeverity = "low" | "medium" | "high";
 export type DiffKind = "remove" | "add" | "update" | "comment";
 
@@ -78,6 +80,9 @@ export interface ProposalDetail extends ProposalSummary {
   summary: string;
   approvalRequired: boolean;
   diff: ProposalDiffEntry[];
+  reviewer?: string;
+  reviewedAt?: string;
+  reviewComment?: string;
 }
 
 export interface AuditEvent {
@@ -181,6 +186,9 @@ const demoProposal: ProposalDetail = {
   summary:
     "Refresh revenue assumptions, repair the broken chain in the forecast rollup, and attach reviewer commentary before close.",
   approvalRequired: true,
+  reviewer: "Finance Manager",
+  reviewedAt: "2026-03-19T08:10:00.000Z",
+  reviewComment: "Approved after validating pipeline updates and commentary.",
   diff: [
     {
       id: "diff_assumption",
