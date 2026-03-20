@@ -50,6 +50,13 @@ export interface WorkbookSummary {
   createdAt: string;
 }
 
+export interface WorkbookVersionSummary {
+  id: WorkbookVersionId;
+  createdAt: string;
+  createdBy: string;
+  note: string;
+}
+
 export interface WorkbookDetail extends WorkbookSummary {
   owner: string;
   status: "healthy" | "needs_review";
@@ -57,6 +64,7 @@ export interface WorkbookDetail extends WorkbookSummary {
   sheets: WorkbookSheetSummary[];
   risks: WorkbookRisk[];
   namedRanges: WorkbookNamedRange[];
+  versions: WorkbookVersionSummary[];
 }
 
 export interface ProposalDiffEntry {
@@ -178,6 +186,14 @@ const demoWorkbook: WorkbookDetail = {
   namedRanges: [
     { name: "growth_assumptions", sheetName: "Assumptions", reference: "Assumptions!C6:C9" },
     { name: "forecast_rollup", sheetName: "Forecast", reference: "Forecast!B4:G18" },
+  ],
+  versions: [
+    {
+      id: "wbv_014",
+      createdAt: "2026-03-19T07:10:00.000Z",
+      createdBy: "system",
+      note: "Upload normalization snapshot",
+    },
   ],
 };
 
@@ -353,6 +369,14 @@ export function createUploadedWorkbookReview(
         },
       ],
       namedRanges: [],
+      versions: [
+        {
+          id: versionId,
+          createdAt: uploadedAt,
+          createdBy: "system",
+          note: "Initial uploaded workbook snapshot",
+        },
+      ],
     },
     proposal: {
       id: proposalId,

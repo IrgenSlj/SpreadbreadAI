@@ -107,6 +107,79 @@ function itemDecisionToStatus(decision: ApprovalDecision): ProposalItemStatus {
   return decision === "approve" ? "approved" : "rejected";
 }
 
+function nextVersionId(currentVersionId: string): string {
+  const match = currentVersionId.match(/^(.*?_v)(\d+)$/);
+
+  if (!match) {
+    return `${currentVersionId}_next`;
+  }
+
+  const prefix = match[1];
+  const current = Number.parseInt(match[2], 10);
+  return `${prefix}${String(current + 1).padStart(match[2].length, "0")}`;
+}
+
+function appendApplyResult(snapshot: WorkbookReviewSnapshot, actor: string, note?: string) {
+  const reviewedAt = new Date().toISOString();
+  const approvedItems = snapshot.proposal.diff.filter((entry) => entry.status === "approved");
+
+  if (approvedItems.length === 0) {
+    return null;
+  }
+
+  const versionId = nextVersionId(snapshot.workbook.latestVersionId);
+
+  return {
+    ...snapshot,
+    workbook: {
+      ...snapshot.workbook,
+      latestVersionId: versionId,
+      lastReviewedAt: reviewedAt,
+      versions: [
+        {
+          id: versionId,
+          createdAt: reviewedAt,
+          createdBy: actor,
+          note:
+            note?.trim() ||
+            `Applied ${approvedItems.length} approved proposal item${approvedItems.length === 1 ? "" : "s"}.`,
+        },
+        ...snapshot.workbook.versions,
+      ],
+    },
+    proposal: {
+      ...snapshot.proposal,
+      status: "applied" as const,
+      reviewedAt,
+      reviewer: actor,
+      reviewComment: note?.trim() || snapshot.proposal.reviewComment,
+      diff: snapshot.proposal.diff.map((entry) =>
+        entry.status === "approved"
+          ? {
+              ...entry,
+              reviewComment:
+                entry.reviewComment ??
+                "Included in the applied workbook version.",
+            }
+          : entry,
+      ),
+    },
+    auditEvents: [
+      {
+        id: `${snapshot.workbook.id}_audit_${snapshot.auditEvents.length + 1}`,
+        workbookId: snapshot.workbook.id,
+        actor,
+        action: "proposal.applied",
+        detail:
+          note?.trim() ||
+          `Applied ${approvedItems.length} approved proposal item${approvedItems.length === 1 ? "" : "s"} to workbook version ${versionId}.`,
+        createdAt: reviewedAt,
+      },
+      ...snapshot.auditEvents,
+    ],
+  };
+}
+
 export async function listStoredWorkbooks(): Promise<WorkbookSummary[]> {
   const store = await readStore();
   const persisted = store.records.map((record) => ({
@@ -356,6 +429,33 @@ export async function updateStoredProposalItemDecision(input: {
     ],
   };
 
+  await writeStore(store);
+  return record.snapshot;
+}
+
+export async function applyApprovedProposalItems(input: {
+  workbookId: string;
+  actor: string;
+  note?: string;
+}): Promise<WorkbookReviewSnapshot | null> {
+  if (input.workbookId === demoReviewSnapshot.workbook.id) {
+    return appendApplyResult(demoReviewSnapshot, input.actor, input.note);
+  }
+
+  const store = await readStore();
+  const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+
+  if (!record) {
+    return null;
+  }
+
+  const nextSnapshot = appendApplyResult(record.snapshot, input.actor, input.note);
+
+  if (!nextSnapshot) {
+    return null;
+  }
+
+  record.snapshot = nextSnapshot;
   await writeStore(store);
   return record.snapshot;
 }

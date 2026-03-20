@@ -223,6 +223,7 @@ h2 {
 .proposal-meta,
 .link-list,
 .workbook-list,
+.version-list,
 .diff-card,
 .timeline {
   display: grid;
@@ -429,6 +430,16 @@ h2 {
   background: var(--danger);
 }
 
+.decision-button.apply {
+  background: var(--accent-2);
+}
+
+.decision-button:disabled,
+.mini-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .review-meta {
   margin: 0;
   color: var(--accent-2);
@@ -438,6 +449,7 @@ h2 {
 .named-range-list article,
 .proposal-meta article,
 .link-list article,
+.version-list article,
 .risk-card {
   background: var(--panel-strong);
   border: 1px solid rgba(23, 19, 15, 0.08);

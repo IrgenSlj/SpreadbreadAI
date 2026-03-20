@@ -344,6 +344,14 @@ export function parseWorkbookReviewSnapshot(
       sheets,
       risks,
       namedRanges,
+      versions: [
+        {
+          id: `${input.workbookId}_v001`,
+          createdAt: input.uploadedAt,
+          createdBy: "system",
+          note: "Initial parsed workbook snapshot",
+        },
+      ],
     },
     proposal: buildProposal(
       input.workbookId,

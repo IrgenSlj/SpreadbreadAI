@@ -3,6 +3,7 @@ import { URL } from "node:url";
 import type { ApprovalDecision } from "../../../packages/shared/src/index.js";
 import { serverName, serverVersion } from "./server.js";
 import {
+  applyApprovedProposalItems,
   getStoredWorkbookReview,
   listStoredWorkbooks,
   saveUploadedWorkbook,
@@ -184,6 +185,35 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
     if (!review) {
       sendJson(response, 404, { error: "Workbook or proposal item not found" });
+      return;
+    }
+
+    sendJson(response, 200, { review });
+    return;
+  }
+
+  if (method === "POST" && url.pathname.match(/^\/api\/workbooks\/[^/]+\/proposal\/apply$/)) {
+    const workbookId = decodeURIComponent(
+      url.pathname.replace("/api/workbooks/", "").replace(/\/proposal\/apply$/, ""),
+    );
+    const body = await readJsonBody<{
+      actor?: string;
+      note?: string;
+    }>(request);
+
+    if (!body.actor || body.actor.trim().length === 0) {
+      sendJson(response, 400, { error: "Actor is required" });
+      return;
+    }
+
+    const review = await applyApprovedProposalItems({
+      workbookId,
+      actor: body.actor.trim(),
+      note: body.note?.trim(),
+    });
+
+    if (!review) {
+      sendJson(response, 400, { error: "No approved proposal items available to apply" });
       return;
     }
 

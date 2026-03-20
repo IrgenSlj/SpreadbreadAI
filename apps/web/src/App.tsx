@@ -71,6 +71,18 @@ function App() {
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
     [snapshot],
   );
+  const approvedItems = useMemo(
+    () => snapshot.proposal.diff.filter((entry) => entry.status === "approved"),
+    [snapshot],
+  );
+  const rejectedItems = useMemo(
+    () => snapshot.proposal.diff.filter((entry) => entry.status === "rejected"),
+    [snapshot],
+  );
+  const pendingItems = useMemo(
+    () => snapshot.proposal.diff.filter((entry) => entry.status === "pending"),
+    [snapshot],
+  );
 
   useEffect(() => {
     void loadWorkbooks();
@@ -250,6 +262,40 @@ function App() {
       const message =
         error instanceof Error ? error.message : "Failed to update proposal item";
 
+      setErrorMessage(message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleApplyApprovedItems() {
+    try {
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      const response = await fetch(
+        `/api/workbooks/${encodeURIComponent(snapshot.workbook.id)}/proposal/apply`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            actor: reviewerName,
+            note: reviewComment,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Apply failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as { review: WorkbookReviewSnapshot };
+      setSnapshot(data.review);
+      setSection("proposal");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to apply items";
       setErrorMessage(message);
     } finally {
       setIsLoading(false);
@@ -470,6 +516,18 @@ function App() {
                   <span>Actions</span>
                   <strong>{snapshot.proposal.diff.length} proposed review actions</strong>
                 </article>
+                <article>
+                  <span>Approved</span>
+                  <strong>{approvedItems.length}</strong>
+                </article>
+                <article>
+                  <span>Pending</span>
+                  <strong>{pendingItems.length}</strong>
+                </article>
+                <article>
+                  <span>Rejected</span>
+                  <strong>{rejectedItems.length}</strong>
+                </article>
               </div>
               <div className="review-form">
                 <label>
@@ -502,6 +560,14 @@ function App() {
                     type="button"
                   >
                     Reject Proposal
+                  </button>
+                  <button
+                    className="decision-button apply"
+                    disabled={approvedItems.length === 0 || snapshot.proposal.status === "applied"}
+                    onClick={() => void handleApplyApprovedItems()}
+                    type="button"
+                  >
+                    Apply Approved Items
                   </button>
                 </div>
                 {snapshot.proposal.reviewer ? (
@@ -615,6 +681,24 @@ function App() {
               <div className="node node-c">Approval</div>
               <div className="connector connector-a" />
               <div className="connector connector-b" />
+            </div>
+          </section>
+        )}
+
+        {(section === "workbook" || section === "proposal") && (
+          <section className="panel">
+            <p className="panel-kicker">Workbook Versions</p>
+            <h2>Track the version history created by uploads and apply actions.</h2>
+            <div className="version-list">
+              {snapshot.workbook.versions.map((version) => (
+                <article key={version.id}>
+                  <span>{version.id}</span>
+                  <strong>{version.note}</strong>
+                  <small>
+                    {version.createdBy} at {new Date(version.createdAt).toLocaleString()}
+                  </small>
+                </article>
+              ))}
             </div>
           </section>
         )}
