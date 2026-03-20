@@ -3,7 +3,9 @@ import * as XLSX from "xlsx";
 import type {
   AuditEvent,
   ProposalDetail,
+  ProposalDiffEntry,
   WorkbookReviewSnapshot,
+  WorkbookNamedRange,
   WorkbookRisk,
   WorkbookSheetSummary,
 } from "../../../packages/shared/src/index.js";
@@ -47,21 +49,37 @@ function summarizeSheet(sheetName: string, sheet: XLSX.WorkSheet): WorkbookSheet
       rows: 0,
       columns: 0,
       formulaCells: 0,
+      populatedCells: 0,
       riskCount: 1,
+      sampleRows: [],
     };
   }
 
   const range = XLSX.utils.decode_range(ref);
   let formulaCells = 0;
+  let populatedCells = 0;
+  const sampleRows: string[][] = [];
 
   for (const [cellRef, cell] of Object.entries(sheet)) {
     if (cellRef.startsWith("!")) {
       continue;
     }
 
+    populatedCells += 1;
+
     if (typeof cell === "object" && cell !== null && "f" in cell && cell.f) {
       formulaCells += 1;
     }
+  }
+
+  const jsonRows = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, {
+    header: 1,
+    blankrows: false,
+    raw: false,
+  });
+
+  for (const row of jsonRows.slice(0, 3)) {
+    sampleRows.push(row.map((value) => (value == null ? "" : String(value))));
   }
 
   return {
@@ -69,8 +87,26 @@ function summarizeSheet(sheetName: string, sheet: XLSX.WorkSheet): WorkbookSheet
     rows: range.e.r - range.s.r + 1,
     columns: range.e.c - range.s.c + 1,
     formulaCells,
+    populatedCells,
     riskCount: 0,
+    sampleRows,
   };
+}
+
+function extractNamedRanges(workbook: XLSX.WorkBook): WorkbookNamedRange[] {
+  return (workbook.Workbook?.Names ?? []).map((entry) => {
+    const [sheetPrefix] = entry.Ref?.split("!") ?? [];
+    const normalizedSheet =
+      sheetPrefix && !sheetPrefix.includes(":")
+        ? sheetPrefix.replace(/^'/, "").replace(/'$/, "")
+        : undefined;
+
+    return {
+      name: entry.Name ?? "unnamed_range",
+      sheetName: normalizedSheet,
+      reference: entry.Ref ?? "",
+    };
+  });
 }
 
 function detectWorkbookRisks(
@@ -160,9 +196,71 @@ function buildProposal(
   fileName: string,
   uploadedAt: string,
   risks: WorkbookRisk[],
+  namedRanges: WorkbookNamedRange[],
 ): ProposalDetail {
   const baseName = getWorkbookName(fileName);
   const leadRisk = risks[0];
+  const diff: ProposalDiffEntry[] = [];
+
+  risks.forEach((risk, index) => {
+    if (risk.label === "Formula error detected") {
+      diff.push({
+        id: `${workbookId}_proposal_001_diff_${diff.length + 1}`,
+        kind: "comment",
+        cell: risk.location,
+        after: `Review required: investigate the error at ${risk.location} before any workbook write is approved.`,
+        rationale: risk.summary,
+      });
+      return;
+    }
+
+    if (risk.label === "High formula density") {
+      diff.push({
+        id: `${workbookId}_proposal_001_diff_${diff.length + 1}`,
+        kind: "comment",
+        cell: risk.location,
+        after: `Reviewer checklist: validate formula blocks in ${risk.location} against their source assumptions.`,
+        rationale: risk.summary,
+      });
+      return;
+    }
+
+    diff.push({
+      id: `${workbookId}_proposal_001_diff_${diff.length + 1}`,
+      kind: "comment",
+      cell: risk.location,
+      after: `Review note ${index + 1}: ${risk.label}`,
+      rationale: risk.summary,
+    });
+  });
+
+  namedRanges.slice(0, 2).forEach((namedRange) => {
+    diff.push({
+      id: `${workbookId}_proposal_001_diff_${diff.length + 1}`,
+      kind: "comment",
+      cell: namedRange.reference,
+      after: `Named range anchor ready for future workflow automation: ${namedRange.name}.`,
+      rationale:
+        "Named ranges are stable handles for future proposal generation, approvals, and sketch-to-workbook links.",
+    });
+  });
+
+  if (diff.length === 0) {
+    diff.push({
+      id: `${workbookId}_proposal_001_diff_1`,
+      kind: "comment",
+      cell: "Workbook!A1",
+      after: "Reviewer note: workbook parsed cleanly but still requires signoff.",
+      rationale:
+        "Creates a baseline review artifact even when structural heuristics do not surface a strong signal.",
+    });
+  }
+
+  const summaryParts = [
+    leadRisk?.summary ?? "Workbook parsed without critical structural findings.",
+    namedRanges.length > 0 ? `${namedRanges.length} named ranges detected.` : null,
+    `${diff.length} review actions proposed.`,
+  ].filter(Boolean);
 
   return {
     id: `${workbookId}_proposal_001`,
@@ -171,20 +269,9 @@ function buildProposal(
     status: "draft",
     createdAt: uploadedAt,
     requestedBy: "spreadbreadai",
-    summary:
-      leadRisk?.summary ??
-      "Generated a starter review proposal based on parsed workbook structure.",
+    summary: summaryParts.join(" "),
     approvalRequired: true,
-    diff: [
-      {
-        id: `${workbookId}_proposal_001_diff_1`,
-        kind: "comment",
-        cell: leadRisk?.location ?? "Summary!B4",
-        after: `Reviewer note: focus first on ${leadRisk?.label.toLowerCase() ?? "parsed workbook structure"}.`,
-        rationale:
-          "Creates a review artifact from parsed workbook metadata before any write path exists.",
-      },
-    ],
+    diff,
   };
 }
 
@@ -231,6 +318,7 @@ export function parseWorkbookReviewSnapshot(
     summary: summarizeSheet(sheetName, workbook.Sheets[sheetName]),
     sheet: workbook.Sheets[sheetName],
   }));
+  const namedRanges = extractNamedRanges(workbook);
 
   const risks = detectWorkbookRisks(input.workbookId, namedSheets);
   const sheets = namedSheets.map(({ summary }) => ({
@@ -250,8 +338,15 @@ export function parseWorkbookReviewSnapshot(
       lastReviewedAt: input.uploadedAt,
       sheets,
       risks,
+      namedRanges,
     },
-    proposal: buildProposal(input.workbookId, input.fileName, input.uploadedAt, risks),
+    proposal: buildProposal(
+      input.workbookId,
+      input.fileName,
+      input.uploadedAt,
+      risks,
+      namedRanges,
+    ),
     auditEvents: buildAuditEvents(
       input.workbookId,
       input.fileName,

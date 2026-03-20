@@ -238,6 +238,10 @@ function App() {
                   <span>Needs review</span>
                   <strong>{pendingRisks.length} active risks</strong>
                 </article>
+                <article>
+                  <span>Named ranges</span>
+                  <strong>{snapshot.workbook.namedRanges.length}</strong>
+                </article>
               </div>
             </section>
 
@@ -287,10 +291,47 @@ function App() {
                       {sheet.rows}x{sheet.columns}
                     </strong>
                     <small>
-                      {sheet.formulaCells} formula cells, {sheet.riskCount} flagged risks
+                      {sheet.formulaCells} formula cells, {sheet.populatedCells} populated cells,
+                      {" "}
+                      {sheet.riskCount} flagged risks
                     </small>
+                    {sheet.sampleRows.length > 0 ? (
+                      <div className="sample-block">
+                        {sheet.sampleRows.map((row, index) => (
+                          <code key={`${sheet.name}-${index}`}>{row.join(" | ")}</code>
+                        ))}
+                      </div>
+                    ) : null}
                   </article>
                 ))}
+              </div>
+            </section>
+
+            <section className="panel grid-two">
+              <div>
+                <p className="panel-kicker">Named Ranges</p>
+                <h2>Expose reusable workbook anchors for future agent actions.</h2>
+                <p>
+                  Named ranges are important future handles for proposals, approvals, and
+                  sketch-to-workbook links.
+                </p>
+              </div>
+              <div className="named-range-list">
+                {snapshot.workbook.namedRanges.length > 0 ? (
+                  snapshot.workbook.namedRanges.map((namedRange) => (
+                    <article key={namedRange.name}>
+                      <span>{namedRange.name}</span>
+                      <strong>{namedRange.reference}</strong>
+                      <small>{namedRange.sheetName ?? "Workbook-level range"}</small>
+                    </article>
+                  ))
+                ) : (
+                  <article>
+                    <span>No named ranges</span>
+                    <strong>None detected</strong>
+                    <small>This workbook currently exposes no reusable named range anchors.</small>
+                  </article>
+                )}
               </div>
             </section>
 
@@ -332,6 +373,10 @@ function App() {
                   <span>Approval</span>
                   <strong>{snapshot.proposal.approvalRequired ? "Required" : "Optional"}</strong>
                 </article>
+                <article>
+                  <span>Actions</span>
+                  <strong>{snapshot.proposal.diff.length} proposed review actions</strong>
+                </article>
               </div>
             </div>
             <div className="diff-card">
@@ -345,7 +390,9 @@ function App() {
                     <div className={`diff-row ${diffClassName(entry.kind)}`}>- {entry.before}</div>
                   ) : null}
                   {entry.after ? (
-                    <div className={`diff-row ${diffClassName(entry.kind)}`}>+ {entry.after}</div>
+                    <div className={`diff-row ${diffClassName(entry.kind)}`}>
+                      {entry.kind === "comment" ? entry.after : `+ ${entry.after}`}
+                    </div>
                   ) : null}
                   <div className="diff-row neutral">{entry.rationale}</div>
                 </article>

@@ -317,6 +317,7 @@ h2 {
 }
 
 .sheet-list article,
+.named-range-list article,
 .proposal-meta article,
 .link-list article,
 .risk-card {
@@ -346,9 +347,30 @@ h2 {
   color: var(--muted);
 }
 
+.named-range-list,
+.sample-block {
+  display: grid;
+  gap: 8px;
+}
+
+.sample-block {
+  margin-top: 12px;
+}
+
+.sample-block code {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(49, 92, 99, 0.08);
+  color: var(--accent-2);
+  font-size: 0.8rem;
+  overflow-x: auto;
+}
+
 .sheet-list small,
 .risk-card p,
-.risk-card small {
+.risk-card small,
+.named-range-list small {
   color: var(--muted);
   line-height: 1.5;
 }

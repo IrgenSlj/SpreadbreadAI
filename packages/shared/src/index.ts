@@ -20,7 +20,15 @@ export interface WorkbookSheetSummary {
   rows: number;
   columns: number;
   formulaCells: number;
+  populatedCells: number;
   riskCount: number;
+  sampleRows: string[][];
+}
+
+export interface WorkbookNamedRange {
+  name: string;
+  sheetName?: string;
+  reference: string;
 }
 
 export interface WorkbookRisk {
@@ -45,6 +53,7 @@ export interface WorkbookDetail extends WorkbookSummary {
   lastReviewedAt: string;
   sheets: WorkbookSheetSummary[];
   risks: WorkbookRisk[];
+  namedRanges: WorkbookNamedRange[];
 }
 
 export interface ProposalDiffEntry {
@@ -96,10 +105,42 @@ const demoWorkbook: WorkbookDetail = {
   status: "needs_review",
   lastReviewedAt: "2026-03-19T07:10:00.000Z",
   sheets: [
-    { name: "Assumptions", rows: 42, columns: 8, formulaCells: 12, riskCount: 1 },
-    { name: "Pipeline", rows: 312, columns: 15, formulaCells: 29, riskCount: 2 },
-    { name: "Forecast", rows: 144, columns: 18, formulaCells: 61, riskCount: 3 },
-    { name: "Summary", rows: 28, columns: 10, formulaCells: 16, riskCount: 0 },
+    {
+      name: "Assumptions",
+      rows: 42,
+      columns: 8,
+      formulaCells: 12,
+      populatedCells: 88,
+      riskCount: 1,
+      sampleRows: [["Region", "Growth"], ["NA", "1.12"], ["EMEA", "1.09"]],
+    },
+    {
+      name: "Pipeline",
+      rows: 312,
+      columns: 15,
+      formulaCells: 29,
+      populatedCells: 1134,
+      riskCount: 2,
+      sampleRows: [["Rep", "Stage", "Amount"], ["A. Lee", "Commit", "42000"]],
+    },
+    {
+      name: "Forecast",
+      rows: 144,
+      columns: 18,
+      formulaCells: 61,
+      populatedCells: 510,
+      riskCount: 3,
+      sampleRows: [["Month", "Quota", "Forecast"], ["Apr", "500000", "478000"]],
+    },
+    {
+      name: "Summary",
+      rows: 28,
+      columns: 10,
+      formulaCells: 16,
+      populatedCells: 74,
+      riskCount: 0,
+      sampleRows: [["Metric", "Value"], ["ARR", "2.1M"]],
+    },
   ],
   risks: [
     {
@@ -123,6 +164,10 @@ const demoWorkbook: WorkbookDetail = {
       location: "Assumptions!C6:C9",
       summary: "Growth assumptions have not been updated since the last forecast cycle.",
     },
+  ],
+  namedRanges: [
+    { name: "growth_assumptions", sheetName: "Assumptions", reference: "Assumptions!C6:C9" },
+    { name: "forecast_rollup", sheetName: "Forecast", reference: "Forecast!B4:G18" },
   ],
 };
 
@@ -242,9 +287,33 @@ export function createUploadedWorkbookReview(
       status: "needs_review",
       lastReviewedAt: uploadedAt,
       sheets: [
-        { name: "Inputs", rows: 36, columns: 9, formulaCells: 6, riskCount: 1 },
-        { name: "Model", rows: 96, columns: 14, formulaCells: 37, riskCount: 2 },
-        { name: "Summary", rows: 24, columns: 8, formulaCells: 12, riskCount: 0 },
+        {
+          name: "Inputs",
+          rows: 36,
+          columns: 9,
+          formulaCells: 6,
+          populatedCells: 92,
+          riskCount: 1,
+          sampleRows: [["Input", "Value"], ["Growth", "1.05"]],
+        },
+        {
+          name: "Model",
+          rows: 96,
+          columns: 14,
+          formulaCells: 37,
+          populatedCells: 284,
+          riskCount: 2,
+          sampleRows: [["Month", "Base", "Forecast"], ["Jan", "120", "130"]],
+        },
+        {
+          name: "Summary",
+          rows: 24,
+          columns: 8,
+          formulaCells: 12,
+          populatedCells: 68,
+          riskCount: 0,
+          sampleRows: [["Metric", "Value"], ["Revenue", "420000"]],
+        },
       ],
       risks: [
         {
@@ -262,6 +331,7 @@ export function createUploadedWorkbookReview(
           summary: "Key input values need owner validation before AI changes are applied.",
         },
       ],
+      namedRanges: [],
     },
     proposal: {
       id: proposalId,
@@ -326,6 +396,7 @@ export function formatSnapshotForMcp(
         owner: snapshot.workbook.owner,
         relevantSheets,
         visibleRisks,
+        namedRanges: snapshot.workbook.namedRanges,
       },
       proposal: {
         id: snapshot.proposal.id,
