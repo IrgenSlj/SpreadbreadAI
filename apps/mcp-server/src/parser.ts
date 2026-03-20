@@ -210,6 +210,7 @@ function buildProposal(
         cell: risk.location,
         after: `Review required: investigate the error at ${risk.location} before any workbook write is approved.`,
         rationale: risk.summary,
+        status: "pending",
       });
       return;
     }
@@ -221,6 +222,7 @@ function buildProposal(
         cell: risk.location,
         after: `Reviewer checklist: validate formula blocks in ${risk.location} against their source assumptions.`,
         rationale: risk.summary,
+        status: "pending",
       });
       return;
     }
@@ -231,6 +233,7 @@ function buildProposal(
       cell: risk.location,
       after: `Review note ${index + 1}: ${risk.label}`,
       rationale: risk.summary,
+      status: "pending",
     });
   });
 
@@ -242,6 +245,7 @@ function buildProposal(
       after: `Named range anchor ready for future workflow automation: ${namedRange.name}.`,
       rationale:
         "Named ranges are stable handles for future proposal generation, approvals, and sketch-to-workbook links.",
+      status: "pending",
     });
   });
 
@@ -253,6 +257,7 @@ function buildProposal(
       after: "Reviewer note: workbook parsed cleanly but still requires signoff.",
       rationale:
         "Creates a baseline review artifact even when structural heuristics do not surface a strong signal.",
+      status: "pending",
     });
   }
 
@@ -266,7 +271,7 @@ function buildProposal(
     id: `${workbookId}_proposal_001`,
     workbookId,
     title: `Initial review draft for ${baseName}`,
-    status: "draft",
+    status: "pending_approval",
     createdAt: uploadedAt,
     requestedBy: "spreadbreadai",
     summary: summaryParts.join(" "),

@@ -13,6 +13,7 @@ export type ProposalStatus =
   | "applied";
 
 export type ApprovalDecision = "approve" | "reject";
+export type ProposalItemStatus = "pending" | "approved" | "rejected";
 
 export type RiskSeverity = "low" | "medium" | "high";
 export type DiffKind = "remove" | "add" | "update" | "comment";
@@ -65,6 +66,10 @@ export interface ProposalDiffEntry {
   before?: string;
   after?: string;
   rationale: string;
+  status: ProposalItemStatus;
+  reviewer?: string;
+  reviewedAt?: string;
+  reviewComment?: string;
 }
 
 export interface ProposalSummary {
@@ -197,6 +202,10 @@ const demoProposal: ProposalDetail = {
       before: "1.18",
       after: "1.24",
       rationale: "Aligns growth rate with revised pipeline coverage.",
+      status: "approved",
+      reviewer: "Finance Manager",
+      reviewedAt: "2026-03-19T08:09:00.000Z",
+      reviewComment: "Validated against revised coverage assumptions.",
     },
     {
       id: "diff_formula_fix",
@@ -205,6 +214,9 @@ const demoProposal: ProposalDetail = {
       before: "=E18*F18",
       after: "=Pipeline!J18*F18",
       rationale: "Restores the intended dependency on pipeline value.",
+      status: "approved",
+      reviewer: "Finance Manager",
+      reviewedAt: "2026-03-19T08:09:30.000Z",
     },
     {
       id: "diff_comment",
@@ -212,6 +224,7 @@ const demoProposal: ProposalDetail = {
       cell: "Summary!B6",
       after: "AI draft note: forecast reflects March pipeline refresh and flagged stale assumptions.",
       rationale: "Prepares reviewer commentary for signoff.",
+      status: "pending",
     },
   ],
 };
@@ -345,7 +358,7 @@ export function createUploadedWorkbookReview(
       id: proposalId,
       workbookId,
       title: `Initial review draft for ${baseName}`,
-      status: "draft",
+      status: "pending_approval",
       createdAt: uploadedAt,
       requestedBy: "spreadbreadai",
       summary:
@@ -358,6 +371,7 @@ export function createUploadedWorkbookReview(
           cell: "Summary!B4",
           after: "Reviewer note: uploaded workbook pending structured formula analysis.",
           rationale: "Creates a placeholder review artifact for the first upload flow.",
+          status: "pending",
         },
       ],
     },

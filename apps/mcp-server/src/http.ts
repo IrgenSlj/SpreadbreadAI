@@ -6,6 +6,7 @@ import {
   getStoredWorkbookReview,
   listStoredWorkbooks,
   saveUploadedWorkbook,
+  updateStoredProposalItemDecision,
   updateStoredProposalDecision,
 } from "./store.js";
 
@@ -141,6 +142,48 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
     if (!review) {
       sendJson(response, 404, { error: "Workbook not found" });
+      return;
+    }
+
+    sendJson(response, 200, { review });
+    return;
+  }
+
+  if (method === "POST" && url.pathname.match(/^\/api\/workbooks\/[^/]+\/proposal\/items\/[^/]+\/decision$/)) {
+    const workbookId = decodeURIComponent(
+      url.pathname
+        .replace("/api/workbooks/", "")
+        .replace(/\/proposal\/items\/[^/]+\/decision$/, ""),
+    );
+    const diffId = decodeURIComponent(
+      url.pathname.match(/\/proposal\/items\/([^/]+)\/decision$/)?.[1] ?? "",
+    );
+    const body = await readJsonBody<{
+      decision?: ApprovalDecision;
+      reviewer?: string;
+      comment?: string;
+    }>(request);
+
+    if (body.decision !== "approve" && body.decision !== "reject") {
+      sendJson(response, 400, { error: "Invalid decision" });
+      return;
+    }
+
+    if (!body.reviewer || body.reviewer.trim().length === 0) {
+      sendJson(response, 400, { error: "Reviewer is required" });
+      return;
+    }
+
+    const review = await updateStoredProposalItemDecision({
+      workbookId,
+      diffId,
+      decision: body.decision,
+      reviewer: body.reviewer.trim(),
+      comment: body.comment?.trim(),
+    });
+
+    if (!review) {
+      sendJson(response, 404, { error: "Workbook or proposal item not found" });
       return;
     }
 

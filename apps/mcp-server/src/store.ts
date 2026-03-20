@@ -3,6 +3,9 @@ import path from "node:path";
 import {
   type ApprovalDecision,
   demoReviewSnapshot,
+  type ProposalDetail,
+  type ProposalDiffEntry,
+  type ProposalItemStatus,
   type WorkbookReviewSnapshot,
   type WorkbookSummary,
 } from "../../../packages/shared/src/index.js";
@@ -74,6 +77,34 @@ async function readStore(): Promise<WorkbookStoreFile> {
 async function writeStore(store: WorkbookStoreFile) {
   await ensureStore();
   await writeFile(storeFilePath, JSON.stringify(store, null, 2));
+}
+
+function deriveProposalStatus(diff: ProposalDiffEntry[]): ProposalDetail["status"] {
+  if (diff.length === 0) {
+    return "draft";
+  }
+
+  const approvedCount = diff.filter((entry) => entry.status === "approved").length;
+  const rejectedCount = diff.filter((entry) => entry.status === "rejected").length;
+  const pendingCount = diff.filter((entry) => entry.status === "pending").length;
+
+  if (pendingCount === diff.length) {
+    return "pending_approval";
+  }
+
+  if (approvedCount === diff.length) {
+    return "approved";
+  }
+
+  if (rejectedCount === diff.length) {
+    return "rejected";
+  }
+
+  return "pending_approval";
+}
+
+function itemDecisionToStatus(decision: ApprovalDecision): ProposalItemStatus {
+  return decision === "approve" ? "approved" : "rejected";
 }
 
 export async function listStoredWorkbooks(): Promise<WorkbookSummary[]> {
@@ -216,6 +247,110 @@ export async function updateStoredProposalDecision(input: {
           (input.decision === "approve"
             ? "Proposal approved in the review prototype."
             : "Proposal rejected in the review prototype."),
+        createdAt: reviewedAt,
+      },
+    ],
+  };
+
+  await writeStore(store);
+  return record.snapshot;
+}
+
+export async function updateStoredProposalItemDecision(input: {
+  workbookId: string;
+  diffId: string;
+  decision: ApprovalDecision;
+  reviewer: string;
+  comment?: string;
+}): Promise<WorkbookReviewSnapshot | null> {
+  const reviewedAt = new Date().toISOString();
+
+  if (input.workbookId === demoReviewSnapshot.workbook.id) {
+    const nextDiff = demoReviewSnapshot.proposal.diff.map((entry) =>
+      entry.id === input.diffId
+        ? {
+            ...entry,
+            status: itemDecisionToStatus(input.decision),
+            reviewer: input.reviewer,
+            reviewedAt,
+            reviewComment: input.comment,
+          }
+        : entry,
+    );
+    const nextStatus = deriveProposalStatus(nextDiff);
+
+    return {
+      ...demoReviewSnapshot,
+      proposal: {
+        ...demoReviewSnapshot.proposal,
+        diff: nextDiff,
+        status: nextStatus,
+        reviewer: input.reviewer,
+        reviewedAt,
+        reviewComment: input.comment,
+      },
+      auditEvents: [
+        ...demoReviewSnapshot.auditEvents,
+        {
+          id: `audit_${demoReviewSnapshot.auditEvents.length + 1}`,
+          workbookId: input.workbookId,
+          actor: input.reviewer,
+          action:
+            input.decision === "approve"
+              ? "proposal.item.approved"
+              : "proposal.item.rejected",
+          detail:
+            input.comment?.trim() ||
+            `${input.decision === "approve" ? "Approved" : "Rejected"} proposal item ${input.diffId}.`,
+          createdAt: reviewedAt,
+        },
+      ],
+    };
+  }
+
+  const store = await readStore();
+  const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+
+  if (!record) {
+    return null;
+  }
+
+  const nextDiff = record.snapshot.proposal.diff.map((entry) =>
+    entry.id === input.diffId
+      ? {
+          ...entry,
+          status: itemDecisionToStatus(input.decision),
+          reviewer: input.reviewer,
+          reviewedAt,
+          reviewComment: input.comment,
+        }
+      : entry,
+  );
+  const nextStatus = deriveProposalStatus(nextDiff);
+
+  record.snapshot = {
+    ...record.snapshot,
+    proposal: {
+      ...record.snapshot.proposal,
+      diff: nextDiff,
+      status: nextStatus,
+      reviewer: input.reviewer,
+      reviewedAt,
+      reviewComment: input.comment,
+    },
+    auditEvents: [
+      ...record.snapshot.auditEvents,
+      {
+        id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
+        workbookId: input.workbookId,
+        actor: input.reviewer,
+        action:
+          input.decision === "approve"
+            ? "proposal.item.approved"
+            : "proposal.item.rejected",
+        detail:
+          input.comment?.trim() ||
+          `${input.decision === "approve" ? "Approved" : "Rejected"} proposal item ${input.diffId}.`,
         createdAt: reviewedAt,
       },
     ],

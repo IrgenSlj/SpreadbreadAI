@@ -245,6 +245,68 @@ h2 {
   gap: 8px;
 }
 
+.item-status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.item-status {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.status-pending {
+  background: rgba(49, 92, 99, 0.1);
+  color: var(--accent-2);
+}
+
+.status-approved {
+  background: rgba(45, 93, 67, 0.12);
+  color: var(--success);
+}
+
+.status-rejected {
+  background: rgba(140, 47, 47, 0.12);
+  color: var(--danger);
+}
+
+.item-action-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mini-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.mini-button.approve {
+  background: var(--success);
+}
+
+.mini-button.reject {
+  background: var(--danger);
+}
+
+.item-meta {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
 .diff-header {
   display: flex;
   justify-content: space-between;

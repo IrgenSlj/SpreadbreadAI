@@ -47,6 +47,17 @@ function diffClassName(kind: ProposalDiffEntry["kind"]) {
   }
 }
 
+function itemStatusLabel(status: ProposalDiffEntry["status"]) {
+  switch (status) {
+    case "approved":
+      return "Approved";
+    case "rejected":
+      return "Rejected";
+    default:
+      return "Pending";
+  }
+}
+
 function App() {
   const [section, setSection] = useState<Section>("workbook");
   const [snapshot, setSnapshot] = useState<WorkbookReviewSnapshot>(demoReviewSnapshot);
@@ -196,6 +207,48 @@ function App() {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Failed to update proposal decision";
+
+      setErrorMessage(message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleProposalItemDecision(
+    diffId: string,
+    decision: ApprovalDecision,
+  ) {
+    try {
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      const response = await fetch(
+        `/api/workbooks/${encodeURIComponent(
+          snapshot.workbook.id,
+        )}/proposal/items/${encodeURIComponent(diffId)}/decision`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            decision,
+            reviewer: reviewerName,
+            comment: reviewComment,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Proposal item decision failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as { review: WorkbookReviewSnapshot };
+      setSnapshot(data.review);
+      setSection("proposal");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to update proposal item";
 
       setErrorMessage(message);
     } finally {
@@ -471,6 +524,27 @@ function App() {
                     <span>{entry.cell}</span>
                     <small>{entry.kind}</small>
                   </div>
+                  <div className="item-status-row">
+                    <span className={`item-status status-${entry.status}`}>
+                      {itemStatusLabel(entry.status)}
+                    </span>
+                    <div className="item-action-row">
+                      <button
+                        className="mini-button approve"
+                        onClick={() => void handleProposalItemDecision(entry.id, "approve")}
+                        type="button"
+                      >
+                        Approve Item
+                      </button>
+                      <button
+                        className="mini-button reject"
+                        onClick={() => void handleProposalItemDecision(entry.id, "reject")}
+                        type="button"
+                      >
+                        Reject Item
+                      </button>
+                    </div>
+                  </div>
                   {entry.before ? (
                     <div className={`diff-row ${diffClassName(entry.kind)}`}>- {entry.before}</div>
                   ) : null}
@@ -480,6 +554,15 @@ function App() {
                     </div>
                   ) : null}
                   <div className="diff-row neutral">{entry.rationale}</div>
+                  {entry.reviewer ? (
+                    <div className="item-meta">
+                      {entry.reviewer}
+                      {entry.reviewedAt
+                        ? ` at ${new Date(entry.reviewedAt).toLocaleString()}`
+                        : ""}
+                      {entry.reviewComment ? `: ${entry.reviewComment}` : ""}
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>
