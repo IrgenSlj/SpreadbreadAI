@@ -1,5 +1,5 @@
 import { createFileStoreBackend } from "./file-store.js";
-import { hasPostgresConfig } from "./postgres.js";
+import { getPostgresConnectionInfo, hasPostgresConfig } from "./postgres.js";
 import { createPostgresStoreBackend } from "./postgres-store.js";
 import type {
   MutationResult,
@@ -12,6 +12,32 @@ export type { MutationFailureCode, MutationResult, StoredWorkbookRecord } from "
 const backend: StoreBackend = hasPostgresConfig()
   ? createPostgresStoreBackend()
   : createFileStoreBackend();
+
+export async function getStoreRuntimeStatus() {
+  const workbooks = await backend.listStoredWorkbooks();
+  const postgres = getPostgresConnectionInfo();
+  const mode = hasPostgresConfig() ? "postgres" as const : "file" as const;
+
+  return {
+    mode,
+    backendMode: mode,
+    backendLabel:
+      mode === "postgres"
+        ? `PostgreSQL ${postgres?.database ?? "database"}`
+        : "Local file store",
+    backendSource: "api" as const,
+    updatedAt: new Date().toISOString(),
+    workbookCount: workbooks.length,
+    target:
+      postgres
+        ? {
+            host: postgres.host,
+            port: postgres.port,
+            database: postgres.database,
+          }
+        : null,
+  };
+}
 
 export function getStoreBackend() {
   return backend;

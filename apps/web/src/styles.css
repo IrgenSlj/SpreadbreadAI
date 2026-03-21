@@ -188,6 +188,53 @@ h2 {
   font-size: 0.98rem;
 }
 
+.runtime-strip {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.2fr) repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff, #f5faf4);
+  box-shadow: var(--shadow);
+}
+
+.runtime-strip article {
+  min-height: 88px;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  padding: 12px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.runtime-main {
+  background: linear-gradient(180deg, #f7fbf6, #eef7ef);
+  border-color: var(--line-strong);
+}
+
+.runtime-strip span {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.runtime-strip strong {
+  display: block;
+  color: var(--green-strong);
+  font-size: 1rem;
+}
+
+.runtime-strip small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .spreadsheet-chrome {
   display: grid;
   gap: 8px;
@@ -893,6 +940,7 @@ h2 {
   }
 
   .hero,
+  .runtime-strip,
   .grid-two,
   .proposal-grid,
   .proposal-layout,
@@ -906,6 +954,10 @@ h2 {
 
   .sheet-strip {
     flex-wrap: wrap;
+  }
+
+  .runtime-strip article {
+    min-height: 0;
   }
 
   .sheet-strip-meta {

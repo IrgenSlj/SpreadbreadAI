@@ -29,6 +29,46 @@ type UploadResponse = {
   review: WorkbookReviewSnapshot;
 };
 
+type RuntimeBackendMode = "local" | "file-store" | "postgres" | "hybrid" | "unknown";
+
+type RuntimeBackendInfo = {
+  backendMode: RuntimeBackendMode;
+  backendLabel: string;
+  backendSource: "api" | "derived";
+  backendUpdatedAt?: string;
+};
+
+type RuntimeStatusResponse = {
+  runtime?: {
+    backendMode?: string;
+    backendLabel?: string;
+    backendSource?: string;
+    mode?: string;
+    label?: string;
+    source?: string;
+    updatedAt?: string;
+    lastUpdatedAt?: string;
+  };
+  status?: {
+    backendMode?: string;
+    backendLabel?: string;
+    backendSource?: string;
+    mode?: string;
+    label?: string;
+    source?: string;
+    updatedAt?: string;
+    lastUpdatedAt?: string;
+  };
+  backendMode?: string;
+  backendLabel?: string;
+  backendSource?: string;
+  mode?: string;
+  label?: string;
+  source?: string;
+  updatedAt?: string;
+  lastUpdatedAt?: string;
+};
+
 const sections: Array<{ id: Section; label: string; description: string }> = [
   {
     id: "workbook",
@@ -114,15 +154,73 @@ function findFormulaPreview(snapshot: WorkbookReviewSnapshot) {
   return firstSheet ? `=${firstSheet.name}!A1` : "=A1";
 }
 
+function normalizeBackendMode(value: unknown): RuntimeBackendMode {
+  const mode = String(value ?? "").toLowerCase();
+
+  if (mode.includes("postgres")) {
+    return "postgres";
+  }
+
+  if (mode.includes("file")) {
+    return "file-store";
+  }
+
+  if (mode.includes("hybrid")) {
+    return "hybrid";
+  }
+
+  if (mode.includes("local")) {
+    return "local";
+  }
+
+  return "unknown";
+}
+
+function backendLabelForMode(mode: RuntimeBackendMode, explicitLabel?: string) {
+  if (explicitLabel && explicitLabel.trim().length > 0) {
+    return explicitLabel;
+  }
+
+  switch (mode) {
+    case "postgres":
+      return "PostgreSQL";
+    case "file-store":
+      return "Local file store";
+    case "hybrid":
+      return "Hybrid runtime";
+    case "local":
+      return "Local runtime";
+    default:
+      return "Runtime unavailable";
+  }
+}
+
+function createDerivedRuntimeInfo(
+  _workbooks: WorkbookSummary[],
+  snapshot: WorkbookReviewSnapshot,
+): RuntimeBackendInfo {
+  return {
+    backendMode: "local",
+    backendLabel: "Derived from local review state",
+    backendSource: "derived",
+    backendUpdatedAt: snapshot.auditEvents[snapshot.auditEvents.length - 1]?.createdAt,
+  };
+}
+
 function App() {
   const [section, setSection] = useState<Section>("workbook");
   const [snapshot, setSnapshot] = useState<WorkbookReviewSnapshot>(demoReviewSnapshot);
-  const [workbooks, setWorkbooks] = useState<WorkbookSummary[]>([]);
+  const [workbooks, setWorkbooks] = useState<WorkbookSummary[]>([
+    createDemoWorkbookSummary(),
+  ]);
   const [isLoading, setIsLoading] = useState(false);
   const [activeMutation, setActiveMutation] = useState<MutationAction | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reviewerName, setReviewerName] = useState("Finance Manager");
   const [reviewComment, setReviewComment] = useState("");
+  const [runtimeBackend, setRuntimeBackend] = useState<RuntimeBackendInfo>(
+    createDerivedRuntimeInfo([createDemoWorkbookSummary()], demoReviewSnapshot),
+  );
 
   const pendingRisks = useMemo(
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
@@ -166,6 +264,20 @@ function App() {
       : "Choose either the proposal shortcut or item-level review first. Once review starts, the other path locks.";
   const activeSheet = snapshot.workbook.sheets[0];
   const formulaPreview = findFormulaPreview(snapshot);
+  const runtimeCounts = useMemo(
+    () => ({
+      workbookCount: workbooks.length,
+      versionCount: snapshot.workbook.versions.length,
+      auditEventCount: snapshot.auditEvents.length,
+      proposalItemCount: snapshot.proposal.diff.length,
+      reviewedItemCount: reviewedItems.length,
+    }),
+    [reviewedItems.length, snapshot, workbooks.length],
+  );
+  const runtimeStatus = {
+    ...runtimeBackend,
+    ...runtimeCounts,
+  };
 
   function canReviewItem(entry: ProposalDiffEntry) {
     return canUseItemReview && entry.status === "pending";
@@ -174,6 +286,40 @@ function App() {
   useEffect(() => {
     void loadWorkbooks({ allowDemoFallback: true });
   }, []);
+
+  useEffect(() => {
+    void loadRuntimeStatus();
+  }, []);
+
+  async function loadRuntimeStatus() {
+    try {
+      const response = await fetch("/api/runtime/status");
+
+      if (!response.ok) {
+        throw new Error(`Failed to load runtime status (${response.status})`);
+      }
+
+      const data = (await response.json()) as RuntimeStatusResponse;
+      const runtime = data.runtime ?? data.status ?? data;
+      const backendMode = normalizeBackendMode(
+        runtime.backendMode ?? runtime.mode ?? runtime.source,
+      );
+      const backendLabel = backendLabelForMode(backendMode, runtime.backendLabel ?? runtime.label);
+      const backendSource =
+        String(runtime.backendSource ?? runtime.source ?? "").toLowerCase() === "api"
+          ? "api"
+          : "derived";
+
+      setRuntimeBackend({
+        backendMode,
+        backendLabel,
+        backendSource,
+        backendUpdatedAt: runtime.updatedAt ?? runtime.lastUpdatedAt,
+      });
+    } catch {
+      setRuntimeBackend(createDerivedRuntimeInfo(workbooks, snapshot));
+    }
+  }
 
   async function loadWorkbooks(options: {
     targetWorkbookId?: string;
@@ -451,6 +597,42 @@ function App() {
           </article>
         </div>
       </header>
+
+      <section className="runtime-strip" aria-label="Runtime status">
+        <article className="runtime-main">
+          <span>Backend mode</span>
+          <strong>{runtimeStatus.backendLabel}</strong>
+          <small>
+            {runtimeStatus.backendSource === "api"
+              ? runtimeStatus.backendUpdatedAt
+                ? `Live runtime data, updated ${new Date(
+                    runtimeStatus.backendUpdatedAt,
+                  ).toLocaleString()}`
+                : "Live runtime data from the status API."
+              : "Derived from the current workbook review state."}
+          </small>
+        </article>
+        <article>
+          <span>Workbooks</span>
+          <strong>{runtimeStatus.workbookCount}</strong>
+          <small>Persisted review snapshots</small>
+        </article>
+        <article>
+          <span>Versions</span>
+          <strong>{runtimeStatus.versionCount}</strong>
+          <small>Workbook revisions tracked</small>
+        </article>
+        <article>
+          <span>Audit</span>
+          <strong>{runtimeStatus.auditEventCount}</strong>
+          <small>Logged approval events</small>
+        </article>
+        <article>
+          <span>Proposal items</span>
+          <strong>{runtimeStatus.proposalItemCount}</strong>
+          <small>{runtimeStatus.reviewedItemCount} reviewed</small>
+        </article>
+      </section>
 
       <section className="spreadsheet-chrome" aria-label="Spreadsheet shell controls">
         <div className="ribbon" role="presentation">

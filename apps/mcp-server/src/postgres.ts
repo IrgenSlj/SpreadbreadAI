@@ -27,6 +27,31 @@ function getDatabaseUrl() {
   return process.env.DATABASE_URL ?? "";
 }
 
+export function getPostgresConnectionInfo() {
+  const connectionString = getDatabaseUrl().trim();
+
+  if (!connectionString) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(connectionString);
+    return {
+      host: parsed.hostname,
+      port: parsed.port || "5432",
+      database: parsed.pathname.replace(/^\//, "") || "postgres",
+      user: decodeURIComponent(parsed.username || ""),
+    };
+  } catch {
+    return {
+      host: "unknown",
+      port: "5432",
+      database: "unknown",
+      user: "",
+    };
+  }
+}
+
 function loadPgPoolConstructor(): new (input: { connectionString: string }) => PgPool {
   try {
     const loaded = require("pg") as { Pool: new (input: { connectionString: string }) => PgPool };

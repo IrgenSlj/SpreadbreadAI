@@ -6,6 +6,7 @@ import { serverName, serverVersion } from "./server.js";
 import {
   applyApprovedProposalItems,
   getStoredWorkbookReview,
+  getStoreRuntimeStatus,
   listStoredWorkbooks,
   type MutationResult,
   saveUploadedWorkbook,
@@ -150,10 +151,27 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname === "/healthz") {
+    const runtime = await getStoreRuntimeStatus();
     sendJson(response, 200, {
       status: "ok",
       name: serverName,
       version: serverVersion,
+      storageMode: runtime.mode,
+      workbookCount: runtime.workbookCount,
+    });
+    return;
+  }
+
+  if (
+    method === "GET" &&
+    (url.pathname === "/api/system/status" || url.pathname === "/api/runtime/status")
+  ) {
+    const runtime = await getStoreRuntimeStatus();
+    sendJson(response, 200, {
+      status: "ok",
+      name: serverName,
+      version: serverVersion,
+      runtime,
     });
     return;
   }
