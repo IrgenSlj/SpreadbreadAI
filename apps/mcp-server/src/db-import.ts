@@ -1,12 +1,17 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { WorkbookReviewSnapshot, WorkbookVersionSummary } from "../../../packages/shared/src/index.js";
+import type {
+  ReviewerNotification,
+  WorkbookReviewSnapshot,
+  WorkbookVersionSummary,
+} from "../../../packages/shared/src/index.js";
 import { hasPostgresConfig } from "./postgres.js";
 import { importStoredWorkbookRecords } from "./postgres-store.js";
 import type { StoredWorkbookRecord } from "./store-backend.js";
 
 interface FileStorePayload {
   records: StoredWorkbookRecord[];
+  notifications?: ReviewerNotification[];
 }
 
 const dataRoot = path.resolve(process.cwd(), ".data");
@@ -77,7 +82,10 @@ async function main() {
     snapshot: normalizeSnapshot(record.snapshot),
   }));
 
-  const result = await importStoredWorkbookRecords(normalizedRecords);
+  const result = await importStoredWorkbookRecords({
+    records: normalizedRecords,
+    notifications: Array.isArray(payload.notifications) ? payload.notifications : [],
+  });
   console.log(
     JSON.stringify(
       {

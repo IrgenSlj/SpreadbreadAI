@@ -28,6 +28,26 @@ export interface ProposalItemComment {
   mentions?: string[];
 }
 
+export interface ReviewerNotification {
+  id: EntityId;
+  reviewer: string;
+  title: string;
+  body: string;
+  action: string;
+  createdAt: string;
+  readAt?: string;
+  workbookId?: WorkbookId;
+  proposalId?: ProposalId;
+  proposalItemId?: EntityId;
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface ReviewerNotificationFeed {
+  reviewer: string;
+  unreadCount: number;
+  notifications: ReviewerNotification[];
+}
+
 export interface WorkbookSketchNode {
   id: EntityId;
   label: string;

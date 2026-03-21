@@ -2,6 +2,8 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type ApprovalDecision,
+  type ReviewerNotification,
+  type ReviewerNotificationFeed,
   type WorkbookLibraryView,
   demoReviewSnapshot,
   type ProposalDetail,
@@ -18,6 +20,7 @@ import type {
   LibraryViewMutationResult,
   MutationFailureCode,
   MutationResult,
+  ReviewerNotificationMutationResult,
   SketchBoardMutationResult,
   TagsMutationResult,
   StoreBackend,
@@ -27,6 +30,7 @@ import type {
 interface WorkbookStoreFile {
   records: StoredWorkbookRecord[];
   libraryViews?: WorkbookLibraryView[];
+  notifications?: ReviewerNotification[];
 }
 
 const dataRoot = path.resolve(process.cwd(), ".data");
@@ -35,6 +39,7 @@ const storeFilePath = path.join(dataRoot, "workbooks.json");
 let storeMutationChain = Promise.resolve();
 let demoSnapshotState = structuredClone(demoReviewSnapshot);
 let demoLibraryViews: WorkbookLibraryView[] = [];
+let demoNotifications: ReviewerNotification[] = [];
 
 function sanitizeFileName(fileName: string) {
   const trimmed = fileName.trim();
@@ -220,6 +225,123 @@ function createSketchBoard(
   };
 }
 
+function createNotificationId(scope: string) {
+  return `notif_${scope}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createReviewerNotification(input: {
+  reviewer: string;
+  title: string;
+  body: string;
+  action: string;
+  createdAt: string;
+  workbookId?: string;
+  proposalId?: string;
+  proposalItemId?: string;
+  metadata?: Record<string, string | number | boolean | null>;
+}): ReviewerNotification {
+  return {
+    id: createNotificationId(input.action.replace(/[^a-z0-9]+/gi, "_").toLowerCase()),
+    reviewer: normalizeReviewer(input.reviewer),
+    title: input.title,
+    body: input.body,
+    action: input.action,
+    createdAt: input.createdAt,
+    workbookId: input.workbookId,
+    proposalId: input.proposalId,
+    proposalItemId: input.proposalItemId,
+    metadata: input.metadata,
+  };
+}
+
+function normalizeReviewer(value: string) {
+  return value.trim().toLowerCase().replace(/^@/, "");
+}
+
+function buildCommentNotifications(input: {
+  workbookId: string;
+  workbookName: string;
+  proposalId: string;
+  proposalItemId: string;
+  proposalCell: string;
+  author: string;
+  comment: ProposalItemComment;
+  repliedToComment?: ProposalItemComment;
+}): ReviewerNotification[] {
+  const createdAt = input.comment.createdAt;
+  const notifications: ReviewerNotification[] = [];
+  const authorHandle = normalizeReviewer(input.author);
+  const recipients = new Set<string>();
+
+  for (const mention of input.comment.mentions ?? []) {
+    const reviewer = normalizeReviewer(mention);
+    if (reviewer && reviewer !== authorHandle) {
+      recipients.add(reviewer);
+    }
+  }
+
+  for (const reviewer of recipients) {
+    notifications.push(
+      createReviewerNotification({
+        reviewer,
+        title: "Mention",
+        body: `${input.author} mentioned you on ${input.proposalCell} in ${input.workbookName}.`,
+        action: "proposal.item.mention",
+        createdAt,
+        workbookId: input.workbookId,
+        proposalId: input.proposalId,
+        proposalItemId: input.proposalItemId,
+        metadata: {
+          commentId: input.comment.id,
+          cell: input.proposalCell,
+          author: input.author,
+        },
+      }),
+    );
+  }
+
+  const repliedToAuthor = normalizeReviewer(input.repliedToComment?.author ?? "");
+  if (repliedToAuthor && repliedToAuthor !== authorHandle && !recipients.has(repliedToAuthor)) {
+    notifications.push(
+      createReviewerNotification({
+        reviewer: repliedToAuthor,
+        title: "Reply",
+        body: `${input.author} replied to your comment on ${input.proposalCell} in ${input.workbookName}.`,
+        action: "proposal.item.reply",
+        createdAt,
+        workbookId: input.workbookId,
+        proposalId: input.proposalId,
+        proposalItemId: input.proposalItemId,
+        metadata: {
+          commentId: input.comment.id,
+          replyToCommentId: input.repliedToComment?.id ?? null,
+          cell: input.proposalCell,
+          author: input.author,
+        },
+      }),
+    );
+  }
+
+  return notifications;
+}
+
+function addDemoNotification(notification: ReviewerNotification) {
+  demoNotifications = [notification, ...demoNotifications];
+}
+
+function collectReviewerNotifications(
+  notifications: ReviewerNotification[],
+  reviewer: string,
+  includeRead: boolean,
+) {
+  const normalizedReviewer = normalizeReviewer(reviewer);
+  return notifications
+    .filter((notification) => notification.reviewer === normalizedReviewer)
+    .filter((notification) => notification.action === "proposal.item.mention" || notification.action === "proposal.item.reply")
+    .filter((notification) => includeRead || !notification.readAt)
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+}
+
 if (!demoSnapshotState.workbook.sketchBoard) {
   demoSnapshotState = {
     ...demoSnapshotState,
@@ -256,7 +378,10 @@ function appendCommentToDiff(
 
   const comments = target.comments ?? [];
   const replyToCommentId = input.parentCommentId ?? input.replyToCommentId;
-  if (replyToCommentId && !comments.some((comment) => comment.id === replyToCommentId)) {
+  const repliedToComment = replyToCommentId
+    ? comments.find((comment) => comment.id === replyToCommentId)
+    : undefined;
+  if (replyToCommentId && !repliedToComment) {
     return { error: "comment_not_found" as const };
   }
 
@@ -283,6 +408,8 @@ function appendCommentToDiff(
         : entry,
     ),
     comment,
+    proposalCell: target.cell,
+    repliedToComment,
   };
 }
 
@@ -643,6 +770,18 @@ export function createFileStoreBackend(): StoreBackend {
           ],
         };
 
+        addDemoNotification(
+          createReviewerNotification({
+            reviewer: input.reviewer,
+            title: "Proposal review recorded",
+            body: `${demoSnapshotState.workbook.name} was ${input.decision}d by ${input.reviewer}.`,
+            action: input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
+            createdAt: reviewedAt,
+            workbookId: input.workbookId,
+            proposalId: demoSnapshotState.proposal.id,
+          }),
+        );
+
         return mutationSuccess(demoSnapshotState);
       }
 
@@ -698,6 +837,19 @@ export function createFileStoreBackend(): StoreBackend {
             },
           ],
         };
+
+        store.notifications = store.notifications ?? [];
+        store.notifications.unshift(
+          createReviewerNotification({
+            reviewer: input.reviewer,
+            title: "Proposal review recorded",
+            body: `${record.snapshot.workbook.name} was ${input.decision}d by ${input.reviewer}.`,
+            action: input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
+            createdAt: reviewedAt,
+            workbookId: input.workbookId,
+            proposalId: record.snapshot.proposal.id,
+          }),
+        );
 
         await writeStore(store);
         return mutationSuccess(record.snapshot);
@@ -767,6 +919,22 @@ export function createFileStoreBackend(): StoreBackend {
             },
           ],
         };
+
+        addDemoNotification(
+          createReviewerNotification({
+            reviewer: input.reviewer,
+            title: "Proposal item reviewed",
+            body: `${demoSnapshotState.workbook.name} item ${input.diffId} was ${input.decision}d by ${input.reviewer}.`,
+            action:
+              input.decision === "approve"
+                ? "proposal.item.approved"
+                : "proposal.item.rejected",
+            createdAt: reviewedAt,
+            workbookId: input.workbookId,
+            proposalId: demoSnapshotState.proposal.id,
+            proposalItemId: input.diffId,
+          }),
+        );
 
         return mutationSuccess(demoSnapshotState);
       }
@@ -839,6 +1007,23 @@ export function createFileStoreBackend(): StoreBackend {
           ],
         };
 
+        store.notifications = store.notifications ?? [];
+        store.notifications.unshift(
+          createReviewerNotification({
+            reviewer: input.reviewer,
+            title: "Proposal item reviewed",
+            body: `${record.snapshot.workbook.name} item ${input.diffId} was ${input.decision}d by ${input.reviewer}.`,
+            action:
+              input.decision === "approve"
+                ? "proposal.item.approved"
+                : "proposal.item.rejected",
+            createdAt: reviewedAt,
+            workbookId: input.workbookId,
+            proposalId: record.snapshot.proposal.id,
+            proposalItemId: input.diffId,
+          }),
+        );
+
         await writeStore(store);
         return mutationSuccess(record.snapshot);
       });
@@ -886,6 +1071,19 @@ export function createFileStoreBackend(): StoreBackend {
           ],
         };
 
+        for (const notification of buildCommentNotifications({
+          workbookId: input.workbookId,
+          workbookName: demoSnapshotState.workbook.name,
+          proposalId: demoSnapshotState.proposal.id,
+          proposalItemId: input.diffId,
+          proposalCell: appended.proposalCell,
+          author: input.author,
+          comment: appended.comment,
+          repliedToComment: appended.repliedToComment,
+        })) {
+          addDemoNotification(notification);
+        }
+
         return mutationSuccess(demoSnapshotState);
       }
 
@@ -926,6 +1124,19 @@ export function createFileStoreBackend(): StoreBackend {
             },
           ],
         };
+
+        store.notifications = store.notifications ?? [];
+        const notifications = buildCommentNotifications({
+          workbookId: input.workbookId,
+          workbookName: record.snapshot.workbook.name,
+          proposalId: record.snapshot.proposal.id,
+          proposalItemId: input.diffId,
+          proposalCell: appended.proposalCell,
+          author: input.author,
+          comment: appended.comment,
+          repliedToComment: appended.repliedToComment,
+        });
+        store.notifications.unshift(...notifications);
 
         await writeStore(store);
         return mutationSuccess(record.snapshot);
@@ -1156,6 +1367,142 @@ export function createFileStoreBackend(): StoreBackend {
       });
     },
 
+    async listReviewerNotifications(input: {
+      reviewer: string;
+      includeRead?: boolean;
+    }): Promise<ReviewerNotificationFeed> {
+      const reviewer = normalizeReviewer(input.reviewer);
+      const store = await readStore();
+      const notifications = collectReviewerNotifications(
+        [
+          ...demoNotifications,
+          ...(store.notifications ?? []),
+        ],
+        reviewer,
+        input.includeRead ?? false,
+      );
+
+      return {
+        reviewer,
+        unreadCount: notifications.filter((notification) => !notification.readAt).length,
+        notifications,
+      };
+    },
+
+    async markReviewerNotificationRead(input: {
+      notificationId: string;
+      reviewer: string;
+    }): Promise<ReviewerNotificationMutationResult> {
+      const reviewer = normalizeReviewer(input.reviewer);
+      const readAt = new Date().toISOString();
+
+      if (demoNotifications.some((notification) => notification.id === input.notificationId)) {
+        let updated = false;
+        demoNotifications = demoNotifications.map((notification) => {
+          if (notification.id !== input.notificationId || notification.reviewer !== reviewer) {
+            return notification;
+          }
+
+          updated = true;
+          return {
+            ...notification,
+            readAt,
+          };
+        });
+
+        if (!updated) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const notification = demoNotifications.find(
+          (entry) => entry.id === input.notificationId && entry.reviewer === reviewer,
+        );
+
+        return notification ? { ok: true, notification } : { ok: false, code: "not_found" };
+      }
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const notifications = store.notifications ?? [];
+        const existing = notifications.find(
+          (notification) =>
+            notification.id === input.notificationId && notification.reviewer === reviewer,
+        );
+
+        if (!existing) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const nextNotification = {
+          ...existing,
+          readAt,
+        };
+
+        store.notifications = notifications.map((notification) =>
+          notification.id === input.notificationId && notification.reviewer === reviewer
+            ? nextNotification
+            : notification,
+        );
+        await writeStore(store);
+        return { ok: true, notification: nextNotification };
+      });
+    },
+
+    async markReviewerNotificationUnread(input: {
+      notificationId: string;
+      reviewer: string;
+    }): Promise<ReviewerNotificationMutationResult> {
+      const reviewer = normalizeReviewer(input.reviewer);
+      if (demoNotifications.some((notification) => notification.id === input.notificationId)) {
+        let updated = false;
+        demoNotifications = demoNotifications.map((notification) => {
+          if (notification.id !== input.notificationId || notification.reviewer !== reviewer) {
+            return notification;
+          }
+
+          updated = true;
+          const { readAt, ...rest } = notification;
+          return rest;
+        });
+
+        if (!updated) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const notification = demoNotifications.find(
+          (entry) => entry.id === input.notificationId && entry.reviewer === reviewer,
+        );
+
+        return notification ? { ok: true, notification } : { ok: false, code: "not_found" };
+      }
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const notifications = store.notifications ?? [];
+        const existing = notifications.find(
+          (notification) =>
+            notification.id === input.notificationId && notification.reviewer === reviewer,
+        );
+
+        if (!existing) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const nextNotification = {
+          ...existing,
+        };
+        delete nextNotification.readAt;
+
+        store.notifications = notifications.map((notification) =>
+          notification.id === input.notificationId && notification.reviewer === reviewer
+            ? nextNotification
+            : notification,
+        );
+        await writeStore(store);
+        return { ok: true, notification: nextNotification };
+      });
+    },
+
     async applyApprovedProposalItems(input: {
       workbookId: string;
       actor: string;
@@ -1173,6 +1520,18 @@ export function createFileStoreBackend(): StoreBackend {
         }
 
         demoSnapshotState = nextSnapshot;
+
+        addDemoNotification(
+          createReviewerNotification({
+            reviewer: input.actor,
+            title: "Approved items applied",
+            body: `${demoSnapshotState.workbook.name} was advanced to ${nextSnapshot.workbook.latestVersionId}.`,
+            action: "proposal.applied",
+            createdAt: nextSnapshot.proposal.appliedAt ?? new Date().toISOString(),
+            workbookId: input.workbookId,
+            proposalId: demoSnapshotState.proposal.id,
+          }),
+        );
         return mutationSuccess(demoSnapshotState);
       }
 
@@ -1195,6 +1554,19 @@ export function createFileStoreBackend(): StoreBackend {
         }
 
         record.snapshot = nextSnapshot;
+
+        store.notifications = store.notifications ?? [];
+        store.notifications.unshift(
+          createReviewerNotification({
+            reviewer: input.actor,
+            title: "Approved items applied",
+            body: `${record.snapshot.workbook.name} was advanced to ${nextSnapshot.workbook.latestVersionId}.`,
+            action: "proposal.applied",
+            createdAt: nextSnapshot.proposal.appliedAt ?? new Date().toISOString(),
+            workbookId: input.workbookId,
+            proposalId: record.snapshot.proposal.id,
+          }),
+        );
         await writeStore(store);
         return mutationSuccess(record.snapshot);
       });

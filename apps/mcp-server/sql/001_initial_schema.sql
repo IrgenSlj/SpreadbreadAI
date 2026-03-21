@@ -138,3 +138,29 @@ create table if not exists audit_events (
 
 create index if not exists audit_events_workbook_id_idx
   on audit_events (workbook_id, created_at desc);
+
+create table if not exists reviewer_notifications (
+  id text primary key,
+  reviewer text not null,
+  title text not null,
+  body text not null,
+  action text not null,
+  created_at timestamptz not null,
+  read_at timestamptz,
+  workbook_id text references workbooks(id) on delete cascade,
+  proposal_id text references proposals(id) on delete cascade,
+  proposal_item_id text references proposal_items(id) on delete cascade,
+  metadata_json jsonb not null default '{}'::jsonb
+);
+
+alter table if exists reviewer_notifications
+  add column if not exists read_at timestamptz;
+
+alter table if exists reviewer_notifications
+  add column if not exists metadata_json jsonb not null default '{}'::jsonb;
+
+create index if not exists reviewer_notifications_reviewer_idx
+  on reviewer_notifications (reviewer, created_at desc, id desc);
+
+create index if not exists reviewer_notifications_unread_idx
+  on reviewer_notifications (reviewer, read_at, created_at desc);

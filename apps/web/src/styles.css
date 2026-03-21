@@ -1016,6 +1016,12 @@ h2 {
   color: var(--muted);
 }
 
+.notification-source {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}
+
 .notification-badge {
   display: inline-flex;
   align-items: center;
@@ -1071,6 +1077,10 @@ h2 {
   display: inline-block;
   color: var(--green-strong);
   font-size: 0.9rem;
+}
+
+.comment-filter-summary .notification-toggle {
+  margin-left: auto;
 }
 
 .comment-filter-head {

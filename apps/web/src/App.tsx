@@ -50,6 +50,23 @@ type WorkbookLibraryViewsResponse = {
   views: WorkbookLibraryView[];
 };
 
+type ReviewNotificationFeedItem = {
+  id: string;
+  label: string;
+  detail: string;
+  createdAt: string;
+  readAt: string | null;
+  source: "api" | "derived";
+  entryId?: string;
+};
+
+type ReviewNotificationFeedResponse = {
+  reviewer?: string;
+  unreadCount?: number;
+  notifications?: ReviewNotificationFeedItem[];
+  notification?: ReviewNotificationFeedItem;
+};
+
 type LibraryViewDeletionResponse = {
   deletedId: string;
 };
@@ -215,6 +232,111 @@ function renderCommentBody(body: string) {
   );
 }
 
+function buildDerivedReviewNotificationFeed(
+  snapshot: WorkbookReviewSnapshot,
+  reviewerHandle: string,
+  reviewerName: string,
+) {
+  const reviewerToken = reviewerHandle.replace(/^@/, "").toLowerCase();
+  const reviewerNameNormalized = reviewerName.trim().toLowerCase();
+
+  return snapshot.proposal.diff.flatMap((entry) =>
+    (entry.comments ?? []).flatMap((comment) => {
+      const notifications: ReviewNotificationFeedItem[] = [];
+      const repliedToComment = comment.replyToCommentId
+        ? (entry.comments ?? []).find((candidate) => candidate.id === comment.replyToCommentId)
+        : undefined;
+      const mentionsReviewer = (comment.mentions ?? []).some(
+        (mention) => mention.toLowerCase() === reviewerToken,
+      );
+
+      if (mentionsReviewer) {
+        notifications.push({
+          id: `${comment.id}_mention`,
+          label: "Mention",
+          detail: `${comment.author} mentioned ${reviewerHandle} on ${entry.cell}.`,
+          createdAt: comment.createdAt,
+          readAt: null,
+          source: "derived",
+          entryId: entry.id,
+        });
+      }
+
+      if (
+        repliedToComment &&
+        repliedToComment.author.trim().toLowerCase() === reviewerNameNormalized &&
+        comment.author.trim().toLowerCase() !== reviewerNameNormalized
+      ) {
+        notifications.push({
+          id: `${comment.id}_reply`,
+          label: "Reply",
+          detail: `${comment.author} replied in the review thread for ${entry.cell}.`,
+          createdAt: comment.createdAt,
+          readAt: null,
+          source: "derived",
+          entryId: entry.id,
+        });
+      }
+
+      return notifications;
+    }),
+  );
+}
+
+function normalizeReviewNotificationFeed(value: unknown): ReviewNotificationFeedItem[] {
+  const sourceFeed = Array.isArray(value)
+    ? value
+    : Array.isArray((value as ReviewNotificationFeedResponse | null)?.notifications)
+      ? (value as ReviewNotificationFeedResponse).notifications ?? []
+      : [];
+
+  return sourceFeed
+    .map((item, index) => {
+      const notification = item as Partial<ReviewNotificationFeedItem> & {
+        title?: unknown;
+        body?: unknown;
+        proposalItemId?: unknown;
+        readAt?: unknown;
+      };
+      const label =
+        typeof notification.label === "string" && notification.label.length > 0
+          ? notification.label
+          : typeof notification.title === "string" && notification.title.length > 0
+            ? notification.title
+            : "Notification";
+      const detail =
+        typeof notification.detail === "string"
+          ? notification.detail
+          : typeof notification.body === "string"
+            ? notification.body
+            : "";
+
+      return {
+        id: typeof notification.id === "string" && notification.id.length > 0
+          ? notification.id
+          : `notification_${index}`,
+        label,
+        detail,
+        createdAt:
+          typeof notification.createdAt === "string" && notification.createdAt.length > 0
+            ? notification.createdAt
+            : new Date().toISOString(),
+        readAt:
+          typeof notification.readAt === "string" && notification.readAt.length > 0
+            ? notification.readAt
+            : null,
+        source: "api",
+        entryId:
+          typeof notification.entryId === "string"
+            ? notification.entryId
+            : typeof notification.proposalItemId === "string"
+              ? notification.proposalItemId
+              : undefined,
+      } satisfies ReviewNotificationFeedItem;
+    })
+    .filter((item) => item.detail.length > 0);
+}
+
 function findFormulaPreview(snapshot: WorkbookReviewSnapshot) {
   for (const sheet of snapshot.workbook.sheets) {
     for (const row of sheet.sampleRows) {
@@ -314,8 +436,14 @@ function App() {
   const [itemCommentDrafts, setItemCommentDrafts] = useState<Record<string, string>>({});
   const [itemCommentState, setItemCommentState] = useState<Record<string, ItemCommentState>>({});
   const [replyTargetByEntry, setReplyTargetByEntry] = useState<Record<string, ReplyTarget | null>>({});
-  const [notificationReadState, setNotificationReadState] = useState<Record<string, boolean>>(
-    {},
+  const [reviewNotificationFeed, setReviewNotificationFeed] = useState<
+    ReviewNotificationFeedItem[]
+  >([]);
+  const [reviewNotificationFeedMode, setReviewNotificationFeedMode] = useState<
+    "api" | "derived"
+  >("derived");
+  const [reviewNotificationFeedError, setReviewNotificationFeedError] = useState<string | null>(
+    null,
   );
   const [sketchBoard, setSketchBoard] = useState<WorkbookSketchBoard>(
     createSeededSketchBoard(demoReviewSnapshot, "system"),
@@ -324,7 +452,6 @@ function App() {
   const [sketchError, setSketchError] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const sketchCanvasRef = useRef<HTMLDivElement | null>(null);
-  const notificationStorageKey = `spreadbreadai.notifications.${normalizeHandle(reviewerName) || "reviewer"}`;
 
   const pendingRisks = useMemo(
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
@@ -496,39 +623,10 @@ function App() {
       ).sort((left, right) => left.localeCompare(right)),
     [workbooks],
   );
-  const reviewNotifications = useMemo(
-    () =>
-      snapshot.proposal.diff.flatMap((entry) =>
-        (entry.comments ?? []).flatMap((comment) => {
-          const notifications: Array<{ id: string; label: string; detail: string }> = [];
-          const mentionsReviewer = (comment.mentions ?? []).includes(
-            reviewerHandle.replace(/^@/, ""),
-          );
-
-          if (mentionsReviewer) {
-            notifications.push({
-              id: `${comment.id}_mention`,
-              label: "Mention",
-              detail: `${comment.author} mentioned ${reviewerHandle} on ${entry.cell}.`,
-            });
-          }
-
-          if (comment.replyToCommentId && comment.author.trim() !== reviewerName.trim()) {
-            notifications.push({
-              id: `${comment.id}_reply`,
-              label: "Reply",
-              detail: `${comment.author} replied in the review thread for ${entry.cell}.`,
-            });
-          }
-
-          return notifications;
-        }),
-      ),
-    [reviewerHandle, reviewerName, snapshot.proposal.diff],
-  );
+  const reviewNotifications = reviewNotificationFeed;
   const unreadNotificationCount = useMemo(
-    () => reviewNotifications.filter((notification) => !notificationReadState[notification.id]).length,
-    [notificationReadState, reviewNotifications],
+    () => reviewNotifications.filter((notification) => !notification.readAt).length,
+    [reviewNotifications],
   );
   const sketchNodeMap = useMemo(
     () => new Map(sketchBoard.nodes.map((node) => [node.id, node])),
@@ -540,66 +638,8 @@ function App() {
   );
 
   useEffect(() => {
-    setNotificationReadState((current) => {
-      const next: Record<string, boolean> = {};
-      let changed = false;
-
-      for (const notification of reviewNotifications) {
-        next[notification.id] = current[notification.id] ?? false;
-      }
-
-      for (const key of Object.keys(current)) {
-        if (!(key in next)) {
-          changed = true;
-          continue;
-        }
-      }
-
-      for (const key of Object.keys(next)) {
-        if (current[key] !== next[key]) {
-          changed = true;
-          break;
-        }
-      }
-
-      return changed ? next : current;
-    });
-  }, [reviewNotifications]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const rawValue = window.localStorage.getItem(notificationStorageKey);
-
-      if (!rawValue) {
-        setNotificationReadState({});
-        return;
-      }
-
-      const parsed = JSON.parse(rawValue) as Record<string, boolean>;
-      setNotificationReadState(parsed && typeof parsed === "object" ? parsed : {});
-    } catch {
-      setNotificationReadState({});
-    }
-  }, [notificationStorageKey]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(
-        notificationStorageKey,
-        JSON.stringify(notificationReadState),
-      );
-    } catch {
-      return;
-    }
-  }, [notificationReadState, notificationStorageKey]);
+    void loadReviewerNotificationFeed();
+  }, [reviewerHandle, reviewerName, snapshot.proposal.diff, snapshot.workbook.id]);
 
   useEffect(() => {
     if (selectedSketchLinkId && !selectedSketchLink) {
@@ -618,22 +658,86 @@ function App() {
     }));
   }
 
+  function updateReviewNotificationFeed(
+    updater: (current: ReviewNotificationFeedItem[]) => ReviewNotificationFeedItem[],
+  ) {
+    setReviewNotificationFeed((current) => updater(current));
+  }
+
+  async function persistReviewNotificationReadState(
+    notificationId: string,
+    read: boolean,
+  ) {
+    const reviewerId = reviewerHandle.replace(/^@/, "");
+    const url = `/api/reviewer-notifications/${encodeURIComponent(notificationId)}/${read ? "read" : "unread"}`;
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          reviewer: reviewerId,
+        }),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as ReviewNotificationFeedResponse;
+        const notifications = normalizeReviewNotificationFeed(
+          data.notification ? [data.notification] : data.notifications ?? data,
+        );
+
+        if (notifications.length > 0) {
+          setReviewNotificationFeed((current) =>
+            current.map((notification) =>
+              notification.id === notificationId ? notifications[0] : notification,
+            ),
+          );
+        }
+        setReviewNotificationFeedMode("api");
+        setReviewNotificationFeedError(null);
+      } else if (response.status !== 404) {
+        throw new Error(`Notification update failed (${response.status})`);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        setReviewNotificationFeedError(error.message);
+      }
+    }
+  }
+
   function markNotificationRead(notificationId: string, read = true) {
-    setNotificationReadState((current) => ({
-      ...current,
-      [notificationId]: read,
-    }));
+    updateReviewNotificationFeed((current) =>
+      current.map((notification) =>
+        notification.id === notificationId
+          ? {
+              ...notification,
+              readAt: read ? notification.readAt ?? new Date().toISOString() : null,
+            }
+          : notification,
+      ),
+    );
+
+    void persistReviewNotificationReadState(notificationId, read);
   }
 
   function markAllNotificationsRead() {
-    setNotificationReadState((current) => {
-      const next = { ...current };
+    updateReviewNotificationFeed((current) =>
+      current.map((notification) => ({
+        ...notification,
+        readAt: notification.readAt ?? new Date().toISOString(),
+      })),
+    );
 
-      for (const notification of reviewNotifications) {
-        next[notification.id] = true;
+    void Promise.all(
+      reviewNotifications
+        .filter((notification) => !notification.readAt)
+        .map((notification) => persistReviewNotificationReadState(notification.id, true)),
+    ).catch((error) => {
+      if (error instanceof Error) {
+        setReviewNotificationFeedError(error.message);
       }
-
-      return next;
     });
   }
 
@@ -1157,6 +1261,39 @@ function App() {
     }
   }
 
+  async function loadReviewerNotificationFeed() {
+    const reviewerId = reviewerHandle.replace(/^@/, "");
+    const endpoint = `/api/reviewer-notifications?reviewer=${encodeURIComponent(reviewerId)}&includeRead=true`;
+
+    setReviewNotificationFeedError(null);
+
+    try {
+      const response = await fetch(endpoint);
+
+      if (response.ok) {
+        const data = (await response.json()) as ReviewNotificationFeedResponse;
+        const notifications = normalizeReviewNotificationFeed(data.notifications ?? data);
+
+        setReviewNotificationFeed(notifications);
+        setReviewNotificationFeedMode("api");
+        return;
+      }
+
+      if (response.status !== 404) {
+        throw new Error(`Notification feed failed (${response.status})`);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        setReviewNotificationFeedError(error.message);
+      }
+    }
+
+    setReviewNotificationFeed(
+      buildDerivedReviewNotificationFeed(snapshot, reviewerHandle, reviewerName),
+    );
+    setReviewNotificationFeedMode("derived");
+  }
+
   async function loadWorkbooks(options: {
     targetWorkbookId?: string;
     allowDemoFallback?: boolean;
@@ -1376,35 +1513,47 @@ function App() {
       return;
     }
 
-    updateItemCommentState(diffId, { submitting: true, error: null });
-    const nextComment: ProposalItemComment = {
-      id: `${diffId}_comment_${Date.now().toString(36)}`,
-      author: reviewerName.trim(),
-      body,
-      createdAt: new Date().toISOString(),
-      parentCommentId: replyTarget?.commentId,
-      mentions: Array.from(
-        new Set(extractMentions(body).map((mention) => mention.replace(/^@/, ""))),
-      ),
-    };
+    try {
+      const response = await fetch(
+        `/api/workbooks/${encodeURIComponent(
+          snapshot.workbook.id,
+        )}/proposal/items/${encodeURIComponent(diffId)}/comments`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            author: reviewerName.trim(),
+            body,
+            parentCommentId: replyTarget?.commentId,
+            replyToCommentId: replyTarget?.commentId,
+            mentions: Array.from(
+              new Set(extractMentions(body).map((mention) => mention.replace(/^@/, ""))),
+            ),
+          }),
+        },
+      );
 
-    setSnapshot((current) => ({
-      ...current,
-      proposal: {
-        ...current.proposal,
-        diff: current.proposal.diff.map((entry) =>
-          entry.id === diffId
-            ? {
-                ...entry,
-                comments: [...(entry.comments ?? []), nextComment],
-              }
-            : entry,
-        ),
-      },
-    }));
-    setItemCommentDraft(diffId, "");
-    setReplyTarget(diffId, null);
-    updateItemCommentState(diffId, { submitting: false, error: null });
+      if (!response.ok) {
+        throw new Error(`Comment save failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as ReviewResponse;
+      setSnapshot(data.review);
+      setItemCommentDraft(diffId, "");
+      setReplyTarget(diffId, null);
+      await loadReviewerNotificationFeed();
+      updateItemCommentState(diffId, { submitting: false, error: null });
+    } catch (error) {
+      updateItemCommentState(
+        diffId,
+        {
+          submitting: false,
+          error: error instanceof Error ? error.message : "Failed to save comment",
+        },
+      );
+    }
   }
 
   async function handleApplyApprovedItems() {
@@ -2061,43 +2210,39 @@ function App() {
                     <span>Comment threads</span>
                     <strong>Filter reviewer notes and mentions</strong>
                   </div>
-                  <small>Your mention handle: {reviewerHandle}</small>
+                  <small>
+                    {reviewNotificationFeedMode === "api"
+                      ? "Backend feed"
+                      : "Derived feed until the backend endpoint is available"}
+                  </small>
                 </div>
                 {reviewNotifications.length > 0 ? (
                   <div className="notification-strip">
                     {reviewNotifications.map((notification) => (
                       <article
                         key={notification.id}
-                        className={
-                          notificationReadState[notification.id]
-                            ? "notification-card"
-                            : "notification-card unread"
-                        }
+                        className={notification.readAt ? "notification-card" : "notification-card unread"}
                       >
                         <div className="notification-card-head">
                           <strong>{notification.label}</strong>
                           <span
-                            className={
-                              notificationReadState[notification.id]
-                                ? "notification-badge read"
-                                : "notification-badge unread"
-                            }
+                            className={notification.readAt ? "notification-badge read" : "notification-badge unread"}
                           >
-                            {notificationReadState[notification.id] ? "Read" : "Unread"}
+                            {notification.readAt ? "Read" : "Unread"}
                           </span>
                         </div>
                         <small>{notification.detail}</small>
+                        <small className="notification-source">
+                          {notification.source === "api" ? "Synced feed item" : "Derived fallback item"}
+                        </small>
                         <button
                           className="notification-toggle"
                           onClick={() =>
-                            markNotificationRead(
-                              notification.id,
-                              !notificationReadState[notification.id],
-                            )
+                            markNotificationRead(notification.id, !notification.readAt)
                           }
                           type="button"
                         >
-                          {notificationReadState[notification.id]
+                          {notification.readAt
                             ? "Mark unread"
                             : "Mark read"}
                         </button>
@@ -2116,6 +2261,9 @@ function App() {
                     Mark all read
                   </button>
                 </div>
+                {reviewNotificationFeedError ? (
+                  <p className="comment-error">{reviewNotificationFeedError}</p>
+                ) : null}
                 <div className="comment-filter-controls">
                   <label>
                     <span>Search comments</span>

@@ -1,5 +1,7 @@
 import type {
   ApprovalDecision,
+  ReviewerNotification,
+  ReviewerNotificationFeed,
   WorkbookLibraryView,
   WorkbookReviewSnapshot,
   WorkbookSketchBoard,
@@ -43,6 +45,10 @@ export type LibraryViewMutationResult =
 
 export type LibraryViewDeletionResult =
   | { ok: true; deletedId: string }
+  | { ok: false; code: MutationFailureCode };
+
+export type ReviewerNotificationMutationResult =
+  | { ok: true; notification: ReviewerNotification }
   | { ok: false; code: MutationFailureCode };
 
 export interface StoreBackend {
@@ -111,6 +117,18 @@ export interface StoreBackend {
   deleteStoredWorkbookLibraryView(input: {
     id: string;
   }): Promise<LibraryViewDeletionResult>;
+  listReviewerNotifications(input: {
+    reviewer: string;
+    includeRead?: boolean;
+  }): Promise<ReviewerNotificationFeed>;
+  markReviewerNotificationRead(input: {
+    notificationId: string;
+    reviewer: string;
+  }): Promise<ReviewerNotificationMutationResult>;
+  markReviewerNotificationUnread(input: {
+    notificationId: string;
+    reviewer: string;
+  }): Promise<ReviewerNotificationMutationResult>;
   applyApprovedProposalItems(input: {
     workbookId: string;
     actor: string;

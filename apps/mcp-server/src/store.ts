@@ -4,6 +4,7 @@ import { createPostgresStoreBackend } from "./postgres-store.js";
 import type {
   MutationResult,
   LibraryViewDeletionResult,
+  ReviewerNotificationMutationResult,
   TagsMutationResult,
   LibraryViewMutationResult,
   SketchBoardMutationResult,
@@ -16,6 +17,7 @@ export type {
   LibraryViewMutationResult,
   MutationFailureCode,
   MutationResult,
+  ReviewerNotificationMutationResult,
   TagsMutationResult,
   SketchBoardMutationResult,
   StoredWorkbookRecord,
@@ -160,6 +162,27 @@ export function deleteStoredWorkbookLibraryView(input: {
   id: string;
 }): Promise<LibraryViewDeletionResult> {
   return backend.deleteStoredWorkbookLibraryView(input);
+}
+
+export function listReviewerNotifications(input: {
+  reviewer: string;
+  includeRead?: boolean;
+}) {
+  return backend.listReviewerNotifications(input);
+}
+
+export function markReviewerNotificationRead(input: {
+  notificationId: string;
+  reviewer: string;
+}): Promise<ReviewerNotificationMutationResult> {
+  return backend.markReviewerNotificationRead(input);
+}
+
+export function markReviewerNotificationUnread(input: {
+  notificationId: string;
+  reviewer: string;
+}): Promise<ReviewerNotificationMutationResult> {
+  return backend.markReviewerNotificationUnread(input);
 }
 
 export function applyApprovedProposalItems(input: {

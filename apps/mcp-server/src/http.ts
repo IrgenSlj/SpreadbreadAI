@@ -14,9 +14,13 @@ import {
   getStoreRuntimeStatus,
   listStoredWorkbooks,
   listStoredWorkbookLibraryViews,
+  listReviewerNotifications,
   type LibraryViewDeletionResult,
   type MutationResult,
   type LibraryViewMutationResult,
+  markReviewerNotificationRead,
+  markReviewerNotificationUnread,
+  type ReviewerNotificationMutationResult,
   type TagsMutationResult,
   saveUploadedWorkbook,
   saveStoredWorkbookLibraryView,
@@ -99,6 +103,18 @@ const libraryViewSchema = z.object({
 
 const libraryViewArchiveSchema = z.object({
   archivedBy: z.string().trim().min(1),
+});
+
+const reviewerNotificationsQuerySchema = z.object({
+  reviewer: z.string().trim().min(1),
+  includeRead: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => value === "true"),
+});
+
+const reviewerNotificationStateSchema = z.object({
+  reviewer: z.string().trim().min(1),
 });
 
 class HttpError extends Error {
@@ -275,6 +291,19 @@ function sendLibraryViewDeleteResult(
   sendJson(response, 404, { error: notFoundMessage });
 }
 
+function sendReviewerNotificationResult(
+  response: ServerResponse,
+  result: ReviewerNotificationMutationResult,
+  notFoundMessage: string,
+) {
+  if (result.ok) {
+    sendJson(response, 200, { notification: result.notification });
+    return;
+  }
+
+  sendJson(response, 404, { error: notFoundMessage });
+}
+
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -434,6 +463,58 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const result = await deleteStoredWorkbookLibraryView({ id: viewId });
 
     sendLibraryViewDeleteResult(response, result, "Workbook library view not found");
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/reviewer-notifications") {
+    const parsed = reviewerNotificationsQuerySchema.safeParse({
+      reviewer: url.searchParams.get("reviewer") ?? "",
+      includeRead: url.searchParams.get("includeRead") ?? undefined,
+    });
+
+    if (!parsed.success) {
+      sendJson(response, 400, {
+        error: parsed.error.issues.map((issue) => issue.message).join("; "),
+      });
+      return;
+    }
+
+    const feed = await listReviewerNotifications({
+      reviewer: parsed.data.reviewer,
+      includeRead: parsed.data.includeRead,
+    });
+
+    sendJson(response, 200, feed);
+    return;
+  }
+
+  const reviewerNotificationReadMatch = url.pathname.match(
+    /^\/api\/reviewer-notifications\/([^/]+)\/read$/,
+  );
+  if (method === "POST" && reviewerNotificationReadMatch) {
+    const notificationId = decodeURIComponent(reviewerNotificationReadMatch[1]);
+    const body = await readValidatedJsonBody(request, reviewerNotificationStateSchema);
+    const result = await markReviewerNotificationRead({
+      notificationId,
+      reviewer: body.reviewer,
+    });
+
+    sendReviewerNotificationResult(response, result, "Reviewer notification not found");
+    return;
+  }
+
+  const reviewerNotificationUnreadMatch = url.pathname.match(
+    /^\/api\/reviewer-notifications\/([^/]+)\/unread$/,
+  );
+  if (method === "POST" && reviewerNotificationUnreadMatch) {
+    const notificationId = decodeURIComponent(reviewerNotificationUnreadMatch[1]);
+    const body = await readValidatedJsonBody(request, reviewerNotificationStateSchema);
+    const result = await markReviewerNotificationUnread({
+      notificationId,
+      reviewer: body.reviewer,
+    });
+
+    sendReviewerNotificationResult(response, result, "Reviewer notification not found");
     return;
   }
 

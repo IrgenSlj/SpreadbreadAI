@@ -2,6 +2,8 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ApprovalDecision,
+  ReviewerNotification,
+  ReviewerNotificationFeed,
   WorkbookLibraryView,
   ProposalDetail,
   ProposalDiffEntry,
@@ -23,6 +25,7 @@ import type {
   MutationFailureCode,
   MutationResult,
   LibraryViewMutationResult,
+  ReviewerNotificationMutationResult,
   SketchBoardMutationResult,
   TagsMutationResult,
   StoreBackend,
@@ -127,6 +130,139 @@ function createSketchBoard(
     nodes: [],
     links: [],
     notes: notes?.trim() || "Sketch board created for workbook review.",
+  };
+}
+
+function createNotificationId(scope: string) {
+  return `notif_${scope}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createReviewerNotification(input: {
+  reviewer: string;
+  title: string;
+  body: string;
+  action: string;
+  createdAt: string;
+  workbookId?: string;
+  proposalId?: string;
+  proposalItemId?: string;
+  metadata?: Record<string, string | number | boolean | null>;
+}): ReviewerNotification {
+  return {
+    id: createNotificationId(input.action.replace(/[^a-z0-9]+/gi, "_").toLowerCase()),
+    reviewer: normalizeReviewer(input.reviewer),
+    title: input.title,
+    body: input.body,
+    action: input.action,
+    createdAt: input.createdAt,
+    workbookId: input.workbookId,
+    proposalId: input.proposalId,
+    proposalItemId: input.proposalItemId,
+    metadata: input.metadata,
+  };
+}
+
+function normalizeReviewer(value: string) {
+  return value.trim().toLowerCase().replace(/^@/, "");
+}
+
+function buildCommentNotifications(input: {
+  workbookId: string;
+  workbookName: string;
+  proposalId: string;
+  proposalItemId: string;
+  proposalCell: string;
+  author: string;
+  comment: ProposalItemComment;
+  repliedToComment?: ProposalItemComment;
+}): ReviewerNotification[] {
+  const createdAt = input.comment.createdAt;
+  const notifications: ReviewerNotification[] = [];
+  const authorHandle = normalizeReviewer(input.author);
+  const recipients = new Set<string>();
+
+  for (const mention of input.comment.mentions ?? []) {
+    const reviewer = normalizeReviewer(mention);
+    if (reviewer && reviewer !== authorHandle) {
+      recipients.add(reviewer);
+    }
+  }
+
+  for (const reviewer of recipients) {
+    notifications.push(
+      createReviewerNotification({
+        reviewer,
+        title: "Mention",
+        body: `${input.author} mentioned you on ${input.proposalCell} in ${input.workbookName}.`,
+        action: "proposal.item.mention",
+        createdAt,
+        workbookId: input.workbookId,
+        proposalId: input.proposalId,
+        proposalItemId: input.proposalItemId,
+        metadata: {
+          commentId: input.comment.id,
+          cell: input.proposalCell,
+          author: input.author,
+        },
+      }),
+    );
+  }
+
+  const repliedToAuthor = normalizeReviewer(input.repliedToComment?.author ?? "");
+  if (repliedToAuthor && repliedToAuthor !== authorHandle && !recipients.has(repliedToAuthor)) {
+    notifications.push(
+      createReviewerNotification({
+        reviewer: repliedToAuthor,
+        title: "Reply",
+        body: `${input.author} replied to your comment on ${input.proposalCell} in ${input.workbookName}.`,
+        action: "proposal.item.reply",
+        createdAt,
+        workbookId: input.workbookId,
+        proposalId: input.proposalId,
+        proposalItemId: input.proposalItemId,
+        metadata: {
+          commentId: input.comment.id,
+          replyToCommentId: input.repliedToComment?.id ?? null,
+          cell: input.proposalCell,
+          author: input.author,
+        },
+      }),
+    );
+  }
+
+  return notifications;
+}
+
+function normalizeReviewerNotification(row: {
+  id: string;
+  reviewer: string;
+  title: string;
+  body: string;
+  action: string;
+  created_at: string;
+  read_at: string | null;
+  workbook_id: string | null;
+  proposal_id: string | null;
+  proposal_item_id: string | null;
+  metadata_json: unknown;
+}): ReviewerNotification {
+  const metadata =
+    row.metadata_json && typeof row.metadata_json === "object" && !Array.isArray(row.metadata_json)
+      ? (row.metadata_json as Record<string, string | number | boolean | null>)
+      : undefined;
+
+  return {
+    id: row.id,
+    reviewer: row.reviewer,
+    title: row.title,
+    body: row.body,
+    action: row.action,
+    createdAt: row.created_at,
+    readAt: row.read_at ?? undefined,
+    workbookId: row.workbook_id ?? undefined,
+    proposalId: row.proposal_id ?? undefined,
+    proposalItemId: row.proposal_item_id ?? undefined,
+    metadata,
   };
 }
 
@@ -888,6 +1024,76 @@ async function appendAuditEvent(
   );
 }
 
+async function appendReviewerNotification(
+  client: PgClient,
+  input: {
+    reviewer: string;
+    title: string;
+    body: string;
+    action: string;
+    createdAt: string;
+    workbookId?: string;
+    proposalId?: string;
+    proposalItemId?: string;
+    metadata?: Record<string, string | number | boolean | null>;
+  },
+) {
+  const notification = createReviewerNotification(input);
+  await client.query(
+    `insert into reviewer_notifications
+     (id, reviewer, title, body, action, created_at, read_at, workbook_id, proposal_id, proposal_item_id, metadata_json)
+     values ($1, $2, $3, $4, $5, $6, null, $7, $8, $9, $10::jsonb)`,
+    [
+      notification.id,
+      notification.reviewer,
+      notification.title,
+      notification.body,
+      notification.action,
+      notification.createdAt,
+      notification.workbookId ?? null,
+      notification.proposalId ?? null,
+      notification.proposalItemId ?? null,
+      JSON.stringify(notification.metadata ?? {}),
+    ],
+  );
+  return notification;
+}
+
+async function insertReviewerNotification(
+  client: PgClient,
+  notification: ReviewerNotification,
+) {
+  await client.query(
+    `insert into reviewer_notifications
+     (id, reviewer, title, body, action, created_at, read_at, workbook_id, proposal_id, proposal_item_id, metadata_json)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+     on conflict (id) do update set
+       reviewer = excluded.reviewer,
+       title = excluded.title,
+       body = excluded.body,
+       action = excluded.action,
+       created_at = excluded.created_at,
+       read_at = excluded.read_at,
+       workbook_id = excluded.workbook_id,
+       proposal_id = excluded.proposal_id,
+       proposal_item_id = excluded.proposal_item_id,
+       metadata_json = excluded.metadata_json`,
+    [
+      notification.id,
+      notification.reviewer,
+      notification.title,
+      notification.body,
+      notification.action,
+      notification.createdAt,
+      notification.readAt ?? null,
+      notification.workbookId ?? null,
+      notification.proposalId ?? null,
+      notification.proposalItemId ?? null,
+      JSON.stringify(notification.metadata ?? {}),
+    ],
+  );
+}
+
 export function createPostgresStoreBackend(): StoreBackend {
   return {
     async listStoredWorkbooks(): Promise<WorkbookSummary[]> {
@@ -1028,6 +1234,15 @@ export function createPostgresStoreBackend(): StoreBackend {
               ? "Proposal approved in the PostgreSQL workflow."
               : "Proposal rejected in the PostgreSQL workflow."),
         );
+        await appendReviewerNotification(client, {
+          reviewer: input.reviewer,
+          title: "Proposal review recorded",
+          body: `${current.workbook.name} was ${input.decision}d by ${input.reviewer}.`,
+          action: input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
+          createdAt: reviewedAt,
+          workbookId: input.workbookId,
+          proposalId: current.proposal.id,
+        });
 
         const review = await loadSnapshot(client, input.workbookId);
         return review ? mutationSuccess(review) : mutationFailure("not_found");
@@ -1088,6 +1303,19 @@ export function createPostgresStoreBackend(): StoreBackend {
           input.comment?.trim() ||
             `${input.decision === "approve" ? "Approved" : "Rejected"} proposal item ${input.diffId}.`,
         );
+        await appendReviewerNotification(client, {
+          reviewer: input.reviewer,
+          title: "Proposal item reviewed",
+          body: `${current.workbook.name} item ${input.diffId} was ${input.decision}d by ${input.reviewer}.`,
+          action:
+            input.decision === "approve"
+              ? "proposal.item.approved"
+              : "proposal.item.rejected",
+          createdAt: reviewedAt,
+          workbookId: input.workbookId,
+          proposalId: current.proposal.id,
+          proposalItemId: input.diffId,
+        });
 
         const review = await loadSnapshot(client, input.workbookId);
         return review ? mutationSuccess(review) : mutationFailure("not_found");
@@ -1120,7 +1348,10 @@ export function createPostgresStoreBackend(): StoreBackend {
 
         const comments = existing.comments ?? [];
         const replyToCommentId = input.parentCommentId ?? input.replyToCommentId;
-        if (replyToCommentId && !comments.some((comment) => comment.id === replyToCommentId)) {
+        const repliedToComment = replyToCommentId
+          ? comments.find((comment) => comment.id === replyToCommentId)
+          : undefined;
+        if (replyToCommentId && !repliedToComment) {
           return mutationFailure("comment_not_found");
         }
 
@@ -1151,6 +1382,18 @@ export function createPostgresStoreBackend(): StoreBackend {
           "proposal.item.commented",
           `Comment added to proposal item ${input.diffId}.`,
         );
+        for (const notification of buildCommentNotifications({
+          workbookId: input.workbookId,
+          workbookName: current.workbook.name,
+          proposalId: current.proposal.id,
+          proposalItemId: input.diffId,
+          proposalCell: existing.cell,
+          author: input.author,
+          comment,
+          repliedToComment,
+        })) {
+          await appendReviewerNotification(client, notification);
+        }
 
         const review = await loadSnapshot(client, input.workbookId);
         return review ? mutationSuccess(review) : mutationFailure("not_found");
@@ -1384,6 +1627,126 @@ export function createPostgresStoreBackend(): StoreBackend {
       });
     },
 
+    async listReviewerNotifications(input: {
+      reviewer: string;
+      includeRead?: boolean;
+    }): Promise<ReviewerNotificationFeed> {
+      return withTransaction(async (client) => {
+        const reviewer = normalizeReviewer(input.reviewer);
+        const result = await client.query<{
+          id: string;
+          reviewer: string;
+          title: string;
+          body: string;
+          action: string;
+          created_at: string;
+          read_at: string | null;
+          workbook_id: string | null;
+          proposal_id: string | null;
+          proposal_item_id: string | null;
+          metadata_json: unknown;
+        }>(
+          `select id, reviewer, title, body, action, created_at, read_at, workbook_id, proposal_id, proposal_item_id, metadata_json
+           from reviewer_notifications
+           where reviewer = $1
+             ${input.includeRead ? "" : "and read_at is null"}
+           order by created_at desc, id desc`,
+          [reviewer],
+        );
+
+        const notifications = result.rows
+          .map((row) => normalizeReviewerNotification(row))
+          .filter(
+            (notification) =>
+              notification.action === "proposal.item.mention" ||
+              notification.action === "proposal.item.reply",
+          );
+
+        return {
+          reviewer,
+          unreadCount: notifications.filter((notification) => !notification.readAt).length,
+          notifications,
+        };
+      });
+    },
+
+    async markReviewerNotificationRead(input: {
+      notificationId: string;
+      reviewer: string;
+    }): Promise<ReviewerNotificationMutationResult> {
+      return withTransaction(async (client) => {
+        const reviewer = normalizeReviewer(input.reviewer);
+        const readAt = new Date().toISOString();
+        const result = await client.query<{
+          id: string;
+          reviewer: string;
+          title: string;
+          body: string;
+          action: string;
+          created_at: string;
+          read_at: string | null;
+          workbook_id: string | null;
+          proposal_id: string | null;
+          proposal_item_id: string | null;
+          metadata_json: unknown;
+        }>(
+          `update reviewer_notifications
+           set read_at = $3
+           where id = $1 and reviewer = $2
+           returning id, reviewer, title, body, action, created_at, read_at, workbook_id, proposal_id, proposal_item_id, metadata_json`,
+          [input.notificationId, reviewer, readAt],
+        );
+
+        const row = result.rows[0];
+        if (!row) {
+          return { ok: false, code: "not_found" };
+        }
+
+        return {
+          ok: true,
+          notification: normalizeReviewerNotification(row),
+        };
+      });
+    },
+
+    async markReviewerNotificationUnread(input: {
+      notificationId: string;
+      reviewer: string;
+    }): Promise<ReviewerNotificationMutationResult> {
+      return withTransaction(async (client) => {
+        const reviewer = normalizeReviewer(input.reviewer);
+        const result = await client.query<{
+          id: string;
+          reviewer: string;
+          title: string;
+          body: string;
+          action: string;
+          created_at: string;
+          read_at: string | null;
+          workbook_id: string | null;
+          proposal_id: string | null;
+          proposal_item_id: string | null;
+          metadata_json: unknown;
+        }>(
+          `update reviewer_notifications
+           set read_at = null
+           where id = $1 and reviewer = $2
+           returning id, reviewer, title, body, action, created_at, read_at, workbook_id, proposal_id, proposal_item_id, metadata_json`,
+          [input.notificationId, reviewer],
+        );
+
+        const row = result.rows[0];
+        if (!row) {
+          return { ok: false, code: "not_found" };
+        }
+
+        return {
+          ok: true,
+          notification: normalizeReviewerNotification(row),
+        };
+      });
+    },
+
     async applyApprovedProposalItems(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
         const current = await loadSnapshot(client, input.workbookId);
@@ -1468,6 +1831,15 @@ export function createPostgresStoreBackend(): StoreBackend {
           input.note?.trim() ||
             `Applied ${approvedItems.length} approved proposal item${approvedItems.length === 1 ? "" : "s"} to workbook version ${nextVersion.id}.`,
         );
+        await appendReviewerNotification(client, {
+          reviewer: input.actor,
+          title: "Approved items applied",
+          body: `${current.workbook.name} was advanced to ${nextVersion.id}.`,
+          action: "proposal.applied",
+          createdAt: reviewedAt,
+          workbookId: input.workbookId,
+          proposalId: current.proposal.id,
+        });
 
         const review = await loadSnapshot(client, input.workbookId);
         return review ? mutationSuccess(review) : mutationFailure("not_found");
@@ -1476,20 +1848,27 @@ export function createPostgresStoreBackend(): StoreBackend {
   };
 }
 
-export async function importStoredWorkbookRecords(records: StoredWorkbookRecord[]) {
+export async function importStoredWorkbookRecords(input: {
+  records: StoredWorkbookRecord[];
+  notifications?: ReviewerNotification[];
+}) {
   return withTransaction(async (client) => {
     let imported = 0;
 
-    for (const record of records) {
+    for (const record of input.records) {
       await deleteWorkbookById(client, record.snapshot.workbook.id);
       await insertSnapshot(client, record.snapshot, record.uploadPath);
       imported += 1;
     }
 
+    for (const notification of input.notifications ?? []) {
+      await insertReviewerNotification(client, notification);
+    }
+
     return {
       imported,
       skipped: 0,
-      workbookIds: records.map((record) => record.snapshot.workbook.id),
+      workbookIds: input.records.map((record) => record.snapshot.workbook.id),
     };
   });
 }
