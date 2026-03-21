@@ -9,6 +9,7 @@ TypeScript MCP server scaffold for workbook automation.
 - `pnpm --filter @spreadbreadai/mcp-server start:http`
 - `pnpm --filter @spreadbreadai/mcp-server dev:http`
 - `pnpm --filter @spreadbreadai/mcp-server db:init`
+- `pnpm --filter @spreadbreadai/mcp-server db:import`
 - `pnpm --filter @spreadbreadai/mcp-server health`
 - `pnpm --filter @spreadbreadai/mcp-server build`
 
@@ -47,6 +48,12 @@ Set `DATABASE_URL` to switch the backend to PostgreSQL, then initialize the sche
 
 ```bash
 cd apps/mcp-server && DATABASE_URL=postgres://... node --import tsx src/db-init.ts
+```
+
+Import the current file-store data into PostgreSQL:
+
+```bash
+cd apps/mcp-server && DATABASE_URL=postgres://... node --import tsx src/db-import.ts
 ```
 
 The initial schema lives in `apps/mcp-server/sql/001_initial_schema.sql`.

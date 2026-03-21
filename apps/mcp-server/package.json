@@ -10,6 +10,7 @@
     "start:http": "node --import tsx src/http-main.ts",
     "dev:http": "node --watch --import tsx src/http-main.ts",
     "db:init": "node --import tsx src/db-init.ts",
+    "db:import": "node --import tsx src/db-import.ts",
     "health": "node --import tsx src/health.ts",
     "build": "tsc -p tsconfig.json",
     "test": "node --import tsx src/health.ts"

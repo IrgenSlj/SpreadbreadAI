@@ -104,7 +104,10 @@ async function insertSnapshot(
   uploadPath: string | null,
 ) {
   const workbook = snapshot.workbook;
-  const latestVersion = workbook.versions[0];
+  const versions = [...workbook.versions].sort(
+    (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+  );
+  const latestVersion = versions[0];
 
   await client.query(
     `insert into workbooks (id, name, owner, status, created_at, last_reviewed_at, latest_version_id)
@@ -127,19 +130,21 @@ async function insertSnapshot(
     ],
   );
 
-  await client.query(
-    `insert into workbook_versions (id, workbook_id, created_at, created_by, note, artifact_path)
-     values ($1, $2, $3, $4, $5, $6)
-     on conflict (id) do nothing`,
-    [
-      latestVersion.id,
-      workbook.id,
-      latestVersion.createdAt,
-      latestVersion.createdBy,
-      latestVersion.note,
-      uploadPath,
-    ],
-  );
+  for (const version of versions) {
+    await client.query(
+      `insert into workbook_versions (id, workbook_id, created_at, created_by, note, artifact_path)
+       values ($1, $2, $3, $4, $5, $6)
+       on conflict (id) do nothing`,
+      [
+        version.id,
+        workbook.id,
+        version.createdAt,
+        version.createdBy,
+        version.note,
+        version.id === latestVersion.id ? uploadPath : null,
+      ],
+    );
+  }
 
   for (const sheet of workbook.sheets) {
     await client.query(
@@ -266,6 +271,36 @@ async function insertSnapshot(
       [event.id, event.workbookId, event.actor, event.action, event.detail, event.createdAt],
     );
   }
+}
+
+async function deleteWorkbookById(client: PgClient, workbookId: string) {
+  await client.query(
+    `delete from audit_events where workbook_id = $1`,
+    [workbookId],
+  );
+  await client.query(
+    `delete from proposal_items
+     where proposal_id in (select id from proposals where workbook_id = $1)`,
+    [workbookId],
+  );
+  await client.query(`delete from proposals where workbook_id = $1`, [workbookId]);
+  await client.query(
+    `delete from workbook_sheets
+     where workbook_version_id in (select id from workbook_versions where workbook_id = $1)`,
+    [workbookId],
+  );
+  await client.query(
+    `delete from workbook_named_ranges
+     where workbook_version_id in (select id from workbook_versions where workbook_id = $1)`,
+    [workbookId],
+  );
+  await client.query(
+    `delete from workbook_risks
+     where workbook_version_id in (select id from workbook_versions where workbook_id = $1)`,
+    [workbookId],
+  );
+  await client.query(`delete from workbook_versions where workbook_id = $1`, [workbookId]);
+  await client.query(`delete from workbooks where id = $1`, [workbookId]);
 }
 
 async function buildWorkbookSummaryRows(client: PgClient): Promise<WorkbookSummary[]> {
@@ -790,4 +825,22 @@ export function createPostgresStoreBackend(): StoreBackend {
       });
     },
   };
+}
+
+export async function importStoredWorkbookRecords(records: StoredWorkbookRecord[]) {
+  return withTransaction(async (client) => {
+    let imported = 0;
+
+    for (const record of records) {
+      await deleteWorkbookById(client, record.snapshot.workbook.id);
+      await insertSnapshot(client, record.snapshot, record.uploadPath);
+      imported += 1;
+    }
+
+    return {
+      imported,
+      skipped: 0,
+      workbookIds: records.map((record) => record.snapshot.workbook.id),
+    };
+  });
 }
