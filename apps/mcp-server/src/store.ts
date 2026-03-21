@@ -3,6 +3,7 @@ import { getPostgresConnectionInfo, hasPostgresConfig } from "./postgres.js";
 import { createPostgresStoreBackend } from "./postgres-store.js";
 import type {
   MutationResult,
+  LibraryViewDeletionResult,
   TagsMutationResult,
   LibraryViewMutationResult,
   SketchBoardMutationResult,
@@ -11,6 +12,7 @@ import type {
 } from "./store-backend.js";
 
 export type {
+  LibraryViewDeletionResult,
   LibraryViewMutationResult,
   MutationFailureCode,
   MutationResult,
@@ -127,8 +129,10 @@ export function updateStoredSketchBoard(input: {
   return backend.updateStoredSketchBoard(input);
 }
 
-export function listStoredWorkbookLibraryViews() {
-  return backend.listStoredWorkbookLibraryViews();
+export function listStoredWorkbookLibraryViews(options?: {
+  includeArchived?: boolean;
+}) {
+  return backend.listStoredWorkbookLibraryViews(options);
 }
 
 export function saveStoredWorkbookLibraryView(input: {
@@ -143,6 +147,19 @@ export function saveStoredWorkbookLibraryView(input: {
   pinned?: boolean;
 }): Promise<LibraryViewMutationResult> {
   return backend.saveStoredWorkbookLibraryView(input);
+}
+
+export function archiveStoredWorkbookLibraryView(input: {
+  id: string;
+  archivedBy: string;
+}): Promise<LibraryViewMutationResult> {
+  return backend.archiveStoredWorkbookLibraryView(input);
+}
+
+export function deleteStoredWorkbookLibraryView(input: {
+  id: string;
+}): Promise<LibraryViewDeletionResult> {
+  return backend.deleteStoredWorkbookLibraryView(input);
 }
 
 export function applyApprovedProposalItems(input: {

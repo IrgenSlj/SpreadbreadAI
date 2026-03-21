@@ -41,6 +41,10 @@ export type LibraryViewMutationResult =
   | { ok: true; view: WorkbookLibraryView }
   | { ok: false; code: MutationFailureCode };
 
+export type LibraryViewDeletionResult =
+  | { ok: true; deletedId: string }
+  | { ok: false; code: MutationFailureCode };
+
 export interface StoreBackend {
   listStoredWorkbooks(): Promise<WorkbookSummary[]>;
   getStoredWorkbookReview(workbookId: string): Promise<WorkbookReviewSnapshot | null>;
@@ -86,7 +90,9 @@ export interface StoreBackend {
     links: WorkbookSketchBoard["links"];
     notes?: string;
   }): Promise<SketchBoardMutationResult>;
-  listStoredWorkbookLibraryViews(): Promise<WorkbookLibraryView[]>;
+  listStoredWorkbookLibraryViews(options?: {
+    includeArchived?: boolean;
+  }): Promise<WorkbookLibraryView[]>;
   saveStoredWorkbookLibraryView(input: {
     id: string;
     name: string;
@@ -98,6 +104,13 @@ export interface StoreBackend {
     sortDirection: WorkbookLibraryView["sortDirection"];
     pinned?: boolean;
   }): Promise<LibraryViewMutationResult>;
+  archiveStoredWorkbookLibraryView(input: {
+    id: string;
+    archivedBy: string;
+  }): Promise<LibraryViewMutationResult>;
+  deleteStoredWorkbookLibraryView(input: {
+    id: string;
+  }): Promise<LibraryViewDeletionResult>;
   applyApprovedProposalItems(input: {
     workbookId: string;
     actor: string;

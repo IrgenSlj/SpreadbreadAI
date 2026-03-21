@@ -122,6 +122,8 @@ export interface WorkbookLibraryView {
   name: string;
   updatedAt: string;
   updatedBy: string;
+  archivedAt?: string;
+  archivedBy?: string;
   description?: string;
   searchQuery?: string;
   tags: string[];

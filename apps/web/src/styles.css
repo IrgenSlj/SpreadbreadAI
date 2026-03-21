@@ -577,6 +577,11 @@ h2 {
   background: #f6fbf6;
 }
 
+.saved-view-chip.archived {
+  background: #f3f5f2;
+  border-color: #d7ddd6;
+}
+
 .saved-view-apply {
   border: 0;
   background: transparent;
@@ -584,6 +589,11 @@ h2 {
   text-align: left;
   cursor: pointer;
   padding: 4px 8px;
+}
+
+.saved-view-apply:disabled {
+  cursor: default;
+  opacity: 0.8;
 }
 
 .saved-view-apply small {
@@ -599,6 +609,18 @@ h2 {
   cursor: pointer;
   font-size: 0.72rem;
   padding: 4px 8px;
+}
+
+.saved-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.saved-view-toggle input {
+  accent-color: var(--green);
 }
 
 .tag-chip {
@@ -972,6 +994,19 @@ h2 {
   background: #edf7ef;
 }
 
+.notification-card.unread {
+  border-color: #9fcaab;
+  background: linear-gradient(180deg, #eff9f1, #e3f1e6);
+  box-shadow: 0 6px 16px rgba(25, 47, 29, 0.06);
+}
+
+.notification-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
 .notification-card strong {
   font-size: 0.84rem;
   color: var(--green-strong);
@@ -979,6 +1014,63 @@ h2 {
 
 .notification-card small {
   color: var(--muted);
+}
+
+.notification-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 0.64rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.notification-badge.unread {
+  border-color: #b8d7c1;
+  background: #ffffff;
+  color: var(--green-strong);
+}
+
+.notification-badge.read {
+  background: #f5f8f5;
+  color: var(--muted);
+}
+
+.notification-toggle {
+  align-self: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--green-strong);
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.notification-toggle:disabled {
+  opacity: 0.5;
+}
+
+.notification-toggle:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: #f9fcf9;
+}
+
+.comment-filter-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 2px 2px 0;
+}
+
+.comment-filter-summary strong {
+  display: inline-block;
+  color: var(--green-strong);
+  font-size: 0.9rem;
 }
 
 .comment-filter-head {
@@ -1331,6 +1423,21 @@ h2 {
   pointer-events: none;
 }
 
+.sketch-link-group {
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.sketch-link-group.selected .sketch-link-line {
+  stroke: var(--green);
+  stroke-width: 3.4;
+}
+
+.sketch-link-group.selected .sketch-link-text {
+  fill: var(--green-strong);
+  font-weight: 700;
+}
+
 .sketch-link-line {
   stroke: rgba(33, 115, 70, 0.45);
   stroke-width: 2.5;
@@ -1410,6 +1517,73 @@ h2 {
   z-index: 2;
 }
 
+.sketch-link-editor {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.sketch-link-editor-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.sketch-link-editor-head span {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--green);
+}
+
+.sketch-link-editor-head strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.sketch-link-list {
+  display: grid;
+  gap: 10px;
+}
+
+.sketch-link-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.sketch-link-item.active {
+  border-color: #b8d7c1;
+  background: linear-gradient(180deg, #f7fbf7, #ffffff);
+}
+
+.sketch-link-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.sketch-link-item-head strong {
+  font-size: 0.9rem;
+}
+
+.sketch-link-item-head small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+
 .sketch-link-chip {
   display: inline-flex;
   margin: 12px 0 0 12px;
@@ -1437,6 +1611,16 @@ h2 {
 
 .sketch-node-list article strong {
   font-size: 0.9rem;
+}
+
+.sketch-link-item label select,
+.sketch-link-item label input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  padding: 9px 11px;
 }
 
 .node {

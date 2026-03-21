@@ -33,6 +33,8 @@ create table if not exists workbook_library_views (
   name text not null,
   updated_at timestamptz not null,
   updated_by text not null,
+  archived_at timestamptz,
+  archived_by text,
   description text,
   search_query text,
   tags_json jsonb not null default '[]'::jsonb,
@@ -41,8 +43,17 @@ create table if not exists workbook_library_views (
   pinned boolean not null default false
 );
 
+alter table if exists workbook_library_views
+  add column if not exists archived_at timestamptz;
+
+alter table if exists workbook_library_views
+  add column if not exists archived_by text;
+
 create index if not exists workbook_library_views_updated_at_idx
   on workbook_library_views (updated_at desc, id desc);
+
+create index if not exists workbook_library_views_archived_at_idx
+  on workbook_library_views (archived_at desc, updated_at desc, id desc);
 
 create table if not exists workbook_sheets (
   workbook_version_id text not null references workbook_versions(id) on delete cascade,

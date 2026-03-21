@@ -14,6 +14,7 @@ import {
 } from "../../../packages/shared/src/index.js";
 import { parseWorkbookReviewSnapshot } from "./parser.js";
 import type {
+  LibraryViewDeletionResult,
   LibraryViewMutationResult,
   MutationFailureCode,
   MutationResult,
@@ -111,6 +112,8 @@ function normalizeLibraryView(input: {
   id: string;
   name: string;
   updatedBy: string;
+  archivedAt?: string;
+  archivedBy?: string;
   description?: string;
   searchQuery?: string;
   tags: string[];
@@ -124,6 +127,8 @@ function normalizeLibraryView(input: {
     name: input.name,
     updatedAt: input.updatedAt ?? new Date().toISOString(),
     updatedBy: input.updatedBy,
+    archivedAt: input.archivedAt,
+    archivedBy: input.archivedBy,
     description: input.description?.trim() || undefined,
     searchQuery: input.searchQuery?.trim() || undefined,
     tags: normalizeWorkbookTags(input.tags),
@@ -1014,9 +1019,12 @@ export function createFileStoreBackend(): StoreBackend {
       });
     },
 
-    async listStoredWorkbookLibraryViews(): Promise<WorkbookLibraryView[]> {
+    async listStoredWorkbookLibraryViews(options?: {
+      includeArchived?: boolean;
+    }): Promise<WorkbookLibraryView[]> {
       const store = await readStore();
-      return Array.isArray(store.libraryViews) ? store.libraryViews : demoLibraryViews;
+      const views = Array.isArray(store.libraryViews) ? store.libraryViews : demoLibraryViews;
+      return options?.includeArchived ? views : views.filter((view) => !view.archivedAt);
     },
 
     async saveStoredWorkbookLibraryView(input: {
@@ -1030,12 +1038,15 @@ export function createFileStoreBackend(): StoreBackend {
       sortDirection: WorkbookLibraryView["sortDirection"];
       pinned?: boolean;
     }): Promise<LibraryViewMutationResult> {
-      const view = normalizeLibraryView({
-        ...input,
-        updatedAt: new Date().toISOString(),
-      });
+      if (input.id.startsWith("demo_")) {
+        const existingView = demoLibraryViews.find((entry) => entry.id === input.id);
+        const view = normalizeLibraryView({
+          ...input,
+          updatedAt: new Date().toISOString(),
+          archivedAt: existingView?.archivedAt,
+          archivedBy: existingView?.archivedBy,
+        });
 
-      if (view.id.startsWith("demo_")) {
         demoLibraryViews = [
           ...demoLibraryViews.filter((entry) => entry.id !== view.id),
           view,
@@ -1046,6 +1057,13 @@ export function createFileStoreBackend(): StoreBackend {
       return runSerializedMutation(async () => {
         const store = await readStore();
         const existingViews = Array.isArray(store.libraryViews) ? store.libraryViews : [];
+        const existingView = existingViews.find((entry) => entry.id === input.id);
+        const view = normalizeLibraryView({
+          ...input,
+          updatedAt: new Date().toISOString(),
+          archivedAt: existingView?.archivedAt,
+          archivedBy: existingView?.archivedBy,
+        });
         const nextViews = [
           ...existingViews.filter((entry) => entry.id !== view.id),
           view,
@@ -1054,6 +1072,87 @@ export function createFileStoreBackend(): StoreBackend {
         store.libraryViews = nextViews;
         await writeStore(store);
         return { ok: true, view };
+      });
+    },
+
+    async archiveStoredWorkbookLibraryView(input: {
+      id: string;
+      archivedBy: string;
+    }): Promise<LibraryViewMutationResult> {
+      const archivedAt = new Date().toISOString();
+
+      if (input.id.startsWith("demo_")) {
+        const existingView = demoLibraryViews.find((entry) => entry.id === input.id);
+
+        if (!existingView) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const view = normalizeLibraryView({
+          ...existingView,
+          updatedAt: archivedAt,
+          updatedBy: input.archivedBy,
+          archivedAt,
+          archivedBy: input.archivedBy,
+        });
+
+        demoLibraryViews = [
+          ...demoLibraryViews.filter((entry) => entry.id !== input.id),
+          view,
+        ];
+        return { ok: true, view };
+      }
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const existingView = (store.libraryViews ?? []).find((entry) => entry.id === input.id);
+
+        if (!existingView) {
+          return { ok: false, code: "not_found" } as const;
+        }
+
+        const view = normalizeLibraryView({
+          ...existingView,
+          updatedAt: archivedAt,
+          updatedBy: input.archivedBy,
+          archivedAt,
+          archivedBy: input.archivedBy,
+        });
+
+        store.libraryViews = [
+          ...(store.libraryViews ?? []).filter((entry) => entry.id !== input.id),
+          view,
+        ];
+        await writeStore(store);
+        return { ok: true, view };
+      });
+    },
+
+    async deleteStoredWorkbookLibraryView(input: {
+      id: string;
+    }): Promise<LibraryViewDeletionResult> {
+      if (input.id.startsWith("demo_")) {
+        const existingView = demoLibraryViews.find((entry) => entry.id === input.id);
+
+        if (!existingView) {
+          return { ok: false, code: "not_found" };
+        }
+
+        demoLibraryViews = demoLibraryViews.filter((entry) => entry.id !== input.id);
+        return { ok: true, deletedId: input.id };
+      }
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const existingView = (store.libraryViews ?? []).find((entry) => entry.id === input.id);
+
+        if (!existingView) {
+          return { ok: false, code: "not_found" };
+        }
+
+        store.libraryViews = (store.libraryViews ?? []).filter((entry) => entry.id !== input.id);
+        await writeStore(store);
+        return { ok: true, deletedId: input.id };
       });
     },
 

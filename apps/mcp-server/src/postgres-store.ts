@@ -19,6 +19,7 @@ import type {
 import { parseWorkbookReviewSnapshot } from "./parser.js";
 import { withTransaction } from "./postgres.js";
 import type {
+  LibraryViewDeletionResult,
   MutationFailureCode,
   MutationResult,
   LibraryViewMutationResult,
@@ -158,6 +159,8 @@ function normalizeLibraryView(input: {
   id: string;
   name: string;
   updatedBy: string;
+  archivedAt?: string;
+  archivedBy?: string;
   description?: string;
   searchQuery?: string;
   tags: string[];
@@ -171,6 +174,8 @@ function normalizeLibraryView(input: {
     name: input.name,
     updatedAt: input.updatedAt ?? new Date().toISOString(),
     updatedBy: input.updatedBy,
+    archivedAt: input.archivedAt,
+    archivedBy: input.archivedBy,
     description: input.description?.trim() || undefined,
     searchQuery: input.searchQuery?.trim() || undefined,
     tags: normalizeWorkbookTags(input.tags),
@@ -1196,13 +1201,17 @@ export function createPostgresStoreBackend(): StoreBackend {
       });
     },
 
-    async listStoredWorkbookLibraryViews(): Promise<WorkbookLibraryView[]> {
+    async listStoredWorkbookLibraryViews(options?: {
+      includeArchived?: boolean;
+    }): Promise<WorkbookLibraryView[]> {
       return withTransaction(async (client) => {
         const result = await client.query<{
           id: string;
           name: string;
           updated_at: string;
           updated_by: string;
+          archived_at: string | null;
+          archived_by: string | null;
           description: string | null;
           search_query: string | null;
           tags_json: unknown;
@@ -1210,8 +1219,9 @@ export function createPostgresStoreBackend(): StoreBackend {
           sort_direction: string;
           pinned: boolean;
         }>(
-          `select id, name, updated_at, updated_by, description, search_query, tags_json, sort_by, sort_direction, pinned
+          `select id, name, updated_at, updated_by, archived_at, archived_by, description, search_query, tags_json, sort_by, sort_direction, pinned
            from workbook_library_views
+           ${options?.includeArchived ? "" : "where archived_at is null"}
            order by updated_at desc, id desc`,
         );
 
@@ -1221,6 +1231,8 @@ export function createPostgresStoreBackend(): StoreBackend {
             name: row.name,
             updatedBy: row.updated_by,
             updatedAt: row.updated_at,
+            archivedAt: row.archived_at ?? undefined,
+            archivedBy: row.archived_by ?? undefined,
             description: row.description ?? undefined,
             searchQuery: row.search_query ?? undefined,
             tags: normalizeWorkbookTags(row.tags_json),
@@ -1245,19 +1257,30 @@ export function createPostgresStoreBackend(): StoreBackend {
     }): Promise<LibraryViewMutationResult> {
       return withTransaction(async (client) => {
         const updatedAt = new Date().toISOString();
+        const existing = await client.query<{
+          archived_at: string | null;
+          archived_by: string | null;
+        }>(
+          `select archived_at, archived_by from workbook_library_views where id = $1`,
+          [input.id],
+        );
         const view = normalizeLibraryView({
           ...input,
           updatedAt,
+          archivedAt: existing.rows[0]?.archived_at ?? undefined,
+          archivedBy: existing.rows[0]?.archived_by ?? undefined,
         });
 
         await client.query(
           `insert into workbook_library_views
-           (id, name, updated_at, updated_by, description, search_query, tags_json, sort_by, sort_direction, pinned)
-           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+           (id, name, updated_at, updated_by, archived_at, archived_by, description, search_query, tags_json, sort_by, sort_direction, pinned)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
            on conflict (id) do update set
              name = excluded.name,
              updated_at = excluded.updated_at,
              updated_by = excluded.updated_by,
+             archived_at = workbook_library_views.archived_at,
+             archived_by = workbook_library_views.archived_by,
              description = excluded.description,
              search_query = excluded.search_query,
              tags_json = excluded.tags_json,
@@ -1269,6 +1292,8 @@ export function createPostgresStoreBackend(): StoreBackend {
             view.name,
             view.updatedAt,
             view.updatedBy,
+            view.archivedAt ?? null,
+            view.archivedBy ?? null,
             view.description ?? null,
             view.searchQuery ?? null,
             JSON.stringify(view.tags),
@@ -1279,6 +1304,83 @@ export function createPostgresStoreBackend(): StoreBackend {
         );
 
         return { ok: true, view };
+      });
+    },
+
+    async archiveStoredWorkbookLibraryView(input: {
+      id: string;
+      archivedBy: string;
+    }): Promise<LibraryViewMutationResult> {
+      return withTransaction(async (client) => {
+        const existing = await client.query<{
+          id: string;
+          name: string;
+          updated_at: string;
+          updated_by: string;
+          archived_at: string | null;
+          archived_by: string | null;
+          description: string | null;
+          search_query: string | null;
+          tags_json: unknown;
+          sort_by: string;
+          sort_direction: string;
+          pinned: boolean;
+        }>(
+          `select id, name, updated_at, updated_by, archived_at, archived_by, description, search_query, tags_json, sort_by, sort_direction, pinned
+           from workbook_library_views
+           where id = $1`,
+          [input.id],
+        );
+
+        const existingRow = existing.rows[0];
+        if (!existingRow) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const archivedAt = new Date().toISOString();
+        const view = normalizeLibraryView({
+          id: existingRow.id,
+          name: existingRow.name,
+          updatedAt: archivedAt,
+          updatedBy: input.archivedBy,
+          archivedAt,
+          archivedBy: input.archivedBy,
+          description: existingRow.description ?? undefined,
+          searchQuery: existingRow.search_query ?? undefined,
+          tags: normalizeWorkbookTags(existingRow.tags_json),
+          sortBy: existingRow.sort_by as WorkbookLibraryView["sortBy"],
+          sortDirection: existingRow.sort_direction as WorkbookLibraryView["sortDirection"],
+          pinned: existingRow.pinned,
+        });
+
+        await client.query(
+          `update workbook_library_views
+           set updated_at = $2,
+               updated_by = $3,
+               archived_at = $4,
+               archived_by = $5
+           where id = $1`,
+          [input.id, view.updatedAt, view.updatedBy, view.archivedAt, view.archivedBy],
+        );
+
+        return { ok: true, view };
+      });
+    },
+
+    async deleteStoredWorkbookLibraryView(input: {
+      id: string;
+    }): Promise<LibraryViewDeletionResult> {
+      return withTransaction(async (client) => {
+        const result = await client.query<{ id: string }>(
+          `delete from workbook_library_views where id = $1 returning id`,
+          [input.id],
+        );
+
+        if (!result.rows[0]) {
+          return { ok: false, code: "not_found" };
+        }
+
+        return { ok: true, deletedId: result.rows[0].id };
       });
     },
 

@@ -19,6 +19,9 @@ type MutationAction =
   | "proposal-decision"
   | "proposal-item-decision"
   | "apply"
+  | "view-archive"
+  | "view-delete"
+  | "view-save"
   | "sketch-save";
 
 type WorkbooksResponse = {
@@ -45,6 +48,10 @@ type WorkbookTagsResponse = {
 
 type WorkbookLibraryViewsResponse = {
   views: WorkbookLibraryView[];
+};
+
+type LibraryViewDeletionResponse = {
+  deletedId: string;
 };
 
 type WorkbookOriginFilter = "all" | "demo" | "uploaded";
@@ -300,18 +307,24 @@ function App() {
   const [workbookTagDraft, setWorkbookTagDraft] = useState("");
   const [savedWorkbookViews, setSavedWorkbookViews] = useState<WorkbookLibraryView[]>([]);
   const [savedViewName, setSavedViewName] = useState("");
+  const [showArchivedViews, setShowArchivedViews] = useState(false);
   const [commentSearchQuery, setCommentSearchQuery] = useState("");
   const [commentFilterMode, setCommentFilterMode] =
     useState<CommentFilterMode>("all");
   const [itemCommentDrafts, setItemCommentDrafts] = useState<Record<string, string>>({});
   const [itemCommentState, setItemCommentState] = useState<Record<string, ItemCommentState>>({});
   const [replyTargetByEntry, setReplyTargetByEntry] = useState<Record<string, ReplyTarget | null>>({});
+  const [notificationReadState, setNotificationReadState] = useState<Record<string, boolean>>(
+    {},
+  );
   const [sketchBoard, setSketchBoard] = useState<WorkbookSketchBoard>(
     createSeededSketchBoard(demoReviewSnapshot, "system"),
   );
+  const [selectedSketchLinkId, setSelectedSketchLinkId] = useState<string | null>(null);
   const [sketchError, setSketchError] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const sketchCanvasRef = useRef<HTMLDivElement | null>(null);
+  const notificationStorageKey = `spreadbreadai.notifications.${normalizeHandle(reviewerName) || "reviewer"}`;
 
   const pendingRisks = useMemo(
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
@@ -470,11 +483,11 @@ function App() {
   };
   const sketchNodeOptions = useMemo(
     () =>
-      snapshot.workbook.sheets.map((sheet) => ({
-        id: `${snapshot.workbook.id}_sheet_${normalizeHandle(sheet.name)}`,
-        label: sheet.name,
+      sketchBoard.nodes.map((node) => ({
+        id: node.id,
+        label: node.label,
       })),
-    [snapshot.workbook.id, snapshot.workbook.sheets],
+    [sketchBoard.nodes],
   );
   const availableTags = useMemo(
     () =>
@@ -513,10 +526,86 @@ function App() {
       ),
     [reviewerHandle, reviewerName, snapshot.proposal.diff],
   );
+  const unreadNotificationCount = useMemo(
+    () => reviewNotifications.filter((notification) => !notificationReadState[notification.id]).length,
+    [notificationReadState, reviewNotifications],
+  );
   const sketchNodeMap = useMemo(
     () => new Map(sketchBoard.nodes.map((node) => [node.id, node])),
     [sketchBoard.nodes],
   );
+  const selectedSketchLink = useMemo(
+    () => sketchBoard.links.find((link) => link.id === selectedSketchLinkId) ?? null,
+    [selectedSketchLinkId, sketchBoard.links],
+  );
+
+  useEffect(() => {
+    setNotificationReadState((current) => {
+      const next: Record<string, boolean> = {};
+      let changed = false;
+
+      for (const notification of reviewNotifications) {
+        next[notification.id] = current[notification.id] ?? false;
+      }
+
+      for (const key of Object.keys(current)) {
+        if (!(key in next)) {
+          changed = true;
+          continue;
+        }
+      }
+
+      for (const key of Object.keys(next)) {
+        if (current[key] !== next[key]) {
+          changed = true;
+          break;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [reviewNotifications]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const rawValue = window.localStorage.getItem(notificationStorageKey);
+
+      if (!rawValue) {
+        setNotificationReadState({});
+        return;
+      }
+
+      const parsed = JSON.parse(rawValue) as Record<string, boolean>;
+      setNotificationReadState(parsed && typeof parsed === "object" ? parsed : {});
+    } catch {
+      setNotificationReadState({});
+    }
+  }, [notificationStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(
+        notificationStorageKey,
+        JSON.stringify(notificationReadState),
+      );
+    } catch {
+      return;
+    }
+  }, [notificationReadState, notificationStorageKey]);
+
+  useEffect(() => {
+    if (selectedSketchLinkId && !selectedSketchLink) {
+      setSelectedSketchLinkId(null);
+    }
+  }, [selectedSketchLink, selectedSketchLinkId]);
 
   function getReplyTarget(entryId: string) {
     return replyTargetByEntry[entryId] ?? null;
@@ -527,6 +616,25 @@ function App() {
       ...current,
       [entryId]: target,
     }));
+  }
+
+  function markNotificationRead(notificationId: string, read = true) {
+    setNotificationReadState((current) => ({
+      ...current,
+      [notificationId]: read,
+    }));
+  }
+
+  function markAllNotificationsRead() {
+    setNotificationReadState((current) => {
+      const next = { ...current };
+
+      for (const notification of reviewNotifications) {
+        next[notification.id] = true;
+      }
+
+      return next;
+    });
   }
 
   function getVisibleThreadComments(
@@ -622,6 +730,58 @@ function App() {
     setSketchBoard((current) => updater(current));
   }
 
+  function updateSketchLink(
+    linkId: string,
+    updater: (link: WorkbookSketchBoard["links"][number]) => WorkbookSketchBoard["links"][number],
+  ) {
+    updateSketchBoard((current) => ({
+      ...current,
+      links: current.links.map((link) => (link.id === linkId ? updater(link) : link)),
+      updatedBy: reviewerName,
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+
+  function addSketchLink() {
+    const fromNodeId = sketchBoard.nodes[0]?.id;
+    const toNodeId = sketchBoard.nodes[1]?.id ?? sketchBoard.nodes[0]?.id;
+
+    if (!fromNodeId || !toNodeId) {
+      return;
+    }
+
+    const newLinkId = `${snapshot.workbook.id}_link_${Date.now().toString(36)}`;
+
+    updateSketchBoard((current) => ({
+      ...current,
+      links: [
+        ...current.links,
+        {
+          id: newLinkId,
+          fromNodeId,
+          toNodeId,
+          label: "Review flow",
+        },
+      ],
+      updatedBy: reviewerName,
+      updatedAt: new Date().toISOString(),
+    }));
+    setSelectedSketchLinkId(newLinkId);
+  }
+
+  function removeSketchLink(linkId: string) {
+    updateSketchBoard((current) => ({
+      ...current,
+      links: current.links.filter((link) => link.id !== linkId),
+      updatedBy: reviewerName,
+      updatedAt: new Date().toISOString(),
+    }));
+
+    if (selectedSketchLinkId === linkId) {
+      setSelectedSketchLinkId(null);
+    }
+  }
+
   async function addTagToActiveWorkbook() {
     const normalized = workbookTagDraft.trim().toLowerCase();
 
@@ -677,6 +837,7 @@ function App() {
     }
 
     try {
+      setActiveMutation("view-save");
       const viewId = normalizeHandle(trimmedName) || `view_${Date.now().toString(36)}`;
       const response = await fetch(`/api/library/views/${encodeURIComponent(viewId)}`, {
         method: "PUT",
@@ -707,6 +868,8 @@ function App() {
       setSavedViewName("");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to save workbook view");
+    } finally {
+      setActiveMutation(null);
     }
   }
 
@@ -717,8 +880,64 @@ function App() {
     setWorkbookTagFilter(view.tags[0] ?? "all");
   }
 
-  function deleteSavedWorkbookView(viewId: string) {
-    setSavedWorkbookViews((current) => current.filter((view) => view.id !== viewId));
+  async function archiveSavedWorkbookView(viewId: string) {
+    if (mutationInFlight) {
+      return;
+    }
+
+    try {
+      setActiveMutation("view-archive");
+      setErrorMessage(null);
+      const response = await fetch(`/api/library/views/${encodeURIComponent(viewId)}/archive`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          archivedBy: reviewerName,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Saved view archive failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as { view: WorkbookLibraryView };
+      setSavedWorkbookViews((current) =>
+        current
+          .filter((view) => view.id !== viewId)
+          .concat(showArchivedViews ? [data.view] : []),
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to archive workbook view");
+    } finally {
+      setActiveMutation(null);
+    }
+  }
+
+  async function deleteSavedWorkbookView(viewId: string) {
+    if (mutationInFlight) {
+      return;
+    }
+
+    try {
+      setActiveMutation("view-delete");
+      setErrorMessage(null);
+      const response = await fetch(`/api/library/views/${encodeURIComponent(viewId)}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Saved view delete failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as LibraryViewDeletionResponse;
+      setSavedWorkbookViews((current) => current.filter((view) => view.id !== data.deletedId));
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to delete workbook view");
+    } finally {
+      setActiveMutation(null);
+    }
   }
 
   async function removeTagFromWorkbook(workbookId: string, tag: string) {
@@ -827,8 +1046,10 @@ function App() {
     }
   }
 
-  async function loadLibraryViews() {
-    const response = await fetch("/api/library/views");
+  async function loadLibraryViews(includeArchived = showArchivedViews) {
+    const response = await fetch(
+      includeArchived ? "/api/library/views?includeArchived=true" : "/api/library/views",
+    );
 
     if (!response.ok) {
       throw new Error(`Failed to load library views (${response.status})`);
@@ -847,8 +1068,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    void loadLibraryViews().catch(() => undefined);
-  }, []);
+    void loadLibraryViews(showArchivedViews).catch(() => undefined);
+  }, [showArchivedViews]);
 
   useEffect(() => {
     if (!dragState) {
@@ -1532,9 +1753,15 @@ function App() {
                   {savedWorkbookViews.length > 0 ? (
                     <div className="saved-view-chips">
                       {savedWorkbookViews.map((view) => (
-                        <article key={view.id} className="saved-view-chip">
+                        <article
+                          key={view.id}
+                          className={
+                            view.archivedAt ? "saved-view-chip archived" : "saved-view-chip"
+                          }
+                        >
                           <button
                             className="saved-view-apply"
+                            disabled={Boolean(view.archivedAt)}
                             onClick={() => applySavedWorkbookView(view)}
                             type="button"
                           >
@@ -1542,12 +1769,39 @@ function App() {
                             <small>
                               {view.searchQuery || "No query"} · {view.sortBy} · {view.sortDirection}
                               {view.tags.length > 0 ? ` · ${view.tags.join(", ")}` : ""}
+                              {view.archivedAt ? ` · archived ${new Date(view.archivedAt).toLocaleDateString()}` : ""}
                             </small>
+                          </button>
+                          {!view.archivedAt ? (
+                            <button
+                              className="saved-view-delete"
+                              disabled={mutationInFlight}
+                              onClick={() => void archiveSavedWorkbookView(view.id)}
+                              type="button"
+                            >
+                              Archive
+                            </button>
+                          ) : null}
+                          <button
+                            className="saved-view-delete"
+                            disabled={mutationInFlight}
+                            onClick={() => void deleteSavedWorkbookView(view.id)}
+                            type="button"
+                          >
+                            Delete
                           </button>
                         </article>
                       ))}
                     </div>
                   ) : null}
+                  <label className="saved-view-toggle">
+                    <input
+                      checked={showArchivedViews}
+                      onChange={(event) => setShowArchivedViews(event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>Show archived views</span>
+                  </label>
                 </div>
               </div>
               <div className="workbook-list">
@@ -1812,13 +2066,56 @@ function App() {
                 {reviewNotifications.length > 0 ? (
                   <div className="notification-strip">
                     {reviewNotifications.map((notification) => (
-                      <article key={notification.id} className="notification-card">
-                        <strong>{notification.label}</strong>
+                      <article
+                        key={notification.id}
+                        className={
+                          notificationReadState[notification.id]
+                            ? "notification-card"
+                            : "notification-card unread"
+                        }
+                      >
+                        <div className="notification-card-head">
+                          <strong>{notification.label}</strong>
+                          <span
+                            className={
+                              notificationReadState[notification.id]
+                                ? "notification-badge read"
+                                : "notification-badge unread"
+                            }
+                          >
+                            {notificationReadState[notification.id] ? "Read" : "Unread"}
+                          </span>
+                        </div>
                         <small>{notification.detail}</small>
+                        <button
+                          className="notification-toggle"
+                          onClick={() =>
+                            markNotificationRead(
+                              notification.id,
+                              !notificationReadState[notification.id],
+                            )
+                          }
+                          type="button"
+                        >
+                          {notificationReadState[notification.id]
+                            ? "Mark unread"
+                            : "Mark read"}
+                        </button>
                       </article>
                     ))}
                   </div>
                 ) : null}
+                <div className="comment-filter-summary">
+                  <strong>{unreadNotificationCount} unread</strong>
+                  <button
+                    className="notification-toggle"
+                    disabled={unreadNotificationCount === 0}
+                    onClick={() => markAllNotificationsRead()}
+                    type="button"
+                  >
+                    Mark all read
+                  </button>
+                </div>
                 <div className="comment-filter-controls">
                   <label>
                     <span>Search comments</span>
@@ -2152,7 +2449,15 @@ function App() {
                     const y2 = toNode.y + toNode.height / 2;
 
                     return (
-                      <g key={link.id}>
+                      <g
+                        key={link.id}
+                        className={
+                          selectedSketchLinkId === link.id
+                            ? "sketch-link-group selected"
+                            : "sketch-link-group"
+                        }
+                        onClick={() => setSelectedSketchLinkId(link.id)}
+                      >
                         <line
                           className="sketch-link-line"
                           x1={x1}
@@ -2265,6 +2570,118 @@ function App() {
                     </label>
                   </article>
                 ))}
+                <div className="sketch-link-editor">
+                  <div className="sketch-link-editor-head">
+                    <div>
+                      <span>Sketch links</span>
+                      <strong>Connect nodes, edit labels, and keep the flow readable.</strong>
+                    </div>
+                    <button
+                      className="mini-button comment"
+                      disabled={sketchBoard.nodes.length < 2}
+                      onClick={() => addSketchLink()}
+                      type="button"
+                    >
+                      Add link
+                    </button>
+                  </div>
+                  {sketchBoard.links.length > 0 ? (
+                    <div className="sketch-link-list">
+                      {sketchBoard.links.map((link) => (
+                        <article
+                          key={link.id}
+                          className={
+                            selectedSketchLinkId === link.id
+                              ? "sketch-link-item active"
+                              : "sketch-link-item"
+                          }
+                        >
+                          <div className="sketch-link-item-head">
+                            <div>
+                              <strong>{link.label || "Untitled link"}</strong>
+                              <small>{link.id}</small>
+                            </div>
+                            <button
+                              className="reply-button"
+                              onClick={() => setSelectedSketchLinkId(link.id)}
+                              type="button"
+                            >
+                              {selectedSketchLinkId === link.id ? "Selected" : "Select"}
+                            </button>
+                          </div>
+                          <label>
+                            <span>From</span>
+                            <select
+                              onChange={(event) =>
+                                updateSketchLink(link.id, (current) => ({
+                                  ...current,
+                                  fromNodeId: event.target.value,
+                                }))
+                              }
+                              value={link.fromNodeId}
+                            >
+                              {sketchNodeOptions.map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span>To</span>
+                            <select
+                              onChange={(event) =>
+                                updateSketchLink(link.id, (current) => ({
+                                  ...current,
+                                  toNodeId: event.target.value,
+                                }))
+                              }
+                              value={link.toNodeId}
+                            >
+                              {sketchNodeOptions.map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span>Label</span>
+                            <input
+                              onChange={(event) =>
+                                updateSketchLink(link.id, (current) => ({
+                                  ...current,
+                                  label: event.target.value,
+                                }))
+                              }
+                              placeholder="Optional link label"
+                              type="text"
+                              value={link.label ?? ""}
+                            />
+                          </label>
+                          <div className="comment-composer-row">
+                            <button
+                              className="mini-button reject"
+                              onClick={() => removeSketchLink(link.id)}
+                              type="button"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="comment-empty">
+                      No links yet. Add one from the canvas controls to connect nodes.
+                    </p>
+                  )}
+                  {selectedSketchLink ? (
+                    <p className="review-meta">
+                      Selected link: {selectedSketchLink.label || selectedSketchLink.id}
+                    </p>
+                  ) : null}
+                </div>
               </div>
             </div>
           </section>

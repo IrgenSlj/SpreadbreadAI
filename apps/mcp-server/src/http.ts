@@ -4,14 +4,17 @@ import { URL } from "node:url";
 import { z } from "zod";
 import { serverName, serverVersion } from "./server.js";
 import {
+  archiveStoredWorkbookLibraryView,
   applyApprovedProposalItems,
   appendStoredProposalItemComment,
+  deleteStoredWorkbookLibraryView,
   getStoredWorkbookTags,
   getStoredSketchBoard,
   getStoredWorkbookReview,
   getStoreRuntimeStatus,
   listStoredWorkbooks,
   listStoredWorkbookLibraryViews,
+  type LibraryViewDeletionResult,
   type MutationResult,
   type LibraryViewMutationResult,
   type TagsMutationResult,
@@ -94,6 +97,10 @@ const libraryViewSchema = z.object({
   pinned: z.boolean().optional(),
 });
 
+const libraryViewArchiveSchema = z.object({
+  archivedBy: z.string().trim().min(1),
+});
+
 class HttpError extends Error {
   constructor(
     public readonly statusCode: number,
@@ -106,7 +113,7 @@ class HttpError extends Error {
 
 function withCors(response: ServerResponse) {
   response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-File-Name");
 }
 
@@ -255,6 +262,19 @@ function sendLibraryViewResult(
   sendJson(response, 404, { error: notFoundMessage });
 }
 
+function sendLibraryViewDeleteResult(
+  response: ServerResponse,
+  result: LibraryViewDeletionResult,
+  notFoundMessage: string,
+) {
+  if (result.ok) {
+    sendJson(response, 200, { deletedId: result.deletedId });
+    return;
+  }
+
+  sendJson(response, 404, { error: notFoundMessage });
+}
+
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -370,12 +390,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (method === "GET" && url.pathname === "/api/library/views") {
-    const views = await listStoredWorkbookLibraryViews();
+    const includeArchived = url.searchParams.get("includeArchived") === "true";
+    const views = await listStoredWorkbookLibraryViews({ includeArchived });
     sendJson(response, 200, { views });
     return;
   }
 
   const libraryViewMatch = url.pathname.match(/^\/api\/library\/views\/([^/]+)$/);
+  const libraryViewArchiveMatch = url.pathname.match(/^\/api\/library\/views\/([^/]+)\/archive$/);
   if (method === "PUT" && libraryViewMatch) {
     const viewId = decodeURIComponent(libraryViewMatch[1]);
     const body = await readValidatedJsonBody(request, libraryViewSchema);
@@ -392,6 +414,26 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     });
 
     sendLibraryViewResult(response, result, "Workbook library view not found");
+    return;
+  }
+
+  if (method === "POST" && libraryViewArchiveMatch) {
+    const viewId = decodeURIComponent(libraryViewArchiveMatch[1]);
+    const body = await readValidatedJsonBody(request, libraryViewArchiveSchema);
+    const result = await archiveStoredWorkbookLibraryView({
+      id: viewId,
+      archivedBy: body.archivedBy,
+    });
+
+    sendLibraryViewResult(response, result, "Workbook library view not found");
+    return;
+  }
+
+  if (method === "DELETE" && libraryViewMatch) {
+    const viewId = decodeURIComponent(libraryViewMatch[1]);
+    const result = await deleteStoredWorkbookLibraryView({ id: viewId });
+
+    sendLibraryViewDeleteResult(response, result, "Workbook library view not found");
     return;
   }
 
