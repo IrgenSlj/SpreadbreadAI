@@ -23,4 +23,6 @@ Open `http://127.0.0.1:5173/`.
 
 ## Scope
 
-The current UI supports workbook review, proposal review, audit history, and a placeholder sketchpad. The next phase is to harden mutation flows, replace the placeholder canvas, and support stronger approval semantics.
+The current UI supports workbook review, proposal review, audit history, and a placeholder sketchpad. The visual language is now moving closer to spreadsheet tools like Microsoft Excel, with a white-and-green palette and tighter, grid-like surfaces.
+
+The next phase is to replace the placeholder canvas, add deeper workbook tooling, and expose stronger spreadsheet-native interactions.

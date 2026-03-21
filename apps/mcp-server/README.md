@@ -8,6 +8,7 @@ TypeScript MCP server scaffold for workbook automation.
 - `pnpm --filter @spreadbreadai/mcp-server dev`
 - `pnpm --filter @spreadbreadai/mcp-server start:http`
 - `pnpm --filter @spreadbreadai/mcp-server dev:http`
+- `pnpm --filter @spreadbreadai/mcp-server db:init`
 - `pnpm --filter @spreadbreadai/mcp-server health`
 - `pnpm --filter @spreadbreadai/mcp-server build`
 
@@ -19,7 +20,12 @@ TypeScript MCP server scaffold for workbook automation.
 
 The current local prototype also exposes a small HTTP API for workbook upload, review lookup, proposal decisions, and apply actions.
 
-The current implementation is intentionally minimal. It wires a real stdio MCP server and a local HTTP API, but the workflow still needs stronger validation, idempotency, and persistence in PostgreSQL.
+The current implementation now supports two persistence modes behind the same store API:
+
+- local file-backed storage by default
+- PostgreSQL-backed storage when `DATABASE_URL` is set
+
+The PostgreSQL path stores first-class workbook, version, proposal, item, and audit rows instead of one mutable JSON snapshot.
 
 ## Local HTTP API
 
@@ -34,3 +40,13 @@ The local server exposes:
 - `POST /api/workbooks/:id/proposal/apply`
 
 Uploads are stored under `apps/mcp-server/.data/` and are ignored by git.
+
+## PostgreSQL
+
+Set `DATABASE_URL` to switch the backend to PostgreSQL, then initialize the schema:
+
+```bash
+cd apps/mcp-server && DATABASE_URL=postgres://... node --import tsx src/db-init.ts
+```
+
+The initial schema lives in `apps/mcp-server/sql/001_initial_schema.sql`.

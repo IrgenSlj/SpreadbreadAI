@@ -9,12 +9,14 @@
     "dev": "node --watch --import tsx src/index.ts",
     "start:http": "node --import tsx src/http-main.ts",
     "dev:http": "node --watch --import tsx src/http-main.ts",
+    "db:init": "node --import tsx src/db-init.ts",
     "health": "node --import tsx src/health.ts",
     "build": "tsc -p tsconfig.json",
     "test": "node --import tsx src/health.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.11.4",
+    "pg": "^8.16.3",
     "xlsx": "^0.18.5",
     "zod": "^3.24.2"
   },

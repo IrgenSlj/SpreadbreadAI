@@ -1,0 +1,101 @@
+create table if not exists workbooks (
+  id text primary key,
+  name text not null,
+  owner text not null,
+  status text not null,
+  created_at timestamptz not null,
+  last_reviewed_at timestamptz not null,
+  latest_version_id text not null
+);
+
+create table if not exists workbook_versions (
+  id text primary key,
+  workbook_id text not null references workbooks(id) on delete cascade,
+  created_at timestamptz not null,
+  created_by text not null,
+  note text not null,
+  artifact_path text
+);
+
+create index if not exists workbook_versions_workbook_id_idx
+  on workbook_versions (workbook_id, created_at desc);
+
+create table if not exists workbook_sheets (
+  workbook_version_id text not null references workbook_versions(id) on delete cascade,
+  name text not null,
+  rows integer not null,
+  columns_count integer not null,
+  formula_cells integer not null,
+  populated_cells integer not null,
+  risk_count integer not null,
+  sample_rows_json jsonb not null default '[]'::jsonb,
+  primary key (workbook_version_id, name)
+);
+
+create table if not exists workbook_named_ranges (
+  workbook_version_id text not null references workbook_versions(id) on delete cascade,
+  name text not null,
+  sheet_name text,
+  reference text not null,
+  primary key (workbook_version_id, name)
+);
+
+create table if not exists workbook_risks (
+  workbook_version_id text not null references workbook_versions(id) on delete cascade,
+  id text not null,
+  label text not null,
+  severity text not null,
+  location text not null,
+  summary text not null,
+  primary key (workbook_version_id, id)
+);
+
+create table if not exists proposals (
+  id text primary key,
+  workbook_id text not null references workbooks(id) on delete cascade,
+  workbook_version_id text not null references workbook_versions(id) on delete cascade,
+  title text not null,
+  status text not null,
+  created_at timestamptz not null,
+  requested_by text not null,
+  summary text not null,
+  approval_required boolean not null,
+  reviewer text,
+  reviewed_at timestamptz,
+  review_comment text,
+  applied_at timestamptz,
+  applied_by text,
+  applied_version_id text
+);
+
+create index if not exists proposals_workbook_id_idx
+  on proposals (workbook_id, created_at desc);
+
+create table if not exists proposal_items (
+  id text primary key,
+  proposal_id text not null references proposals(id) on delete cascade,
+  kind text not null,
+  cell text not null,
+  before_value text,
+  after_value text,
+  rationale text not null,
+  status text not null,
+  reviewer text,
+  reviewed_at timestamptz,
+  review_comment text
+);
+
+create index if not exists proposal_items_proposal_id_idx
+  on proposal_items (proposal_id);
+
+create table if not exists audit_events (
+  id text primary key,
+  workbook_id text not null references workbooks(id) on delete cascade,
+  actor text not null,
+  action text not null,
+  detail text not null,
+  created_at timestamptz not null
+);
+
+create index if not exists audit_events_workbook_id_idx
+  on audit_events (workbook_id, created_at desc);

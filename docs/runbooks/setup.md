@@ -41,11 +41,26 @@ Open:
 - local workbook records and uploads live under `apps/mcp-server/.data/`
 - deleting that directory resets the local prototype state
 - runtime data is ignored by git
+- when `DATABASE_URL` is set, workbook review data is persisted in PostgreSQL instead
+
+## PostgreSQL Mode
+
+Initialize the schema:
+
+```bash
+cd apps/mcp-server && DATABASE_URL=postgres://... node --import tsx src/db-init.ts
+```
+
+The first schema file is:
+
+- `apps/mcp-server/sql/001_initial_schema.sql`
+
+The runtime store facade will keep using the local file-backed path until `DATABASE_URL` is provided.
 
 ## Next Setup Steps
 
-1. migrate local JSON store data into PostgreSQL
-2. add schema validation and request guards to the HTTP API
+1. migrate or seed review data into PostgreSQL
+2. add a dedicated migration command in the workspace toolchain
 3. replace the sketchpad placeholder with a real collaborative canvas
-4. add workbook cleanup and idempotent apply behavior
+4. expand workbook parsing and formula intelligence
 5. wire a dedicated workbook processing boundary
