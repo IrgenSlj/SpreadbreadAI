@@ -2,6 +2,7 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ApprovalDecision,
+  WorkbookLibraryView,
   ProposalDetail,
   ProposalDiffEntry,
   ProposalItemComment,
@@ -20,7 +21,9 @@ import { withTransaction } from "./postgres.js";
 import type {
   MutationFailureCode,
   MutationResult,
+  LibraryViewMutationResult,
   SketchBoardMutationResult,
+  TagsMutationResult,
   StoreBackend,
   StoredWorkbookRecord,
 } from "./store-backend.js";
@@ -93,7 +96,7 @@ function normalizeMentionHandles(values: unknown[]): string[] {
       continue;
     }
 
-    const normalized = value.trim().replace(/^@/, "");
+    const normalized = value.trim().replace(/^@/, "").replace(/[.,;:!?]+$/g, "");
     if (normalized) {
       handles.add(normalized);
     }
@@ -126,6 +129,57 @@ function createSketchBoard(
   };
 }
 
+function normalizeWorkbookTags(tags: unknown): string[] {
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+
+  const normalized = new Map<string, string>();
+  for (const tag of tags) {
+    if (typeof tag !== "string") {
+      continue;
+    }
+
+    const trimmed = tag.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const key = trimmed.toLowerCase();
+    if (!normalized.has(key)) {
+      normalized.set(key, trimmed);
+    }
+  }
+
+  return [...normalized.values()];
+}
+
+function normalizeLibraryView(input: {
+  id: string;
+  name: string;
+  updatedBy: string;
+  description?: string;
+  searchQuery?: string;
+  tags: string[];
+  sortBy: WorkbookLibraryView["sortBy"];
+  sortDirection: WorkbookLibraryView["sortDirection"];
+  pinned?: boolean;
+  updatedAt?: string;
+}): WorkbookLibraryView {
+  return {
+    id: input.id,
+    name: input.name,
+    updatedAt: input.updatedAt ?? new Date().toISOString(),
+    updatedBy: input.updatedBy,
+    description: input.description?.trim() || undefined,
+    searchQuery: input.searchQuery?.trim() || undefined,
+    tags: normalizeWorkbookTags(input.tags),
+    sortBy: input.sortBy,
+    sortDirection: input.sortDirection,
+    pinned: input.pinned,
+  };
+}
+
 function normalizeProposalItemStatus(
   status: ProposalItemStatus | null | undefined,
 ): ProposalItemStatus {
@@ -151,6 +205,8 @@ function normalizeProposalItemComments(value: unknown): ProposalItemComment[] {
     const createdAt = typeof candidate.createdAt === "string" ? candidate.createdAt : "";
     const parentCommentId =
       typeof candidate.parentCommentId === "string" ? candidate.parentCommentId : undefined;
+    const replyToCommentId =
+      typeof candidate.replyToCommentId === "string" ? candidate.replyToCommentId : undefined;
     const mentions = Array.isArray(candidate.mentions)
       ? normalizeMentionHandles(candidate.mentions)
       : undefined;
@@ -166,6 +222,7 @@ function normalizeProposalItemComments(value: unknown): ProposalItemComment[] {
         body,
         createdAt,
         parentCommentId,
+        replyToCommentId: replyToCommentId ?? parentCommentId,
         mentions: mentions && mentions.length > 0 ? mentions : undefined,
       },
     ];
@@ -263,6 +320,7 @@ function appendCommentToDiff(
     author: string;
     body: string;
     parentCommentId?: string;
+    replyToCommentId?: string;
     mentions?: string[];
   },
   createdAt: string,
@@ -274,7 +332,8 @@ function appendCommentToDiff(
   }
 
   const comments = target.comments ?? [];
-  if (input.parentCommentId && !comments.some((comment) => comment.id === input.parentCommentId)) {
+  const replyToCommentId = input.parentCommentId ?? input.replyToCommentId;
+  if (replyToCommentId && !comments.some((comment) => comment.id === replyToCommentId)) {
     return { error: "comment_not_found" as const };
   }
 
@@ -283,7 +342,8 @@ function appendCommentToDiff(
     author: input.author,
     body: input.body,
     createdAt,
-    parentCommentId: input.parentCommentId,
+    parentCommentId: replyToCommentId,
+    replyToCommentId,
     mentions: normalizeMentionHandles([
       ...extractMentions(input.body),
       ...(input.mentions ?? []),
@@ -335,8 +395,8 @@ async function insertSnapshot(
   const latestVersion = versions[0];
 
   await client.query(
-    `insert into workbooks (id, name, owner, status, created_at, last_reviewed_at, latest_version_id, sketch_json)
-     values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+    `insert into workbooks (id, name, owner, status, created_at, last_reviewed_at, latest_version_id, tags_json, sketch_json)
+     values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
      on conflict (id) do update set
        name = excluded.name,
        owner = excluded.owner,
@@ -344,6 +404,7 @@ async function insertSnapshot(
        created_at = excluded.created_at,
        last_reviewed_at = excluded.last_reviewed_at,
        latest_version_id = excluded.latest_version_id,
+       tags_json = excluded.tags_json,
        sketch_json = excluded.sketch_json`,
     [
       workbook.id,
@@ -353,6 +414,7 @@ async function insertSnapshot(
       workbook.createdAt,
       workbook.lastReviewedAt,
       workbook.latestVersionId,
+      JSON.stringify(workbook.tags ?? []),
       JSON.stringify(
         workbook.sketchBoard ??
           createSketchBoard(workbook.id, workbook.name, workbook.lastReviewedAt, "system"),
@@ -542,16 +604,18 @@ async function buildWorkbookSummaryRows(client: PgClient): Promise<WorkbookSumma
     latest_version_id: string;
     created_at: string;
     sheet_count: string;
+    tags_json: unknown;
   }>(
     `select
        w.id,
        w.name,
        w.latest_version_id,
        w.created_at,
+       w.tags_json,
        count(ws.name)::text as sheet_count
      from workbooks w
      left join workbook_sheets ws on ws.workbook_version_id = w.latest_version_id
-     group by w.id, w.name, w.latest_version_id, w.created_at
+     group by w.id, w.name, w.latest_version_id, w.created_at, w.tags_json
      order by w.created_at desc`,
   );
 
@@ -561,6 +625,7 @@ async function buildWorkbookSummaryRows(client: PgClient): Promise<WorkbookSumma
     latestVersionId: row.latest_version_id,
     sheetCount: Number.parseInt(row.sheet_count, 10),
     createdAt: row.created_at,
+    tags: normalizeWorkbookTags(row.tags_json),
   }));
 }
 
@@ -573,9 +638,10 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
     created_at: string;
     last_reviewed_at: string;
     latest_version_id: string;
+    tags_json: unknown;
     sketch_json: unknown;
   }>(
-    `select id, name, owner, status, created_at, last_reviewed_at, latest_version_id, sketch_json
+    `select id, name, owner, status, created_at, last_reviewed_at, latest_version_id, tags_json, sketch_json
      from workbooks
      where id = $1`,
     [workbookId],
@@ -756,6 +822,7 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
     latestVersionId: workbookRow.latest_version_id,
     sheetCount: sheets.length,
     createdAt: workbookRow.created_at,
+    tags: normalizeWorkbookTags(workbookRow.tags_json),
     owner: workbookRow.owner,
     status: workbookRow.status,
     lastReviewedAt: workbookRow.last_reviewed_at,
@@ -826,6 +893,13 @@ export function createPostgresStoreBackend(): StoreBackend {
       return withTransaction((client) => loadSnapshot(client, workbookId));
     },
 
+    async getStoredWorkbookTags(workbookId: string): Promise<string[] | null> {
+      return withTransaction(async (client) => {
+        const current = await loadSnapshot(client, workbookId);
+        return current?.workbook.tags ?? null;
+      });
+    },
+
     async getStoredSketchBoard(workbookId: string): Promise<WorkbookSketchBoard | null> {
       return withTransaction(async (client) => {
         const snapshot = await loadSnapshot(client, workbookId);
@@ -868,6 +942,38 @@ export function createPostgresStoreBackend(): StoreBackend {
         await unlink(uploadPath).catch(() => undefined);
         throw error;
       }
+    },
+
+    async updateStoredWorkbookTags(input: {
+      workbookId: string;
+      tags: string[];
+      updatedBy: string;
+    }): Promise<TagsMutationResult> {
+      return withTransaction(async (client) => {
+        const current = await loadSnapshot(client, input.workbookId);
+        if (!current) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const updatedAt = new Date().toISOString();
+        const tags = normalizeWorkbookTags(input.tags);
+
+        await client.query(
+          `update workbooks
+           set tags_json = $2::jsonb
+           where id = $1`,
+          [current.workbook.id, JSON.stringify(tags)],
+        );
+        await appendAuditEvent(
+          client,
+          input.workbookId,
+          input.updatedBy,
+          "workbook.tags.updated",
+          `Workbook tags updated to ${tags.length > 0 ? tags.join(", ") : "none"}.`,
+        );
+
+        return { ok: true, tags };
+      });
     },
 
     async updateStoredProposalDecision(input): Promise<MutationResult> {
@@ -989,6 +1095,7 @@ export function createPostgresStoreBackend(): StoreBackend {
       author: string;
       body: string;
       parentCommentId?: string;
+      replyToCommentId?: string;
       mentions?: string[];
     }): Promise<MutationResult> {
       return withTransaction(async (client) => {
@@ -1007,7 +1114,8 @@ export function createPostgresStoreBackend(): StoreBackend {
         }
 
         const comments = existing.comments ?? [];
-        if (input.parentCommentId && !comments.some((comment) => comment.id === input.parentCommentId)) {
+        const replyToCommentId = input.parentCommentId ?? input.replyToCommentId;
+        if (replyToCommentId && !comments.some((comment) => comment.id === replyToCommentId)) {
           return mutationFailure("comment_not_found");
         }
 
@@ -1017,7 +1125,8 @@ export function createPostgresStoreBackend(): StoreBackend {
           author: input.author,
           body: input.body,
           createdAt,
-          parentCommentId: input.parentCommentId,
+          parentCommentId: replyToCommentId,
+          replyToCommentId,
           mentions: normalizeMentionHandles([
             ...extractMentions(input.body),
             ...(input.mentions ?? []),
@@ -1084,6 +1193,92 @@ export function createPostgresStoreBackend(): StoreBackend {
         );
 
         return { ok: true, sketchBoard };
+      });
+    },
+
+    async listStoredWorkbookLibraryViews(): Promise<WorkbookLibraryView[]> {
+      return withTransaction(async (client) => {
+        const result = await client.query<{
+          id: string;
+          name: string;
+          updated_at: string;
+          updated_by: string;
+          description: string | null;
+          search_query: string | null;
+          tags_json: unknown;
+          sort_by: string;
+          sort_direction: string;
+          pinned: boolean;
+        }>(
+          `select id, name, updated_at, updated_by, description, search_query, tags_json, sort_by, sort_direction, pinned
+           from workbook_library_views
+           order by updated_at desc, id desc`,
+        );
+
+        return result.rows.map((row) =>
+          normalizeLibraryView({
+            id: row.id,
+            name: row.name,
+            updatedBy: row.updated_by,
+            updatedAt: row.updated_at,
+            description: row.description ?? undefined,
+            searchQuery: row.search_query ?? undefined,
+            tags: normalizeWorkbookTags(row.tags_json),
+            sortBy: row.sort_by as WorkbookLibraryView["sortBy"],
+            sortDirection: row.sort_direction as WorkbookLibraryView["sortDirection"],
+            pinned: row.pinned,
+          }),
+        );
+      });
+    },
+
+    async saveStoredWorkbookLibraryView(input: {
+      id: string;
+      name: string;
+      updatedBy: string;
+      description?: string;
+      searchQuery?: string;
+      tags: string[];
+      sortBy: WorkbookLibraryView["sortBy"];
+      sortDirection: WorkbookLibraryView["sortDirection"];
+      pinned?: boolean;
+    }): Promise<LibraryViewMutationResult> {
+      return withTransaction(async (client) => {
+        const updatedAt = new Date().toISOString();
+        const view = normalizeLibraryView({
+          ...input,
+          updatedAt,
+        });
+
+        await client.query(
+          `insert into workbook_library_views
+           (id, name, updated_at, updated_by, description, search_query, tags_json, sort_by, sort_direction, pinned)
+           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+           on conflict (id) do update set
+             name = excluded.name,
+             updated_at = excluded.updated_at,
+             updated_by = excluded.updated_by,
+             description = excluded.description,
+             search_query = excluded.search_query,
+             tags_json = excluded.tags_json,
+             sort_by = excluded.sort_by,
+             sort_direction = excluded.sort_direction,
+             pinned = excluded.pinned`,
+          [
+            view.id,
+            view.name,
+            view.updatedAt,
+            view.updatedBy,
+            view.description ?? null,
+            view.searchQuery ?? null,
+            JSON.stringify(view.tags),
+            view.sortBy,
+            view.sortDirection,
+            view.pinned ?? false,
+          ],
+        );
+
+        return { ok: true, view };
       });
     },
 

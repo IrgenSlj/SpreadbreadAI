@@ -24,6 +24,7 @@ export interface ProposalItemComment {
   body: string;
   createdAt: string;
   parentCommentId?: EntityId;
+  replyToCommentId?: EntityId;
   mentions?: string[];
 }
 
@@ -87,6 +88,7 @@ export interface WorkbookSummary {
   latestVersionId: WorkbookVersionId;
   sheetCount: number;
   createdAt: string;
+  tags: string[];
 }
 
 export interface WorkbookVersionSummary {
@@ -105,6 +107,27 @@ export interface WorkbookDetail extends WorkbookSummary {
   namedRanges: WorkbookNamedRange[];
   versions: WorkbookVersionSummary[];
   sketchBoard?: WorkbookSketchBoard;
+}
+
+export type WorkbookLibraryViewSortKey =
+  | "createdAt"
+  | "lastReviewedAt"
+  | "name"
+  | "sheetCount";
+
+export type WorkbookLibraryViewSortDirection = "asc" | "desc";
+
+export interface WorkbookLibraryView {
+  id: EntityId;
+  name: string;
+  updatedAt: string;
+  updatedBy: string;
+  description?: string;
+  searchQuery?: string;
+  tags: string[];
+  sortBy: WorkbookLibraryViewSortKey;
+  sortDirection: WorkbookLibraryViewSortDirection;
+  pinned?: boolean;
 }
 
 export interface ProposalDiffEntry {
@@ -173,22 +196,13 @@ export interface SketchBoardConnection {
   toNodeId: EntityId;
 }
 
-export interface SketchBoard {
-  id: EntityId;
-  workbookId: WorkbookId;
-  title: string;
-  updatedAt: string;
-  updatedBy: string;
-  nodes: SketchBoardNode[];
-  connections: SketchBoardConnection[];
-}
-
 const demoWorkbook: WorkbookDetail = {
   id: "wb_q2_forecast",
   name: "Q2 Forecast",
   latestVersionId: "wbv_014",
   sheetCount: 4,
   createdAt: "2026-03-17T08:20:00.000Z",
+  tags: ["finance", "forecast", "q2"],
   owner: "FP&A",
   status: "needs_review",
   lastReviewedAt: "2026-03-19T07:10:00.000Z",
@@ -444,6 +458,7 @@ export function listDemoWorkbooks(): WorkbookSummary[] {
       latestVersionId: demoWorkbook.latestVersionId,
       sheetCount: demoWorkbook.sheetCount,
       createdAt: demoWorkbook.createdAt,
+      tags: demoWorkbook.tags,
     },
   ];
 }
@@ -549,6 +564,7 @@ export function createUploadedWorkbookReview(
       latestVersionId: versionId,
       sheetCount: 3,
       createdAt: uploadedAt,
+      tags: [],
       owner: "New upload",
       status: "needs_review",
       lastReviewedAt: uploadedAt,
@@ -670,6 +686,7 @@ export function formatSnapshotForMcp(
         status: snapshot.workbook.status,
         sheetCount: snapshot.workbook.sheetCount,
         owner: snapshot.workbook.owner,
+        tags: snapshot.workbook.tags,
         relevantSheets,
         visibleRisks,
         namedRanges: snapshot.workbook.namedRanges,

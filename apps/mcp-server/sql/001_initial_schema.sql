@@ -6,8 +6,12 @@ create table if not exists workbooks (
   created_at timestamptz not null,
   last_reviewed_at timestamptz not null,
   latest_version_id text not null,
+  tags_json jsonb not null default '[]'::jsonb,
   sketch_json jsonb not null default '{}'::jsonb
 );
+
+alter table if exists workbooks
+  add column if not exists tags_json jsonb not null default '[]'::jsonb;
 
 alter table if exists workbooks
   add column if not exists sketch_json jsonb not null default '{}'::jsonb;
@@ -23,6 +27,22 @@ create table if not exists workbook_versions (
 
 create index if not exists workbook_versions_workbook_id_idx
   on workbook_versions (workbook_id, created_at desc);
+
+create table if not exists workbook_library_views (
+  id text primary key,
+  name text not null,
+  updated_at timestamptz not null,
+  updated_by text not null,
+  description text,
+  search_query text,
+  tags_json jsonb not null default '[]'::jsonb,
+  sort_by text not null,
+  sort_direction text not null,
+  pinned boolean not null default false
+);
+
+create index if not exists workbook_library_views_updated_at_idx
+  on workbook_library_views (updated_at desc, id desc);
 
 create table if not exists workbook_sheets (
   workbook_version_id text not null references workbook_versions(id) on delete cascade,

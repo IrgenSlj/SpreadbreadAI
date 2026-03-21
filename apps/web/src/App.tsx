@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   type ApprovalDecision,
   createSeededSketchBoard,
@@ -39,7 +39,28 @@ type SketchBoardResponse = {
 
 type WorkbookOriginFilter = "all" | "demo" | "uploaded";
 type WorkbookSheetFilter = "all" | "single" | "multi";
-type CommentFilterMode = "all" | "with-comments" | "mine" | "mentions";
+type CommentFilterMode = "all" | "with-comments" | "mine" | "mentions" | "replies";
+
+type SavedWorkbookView = {
+  id: string;
+  name: string;
+  query: string;
+  origin: WorkbookOriginFilter;
+  sheets: WorkbookSheetFilter;
+  tag: string;
+};
+
+type ReplyTarget = {
+  commentId: string;
+  author: string;
+  handle: string;
+};
+
+type DragState = {
+  nodeId: string;
+  offsetX: number;
+  offsetY: number;
+};
 
 type ItemCommentState = {
   submitting: boolean;
@@ -142,6 +163,7 @@ function createDemoWorkbookSummary(): WorkbookSummary {
     latestVersionId: demoReviewSnapshot.workbook.latestVersionId,
     sheetCount: demoReviewSnapshot.workbook.sheetCount,
     createdAt: demoReviewSnapshot.workbook.createdAt,
+    tags: demoReviewSnapshot.workbook.tags,
   };
 }
 
@@ -152,6 +174,7 @@ function snapshotToWorkbookSummary(snapshot: WorkbookReviewSnapshot): WorkbookSu
     latestVersionId: snapshot.workbook.latestVersionId,
     sheetCount: snapshot.workbook.sheetCount,
     createdAt: snapshot.workbook.createdAt,
+    tags: snapshot.workbook.tags,
   };
 }
 
@@ -272,15 +295,23 @@ function App() {
     useState<WorkbookOriginFilter>("all");
   const [workbookSheetFilter, setWorkbookSheetFilter] =
     useState<WorkbookSheetFilter>("all");
+  const [workbookTagFilter, setWorkbookTagFilter] = useState("all");
+  const [workbookTags, setWorkbookTags] = useState<Record<string, string[]>>({});
+  const [workbookTagDraft, setWorkbookTagDraft] = useState("");
+  const [savedWorkbookViews, setSavedWorkbookViews] = useState<SavedWorkbookView[]>([]);
+  const [savedViewName, setSavedViewName] = useState("");
   const [commentSearchQuery, setCommentSearchQuery] = useState("");
   const [commentFilterMode, setCommentFilterMode] =
     useState<CommentFilterMode>("all");
   const [itemCommentDrafts, setItemCommentDrafts] = useState<Record<string, string>>({});
   const [itemCommentState, setItemCommentState] = useState<Record<string, ItemCommentState>>({});
+  const [replyTargetByEntry, setReplyTargetByEntry] = useState<Record<string, ReplyTarget | null>>({});
   const [sketchBoard, setSketchBoard] = useState<WorkbookSketchBoard>(
     createSeededSketchBoard(demoReviewSnapshot, "system"),
   );
   const [sketchError, setSketchError] = useState<string | null>(null);
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const sketchCanvasRef = useRef<HTMLDivElement | null>(null);
 
   const pendingRisks = useMemo(
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
@@ -345,6 +376,13 @@ function App() {
         return false;
       }
 
+      if (
+        workbookTagFilter !== "all" &&
+        !(workbookTags[workbook.id] ?? []).includes(workbookTagFilter)
+      ) {
+        return false;
+      }
+
       if (!query) {
         return true;
       }
@@ -353,7 +391,14 @@ function App() {
         field.toLowerCase().includes(query),
       );
     });
-  }, [workbookOriginFilter, workbookSearchQuery, workbookSheetFilter, workbooks]);
+  }, [
+    workbookOriginFilter,
+    workbookSearchQuery,
+    workbookSheetFilter,
+    workbookTagFilter,
+    workbookTags,
+    workbooks,
+  ]);
   const filteredProposalEntries = useMemo(() => {
     const query = commentSearchQuery.trim().toLowerCase();
     const reviewerNameNormalized = reviewerName.trim().toLowerCase();
@@ -381,6 +426,8 @@ function App() {
               return comment.author.trim().toLowerCase() === reviewerNameNormalized;
             case "mentions":
               return extractMentions(comment.body).includes(reviewerMention);
+            case "replies":
+              return Boolean(comment.parentCommentId);
             default:
               return true;
           }
@@ -430,6 +477,67 @@ function App() {
       })),
     [snapshot.workbook.id, snapshot.workbook.sheets],
   );
+  const availableTags = useMemo(
+    () =>
+      Array.from(
+        new Set(Object.values(workbookTags).flatMap((tags) => tags)),
+      ).sort((left, right) => left.localeCompare(right)),
+    [workbookTags],
+  );
+
+  function getReplyTarget(entryId: string) {
+    return replyTargetByEntry[entryId] ?? null;
+  }
+
+  function setReplyTarget(entryId: string, target: ReplyTarget | null) {
+    setReplyTargetByEntry((current) => ({
+      ...current,
+      [entryId]: target,
+    }));
+  }
+
+  function getVisibleThreadComments(
+    comments: ProposalItemComment[],
+    visibleComments: ProposalItemComment[],
+  ) {
+    const commentsById = new Map(comments.map((comment) => [comment.id, comment]));
+    const ids = new Set(visibleComments.map((comment) => comment.id));
+
+    for (const comment of visibleComments) {
+      let currentParentId = comment.parentCommentId;
+
+      while (currentParentId) {
+        ids.add(currentParentId);
+        currentParentId = commentsById.get(currentParentId)?.parentCommentId;
+      }
+    }
+
+    return comments.filter((comment) => ids.has(comment.id));
+  }
+
+  function getChildComments(
+    comments: ProposalItemComment[],
+    parentCommentId?: string,
+  ) {
+    return comments
+      .filter((comment) =>
+        parentCommentId ? comment.parentCommentId === parentCommentId : !comment.parentCommentId,
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  function startReply(entryId: string, comment: ProposalItemComment) {
+    const handle = mentionHandleForReviewer(comment.author);
+    const currentDraft = getItemCommentDraft(entryId);
+    const nextDraft = currentDraft.trim().length > 0 ? currentDraft : `${handle} `;
+
+    setReplyTarget(entryId, {
+      commentId: comment.id,
+      author: comment.author,
+      handle,
+    });
+    setItemCommentDraft(entryId, nextDraft);
+  }
 
   function canReviewItem(entry: ProposalDiffEntry) {
     return canUseItemReview && entry.status === "pending";
@@ -479,6 +587,92 @@ function App() {
     updater: (current: WorkbookSketchBoard) => WorkbookSketchBoard,
   ) {
     setSketchBoard((current) => updater(current));
+  }
+
+  function addTagToActiveWorkbook() {
+    const normalized = workbookTagDraft.trim().toLowerCase();
+
+    if (!normalized) {
+      return;
+    }
+
+    setWorkbookTags((current) => ({
+      ...current,
+      [snapshot.workbook.id]: Array.from(
+        new Set([...(current[snapshot.workbook.id] ?? []), normalized]),
+      ),
+    }));
+    setWorkbookTagDraft("");
+  }
+
+  function saveCurrentWorkbookView() {
+    const trimmedName = savedViewName.trim();
+
+    if (!trimmedName) {
+      return;
+    }
+
+    const view: SavedWorkbookView = {
+      id: `view_${Date.now().toString(36)}`,
+      name: trimmedName,
+      query: workbookSearchQuery,
+      origin: workbookOriginFilter,
+      sheets: workbookSheetFilter,
+      tag: workbookTagFilter,
+    };
+
+    setSavedWorkbookViews((current) => [view, ...current.filter((item) => item.name !== view.name)]);
+    setSavedViewName("");
+  }
+
+  function applySavedWorkbookView(view: SavedWorkbookView) {
+    setWorkbookSearchQuery(view.query);
+    setWorkbookOriginFilter(view.origin);
+    setWorkbookSheetFilter(view.sheets);
+    setWorkbookTagFilter(view.tag);
+  }
+
+  function deleteSavedWorkbookView(viewId: string) {
+    setSavedWorkbookViews((current) => current.filter((view) => view.id !== viewId));
+  }
+
+  function removeTagFromWorkbook(workbookId: string, tag: string) {
+    setWorkbookTags((current) => {
+      const nextTags = (current[workbookId] ?? []).filter((item) => item !== tag);
+
+      if (nextTags.length === 0) {
+        const { [workbookId]: _removed, ...rest } = current;
+        return rest;
+      }
+
+      return {
+        ...current,
+        [workbookId]: nextTags,
+      };
+    });
+  }
+
+  function startNodeDrag(
+    event: ReactPointerEvent<HTMLDivElement>,
+    nodeId: string,
+  ) {
+    if (mutationInFlight) {
+      return;
+    }
+
+    const canvasRect = sketchCanvasRef.current?.getBoundingClientRect();
+    const node = sketchBoard.nodes.find((item) => item.id === nodeId);
+
+    if (!canvasRect || !node) {
+      return;
+    }
+
+    event.preventDefault();
+    setDragState({
+      nodeId,
+      offsetX: event.clientX - canvasRect.left - node.x,
+      offsetY: event.clientY - canvasRect.top - node.y,
+    });
   }
 
   function addSketchNodeFromLabel(label: string, color: string) {
@@ -533,6 +727,90 @@ function App() {
   useEffect(() => {
     void loadRuntimeStatus();
   }, []);
+
+  useEffect(() => {
+    try {
+      const storedTags = window.localStorage.getItem("spreadbreadai-workbook-tags");
+      const storedViews = window.localStorage.getItem("spreadbreadai-workbook-views");
+
+      if (storedTags) {
+        setWorkbookTags(JSON.parse(storedTags) as Record<string, string[]>);
+      }
+
+      if (storedViews) {
+        setSavedWorkbookViews(JSON.parse(storedViews) as SavedWorkbookView[]);
+      }
+    } catch {
+      // Ignore localStorage parse failures and fall back to empty UI state.
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("spreadbreadai-workbook-tags", JSON.stringify(workbookTags));
+  }, [workbookTags]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      "spreadbreadai-workbook-views",
+      JSON.stringify(savedWorkbookViews),
+    );
+  }, [savedWorkbookViews]);
+
+  useEffect(() => {
+    if (!dragState) {
+      return;
+    }
+
+    const activeDrag = dragState;
+
+    function handlePointerMove(event: PointerEvent) {
+      const canvasRect = sketchCanvasRef.current?.getBoundingClientRect();
+
+      if (!canvasRect) {
+        return;
+      }
+
+      updateSketchBoard((current) => ({
+        ...current,
+        nodes: current.nodes.map((node) => {
+          if (node.id !== activeDrag.nodeId) {
+            return node;
+          }
+
+          const maxX = Math.max(0, canvasRect.width - node.width);
+          const maxY = Math.max(0, canvasRect.height - node.height);
+          const nextX = Math.min(
+            maxX,
+            Math.max(0, Math.round(event.clientX - canvasRect.left - activeDrag.offsetX)),
+          );
+          const nextY = Math.min(
+            maxY,
+            Math.max(0, Math.round(event.clientY - canvasRect.top - activeDrag.offsetY)),
+          );
+
+          return {
+            ...node,
+            x: nextX,
+            y: nextY,
+          };
+        }),
+        updatedBy: reviewerName,
+        updatedAt: new Date().toISOString(),
+      }));
+    }
+
+    function handlePointerUp() {
+      setDragState(null);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [dragState, reviewerName]);
 
   async function loadRuntimeStatus() {
     try {
@@ -777,18 +1055,22 @@ function App() {
   async function handleProposalItemComment(diffId: string) {
     const body = getItemCommentDraft(diffId).trim();
     const commentState = getItemCommentState(diffId);
+    const replyTarget = getReplyTarget(diffId);
 
     if (!body || commentState.submitting || proposalIsLocked || mutationInFlight) {
       return;
     }
 
     updateItemCommentState(diffId, { submitting: true, error: null });
-
     const nextComment: ProposalItemComment = {
       id: `${diffId}_comment_${Date.now().toString(36)}`,
       author: reviewerName.trim(),
       body,
       createdAt: new Date().toISOString(),
+      parentCommentId: replyTarget?.commentId,
+      mentions: Array.from(
+        new Set(extractMentions(body).map((mention) => mention.replace(/^@/, ""))),
+      ),
     };
 
     setSnapshot((current) => ({
@@ -806,6 +1088,7 @@ function App() {
       },
     }));
     setItemCommentDraft(diffId, "");
+    setReplyTarget(diffId, null);
     updateItemCommentState(diffId, { submitting: false, error: null });
   }
 
@@ -1116,29 +1399,119 @@ function App() {
                       <option value="multi">Multi-sheet</option>
                     </select>
                   </label>
+                  <label>
+                    <span>Tag</span>
+                    <select
+                      onChange={(event) => setWorkbookTagFilter(event.target.value)}
+                      value={workbookTagFilter}
+                    >
+                      <option value="all">Any tag</option>
+                      {availableTags.map((tag) => (
+                        <option key={tag} value={tag}>
+                          {tag}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
                 <p className="library-meta">
                   Showing {filteredWorkbooks.length} of {workbooks.length} workbooks
                 </p>
+                <div className="saved-view-panel">
+                  <label>
+                    <span>Save current view</span>
+                    <input
+                      onChange={(event) => setSavedViewName(event.target.value)}
+                      placeholder="FP&A daily triage"
+                      type="text"
+                      value={savedViewName}
+                    />
+                  </label>
+                  <button
+                    className="mini-button comment"
+                    disabled={savedViewName.trim().length === 0}
+                    onClick={() => saveCurrentWorkbookView()}
+                    type="button"
+                  >
+                    Save view
+                  </button>
+                  {savedWorkbookViews.length > 0 ? (
+                    <div className="saved-view-chips">
+                      {savedWorkbookViews.map((view) => (
+                        <article key={view.id} className="saved-view-chip">
+                          <button
+                            className="saved-view-apply"
+                            onClick={() => applySavedWorkbookView(view)}
+                            type="button"
+                          >
+                            <strong>{view.name}</strong>
+                            <small>
+                              {view.query || "No query"} · {view.origin} · {view.sheets}
+                              {view.tag !== "all" ? ` · ${view.tag}` : ""}
+                            </small>
+                          </button>
+                          <button
+                            className="saved-view-delete"
+                            onClick={() => deleteSavedWorkbookView(view.id)}
+                            type="button"
+                          >
+                            Remove
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
               <div className="workbook-list">
                 {filteredWorkbooks.length > 0 ? (
                   filteredWorkbooks.map((workbook) => (
-                    <button
-                      key={workbook.id}
-                      className={
-                        workbook.id === snapshot.workbook.id
-                          ? "workbook-item active"
-                          : "workbook-item"
-                      }
-                      disabled={mutationInFlight}
-                      onClick={() => void handleWorkbookSelect(workbook.id)}
-                      type="button"
-                    >
-                    <span>{workbook.name}</span>
-                    <strong>{workbook.latestVersionId}</strong>
-                    <small>{workbook.sheetCount} sheets</small>
-                  </button>
+                    <article key={workbook.id} className="workbook-card">
+                      <button
+                        className={
+                          workbook.id === snapshot.workbook.id
+                            ? "workbook-item active"
+                            : "workbook-item"
+                        }
+                        disabled={mutationInFlight}
+                        onClick={() => void handleWorkbookSelect(workbook.id)}
+                        type="button"
+                      >
+                        <span>{workbook.name}</span>
+                        <strong>{workbook.latestVersionId}</strong>
+                        <small>{workbook.sheetCount} sheets</small>
+                      </button>
+                      {(workbookTags[workbook.id] ?? []).length > 0 ? (
+                        <div className="tag-row">
+                          {(workbookTags[workbook.id] ?? []).map((tag) => (
+                            <button
+                              key={`${workbook.id}-${tag}`}
+                              className={
+                                workbookTagFilter === tag ? "tag-chip active" : "tag-chip"
+                              }
+                              onClick={() =>
+                                setWorkbookTagFilter((current) => (current === tag ? "all" : tag))
+                              }
+                              type="button"
+                            >
+                              {tag}
+                            </button>
+                          ))}
+                          {workbook.id === snapshot.workbook.id
+                            ? (workbookTags[workbook.id] ?? []).map((tag) => (
+                                <button
+                                  key={`${workbook.id}-${tag}-remove`}
+                                  className="tag-remove"
+                                  onClick={() => removeTagFromWorkbook(workbook.id, tag)}
+                                  type="button"
+                                >
+                                  Remove {tag}
+                                </button>
+                              ))
+                            : null}
+                        </div>
+                      ) : null}
+                    </article>
                   ))
                 ) : (
                   <article className="empty-state-card">
@@ -1147,6 +1520,25 @@ function App() {
                     <small>The library filter is hiding all available workbook snapshots.</small>
                   </article>
                 )}
+                <div className="tag-editor">
+                  <strong>Tag current workbook</strong>
+                  <div className="tag-editor-row">
+                    <input
+                      onChange={(event) => setWorkbookTagDraft(event.target.value)}
+                      placeholder="finance, close, planning"
+                      type="text"
+                      value={workbookTagDraft}
+                    />
+                    <button
+                      className="mini-button comment"
+                      disabled={workbookTagDraft.trim().length === 0}
+                      onClick={() => addTagToActiveWorkbook()}
+                      type="button"
+                    >
+                      Add tag
+                    </button>
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -1352,6 +1744,7 @@ function App() {
                       <option value="with-comments">With comments</option>
                       <option value="mine">My comments</option>
                       <option value="mentions">Mentions of me</option>
+                      <option value="replies">Replies only</option>
                     </select>
                   </label>
                 </div>
@@ -1362,12 +1755,46 @@ function App() {
                 filteredProposalEntries.map(({ entry, visibleComments }) => (
                   <article key={entry.id} className="diff-entry">
                   {(() => {
-                    const comments = visibleComments;
+                    const allComments = entry.comments ?? [];
+                    const comments = getVisibleThreadComments(allComments, visibleComments);
                     const commentState = getItemCommentState(entry.id);
                     const commentDraft = getItemCommentDraft(entry.id);
+                    const replyTarget = getReplyTarget(entry.id);
                     const mentionCandidates = Array.from(
                       new Set(comments.flatMap((comment) => extractMentions(comment.body))),
                     );
+
+                    function renderCommentBranch(
+                      parentCommentId?: string,
+                      depth = 0,
+                    ) {
+                      return getChildComments(comments, parentCommentId).map((comment) => (
+                        <article
+                          key={comment.id}
+                          className="comment-entry"
+                          style={{ marginLeft: `${Math.min(depth * 18, 54)}px` }}
+                        >
+                          <div className="comment-entry-head">
+                            <strong>{comment.author}</strong>
+                            <button
+                              className="reply-button"
+                              onClick={() => startReply(entry.id, comment)}
+                              type="button"
+                            >
+                              Reply
+                            </button>
+                          </div>
+                          {comment.parentCommentId ? (
+                            <small className="reply-label">
+                              Replying to {allComments.find((item) => item.id === comment.parentCommentId)?.author ?? "thread"}
+                            </small>
+                          ) : null}
+                          <p>{renderCommentBody(comment.body)}</p>
+                          <small>{new Date(comment.createdAt).toLocaleString()}</small>
+                          {renderCommentBranch(comment.id, depth + 1)}
+                        </article>
+                      ));
+                    }
 
                     return (
                       <>
@@ -1439,15 +1866,7 @@ function App() {
                           ) : null}
                           {comments.length > 0 ? (
                             <div className="comment-thread">
-                              {comments.map((comment: ProposalItemComment) => (
-                                <article key={comment.id} className="comment-entry">
-                                  <div className="comment-entry-head">
-                                    <strong>{comment.author}</strong>
-                                  </div>
-                                  <p>{renderCommentBody(comment.body)}</p>
-                                  <small>{new Date(comment.createdAt).toLocaleString()}</small>
-                                </article>
-                              ))}
+                              {renderCommentBranch()}
                             </div>
                           ) : (
                             <p className="comment-empty">
@@ -1455,6 +1874,19 @@ function App() {
                             </p>
                           )}
                           <div className="comment-composer">
+                            {replyTarget ? (
+                              <div className="reply-banner">
+                                <span>
+                                  Replying to {replyTarget.author} with {replyTarget.handle}
+                                </span>
+                                <button
+                                  onClick={() => setReplyTarget(entry.id, null)}
+                                  type="button"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            ) : null}
                             <textarea
                               aria-label={`Add comment for ${entry.cell}`}
                               disabled={!canCommentOnItem(entry)}
@@ -1603,7 +2035,11 @@ function App() {
               </div>
             </div>
             <div className="sketch-workspace">
-              <div className="sketch-canvas persisted" aria-label="Workbook sketch board">
+              <div
+                ref={sketchCanvasRef}
+                className="sketch-canvas persisted"
+                aria-label="Workbook sketch board"
+              >
                 {sketchBoard.links.map((link) => (
                   <div key={link.id} className="sketch-link-chip">
                     {link.fromNodeId} to {link.toNodeId}
@@ -1612,7 +2048,12 @@ function App() {
                 {sketchBoard.nodes.map((node) => (
                   <div
                     key={node.id}
-                    className="sketch-node-card"
+                    className={
+                      dragState?.nodeId === node.id
+                        ? "sketch-node-card dragging"
+                        : "sketch-node-card"
+                    }
+                    onPointerDown={(event) => startNodeDrag(event, node.id)}
                     style={{
                       left: `${node.x}px`,
                       top: `${node.y}px`,
@@ -1624,10 +2065,14 @@ function App() {
                     <strong>{node.label}</strong>
                     <small>{node.linkKind ?? "free node"}</small>
                     {node.linkTargetId ? <span>{node.linkTargetId}</span> : null}
+                    <em>Drag to reposition</em>
                   </div>
                 ))}
               </div>
               <div className="sketch-node-list">
+                <p className="review-meta">
+                  Drag a node on the board, then save to persist the updated coordinates.
+                </p>
                 {sketchBoard.nodes.map((node, index) => (
                   <article key={node.id}>
                     <strong>Node {index + 1}</strong>

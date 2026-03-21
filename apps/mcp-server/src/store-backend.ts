@@ -1,5 +1,6 @@
 import type {
   ApprovalDecision,
+  WorkbookLibraryView,
   WorkbookReviewSnapshot,
   WorkbookSketchBoard,
   WorkbookSummary,
@@ -28,18 +29,32 @@ export type MutationResult =
   | { ok: true; review: WorkbookReviewSnapshot }
   | { ok: false; code: MutationFailureCode };
 
+export type TagsMutationResult =
+  | { ok: true; tags: string[] }
+  | { ok: false; code: MutationFailureCode };
+
 export type SketchBoardMutationResult =
   | { ok: true; sketchBoard: WorkbookSketchBoard }
+  | { ok: false; code: MutationFailureCode };
+
+export type LibraryViewMutationResult =
+  | { ok: true; view: WorkbookLibraryView }
   | { ok: false; code: MutationFailureCode };
 
 export interface StoreBackend {
   listStoredWorkbooks(): Promise<WorkbookSummary[]>;
   getStoredWorkbookReview(workbookId: string): Promise<WorkbookReviewSnapshot | null>;
+  getStoredWorkbookTags(workbookId: string): Promise<string[] | null>;
   saveUploadedWorkbook(input: {
     fileName: string;
     contentType: string;
     bytes: Uint8Array;
   }): Promise<StoredWorkbookRecord>;
+  updateStoredWorkbookTags(input: {
+    workbookId: string;
+    tags: string[];
+    updatedBy: string;
+  }): Promise<TagsMutationResult>;
   updateStoredProposalDecision(input: {
     workbookId: string;
     decision: ApprovalDecision;
@@ -59,6 +74,7 @@ export interface StoreBackend {
     author: string;
     body: string;
     parentCommentId?: string;
+    replyToCommentId?: string;
     mentions?: string[];
   }): Promise<MutationResult>;
   getStoredSketchBoard(workbookId: string): Promise<WorkbookSketchBoard | null>;
@@ -70,6 +86,18 @@ export interface StoreBackend {
     links: WorkbookSketchBoard["links"];
     notes?: string;
   }): Promise<SketchBoardMutationResult>;
+  listStoredWorkbookLibraryViews(): Promise<WorkbookLibraryView[]>;
+  saveStoredWorkbookLibraryView(input: {
+    id: string;
+    name: string;
+    updatedBy: string;
+    description?: string;
+    searchQuery?: string;
+    tags: string[];
+    sortBy: WorkbookLibraryView["sortBy"];
+    sortDirection: WorkbookLibraryView["sortDirection"];
+    pinned?: boolean;
+  }): Promise<LibraryViewMutationResult>;
   applyApprovedProposalItems(input: {
     workbookId: string;
     actor: string;

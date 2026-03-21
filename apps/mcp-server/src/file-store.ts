@@ -2,6 +2,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type ApprovalDecision,
+  type WorkbookLibraryView,
   demoReviewSnapshot,
   type ProposalDetail,
   type ProposalDiffEntry,
@@ -13,16 +14,18 @@ import {
 } from "../../../packages/shared/src/index.js";
 import { parseWorkbookReviewSnapshot } from "./parser.js";
 import type {
+  LibraryViewMutationResult,
   MutationFailureCode,
   MutationResult,
   SketchBoardMutationResult,
+  TagsMutationResult,
   StoreBackend,
   StoredWorkbookRecord,
 } from "./store-backend.js";
 
 interface WorkbookStoreFile {
   records: StoredWorkbookRecord[];
-  sketchBoards?: WorkbookSketchBoard[];
+  libraryViews?: WorkbookLibraryView[];
 }
 
 const dataRoot = path.resolve(process.cwd(), ".data");
@@ -30,6 +33,7 @@ const uploadsDir = path.join(dataRoot, "uploads");
 const storeFilePath = path.join(dataRoot, "workbooks.json");
 let storeMutationChain = Promise.resolve();
 let demoSnapshotState = structuredClone(demoReviewSnapshot);
+let demoLibraryViews: WorkbookLibraryView[] = [];
 
 function sanitizeFileName(fileName: string) {
   const trimmed = fileName.trim();
@@ -81,8 +85,52 @@ async function writeStore(store: WorkbookStoreFile) {
   await writeFile(storeFilePath, JSON.stringify(store, null, 2));
 }
 
-function getStoredSketchBoards(store: WorkbookStoreFile): WorkbookSketchBoard[] {
-  return Array.isArray(store.sketchBoards) ? store.sketchBoards : [];
+function normalizeWorkbookTags(tags: unknown[]): string[] {
+  const normalized = new Map<string, string>();
+
+  for (const tag of tags) {
+    if (typeof tag !== "string") {
+      continue;
+    }
+
+    const trimmed = tag.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const key = trimmed.toLowerCase();
+    if (!normalized.has(key)) {
+      normalized.set(key, trimmed);
+    }
+  }
+
+  return [...normalized.values()];
+}
+
+function normalizeLibraryView(input: {
+  id: string;
+  name: string;
+  updatedBy: string;
+  description?: string;
+  searchQuery?: string;
+  tags: string[];
+  sortBy: WorkbookLibraryView["sortBy"];
+  sortDirection: WorkbookLibraryView["sortDirection"];
+  pinned?: boolean;
+  updatedAt?: string;
+}): WorkbookLibraryView {
+  return {
+    id: input.id,
+    name: input.name,
+    updatedAt: input.updatedAt ?? new Date().toISOString(),
+    updatedBy: input.updatedBy,
+    description: input.description?.trim() || undefined,
+    searchQuery: input.searchQuery?.trim() || undefined,
+    tags: normalizeWorkbookTags(input.tags),
+    sortBy: input.sortBy,
+    sortDirection: input.sortDirection,
+    pinned: input.pinned,
+  };
 }
 
 async function runSerializedMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -134,7 +182,7 @@ function normalizeMentionHandles(values: unknown[]): string[] {
       continue;
     }
 
-    const normalized = value.trim().replace(/^@/, "");
+    const normalized = value.trim().replace(/^@/, "").replace(/[.,;:!?]+$/g, "");
     if (normalized) {
       handles.add(normalized);
     }
@@ -190,6 +238,7 @@ function appendCommentToDiff(
     author: string;
     body: string;
     parentCommentId?: string;
+    replyToCommentId?: string;
     mentions?: string[];
   },
   createdAt: string,
@@ -201,7 +250,8 @@ function appendCommentToDiff(
   }
 
   const comments = target.comments ?? [];
-  if (input.parentCommentId && !comments.some((comment) => comment.id === input.parentCommentId)) {
+  const replyToCommentId = input.parentCommentId ?? input.replyToCommentId;
+  if (replyToCommentId && !comments.some((comment) => comment.id === replyToCommentId)) {
     return { error: "comment_not_found" as const };
   }
 
@@ -210,7 +260,8 @@ function appendCommentToDiff(
     author: input.author,
     body: input.body,
     createdAt,
-    parentCommentId: input.parentCommentId,
+    parentCommentId: replyToCommentId,
+    replyToCommentId,
     mentions: normalizeMentionHandles([
       ...extractMentions(input.body),
       ...(input.mentions ?? []),
@@ -348,6 +399,7 @@ export function createFileStoreBackend(): StoreBackend {
         latestVersionId: record.snapshot.workbook.latestVersionId,
         sheetCount: record.snapshot.workbook.sheetCount,
         createdAt: record.snapshot.workbook.createdAt,
+        tags: record.snapshot.workbook.tags,
       }));
 
       return [
@@ -357,6 +409,7 @@ export function createFileStoreBackend(): StoreBackend {
           latestVersionId: demoSnapshotState.workbook.latestVersionId,
           sheetCount: demoSnapshotState.workbook.sheetCount,
           createdAt: demoSnapshotState.workbook.createdAt,
+          tags: demoSnapshotState.workbook.tags,
         },
         ...persisted,
       ];
@@ -371,6 +424,17 @@ export function createFileStoreBackend(): StoreBackend {
       const match = store.records.find((record) => record.snapshot.workbook.id === workbookId);
 
       return match?.snapshot ?? null;
+    },
+
+    async getStoredWorkbookTags(workbookId: string): Promise<string[] | null> {
+      if (workbookId === demoSnapshotState.workbook.id) {
+        return [...demoSnapshotState.workbook.tags];
+      }
+
+      const store = await readStore();
+      const match = store.records.find((record) => record.snapshot.workbook.id === workbookId);
+
+      return match?.snapshot.workbook.tags ?? null;
     },
 
     async getStoredSketchBoard(workbookId: string): Promise<WorkbookSketchBoard | null> {
@@ -394,7 +458,7 @@ export function createFileStoreBackend(): StoreBackend {
         return null;
       }
 
-        if (!match.snapshot.workbook.sketchBoard) {
+      if (!match.snapshot.workbook.sketchBoard) {
         match.snapshot = {
           ...match.snapshot,
           workbook: {
@@ -412,6 +476,69 @@ export function createFileStoreBackend(): StoreBackend {
       }
 
       return match.snapshot.workbook.sketchBoard ?? null;
+    },
+
+    async updateStoredWorkbookTags(input: {
+      workbookId: string;
+      tags: string[];
+      updatedBy: string;
+    }): Promise<TagsMutationResult> {
+      const updatedAt = new Date().toISOString();
+      const tags = normalizeWorkbookTags(input.tags);
+
+      if (input.workbookId === demoSnapshotState.workbook.id) {
+        demoSnapshotState = {
+          ...demoSnapshotState,
+          workbook: {
+            ...demoSnapshotState.workbook,
+            tags,
+          },
+          auditEvents: [
+            ...demoSnapshotState.auditEvents,
+            {
+              id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
+              workbookId: input.workbookId,
+              actor: input.updatedBy,
+              action: "workbook.tags.updated",
+              detail: `Workbook tags updated to ${tags.length > 0 ? tags.join(", ") : "none"}.`,
+              createdAt: updatedAt,
+            },
+          ],
+        };
+
+        return { ok: true, tags };
+      }
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+
+        if (!record) {
+          return { ok: false, code: "not_found" };
+        }
+
+        record.snapshot = {
+          ...record.snapshot,
+          workbook: {
+            ...record.snapshot.workbook,
+            tags,
+          },
+          auditEvents: [
+            ...record.snapshot.auditEvents,
+            {
+              id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
+              workbookId: input.workbookId,
+              actor: input.updatedBy,
+              action: "workbook.tags.updated",
+              detail: `Workbook tags updated to ${tags.length > 0 ? tags.join(", ") : "none"}.`,
+              createdAt: updatedAt,
+            },
+          ],
+        };
+
+        await writeStore(store);
+        return { ok: true, tags };
+      });
     },
 
     async saveUploadedWorkbook(input: {
@@ -718,6 +845,7 @@ export function createFileStoreBackend(): StoreBackend {
       author: string;
       body: string;
       parentCommentId?: string;
+      replyToCommentId?: string;
       mentions?: string[];
     }): Promise<MutationResult> {
       const createdAt = new Date().toISOString();
@@ -883,6 +1011,49 @@ export function createFileStoreBackend(): StoreBackend {
 
         await writeStore(store);
         return { ok: true, sketchBoard };
+      });
+    },
+
+    async listStoredWorkbookLibraryViews(): Promise<WorkbookLibraryView[]> {
+      const store = await readStore();
+      return Array.isArray(store.libraryViews) ? store.libraryViews : demoLibraryViews;
+    },
+
+    async saveStoredWorkbookLibraryView(input: {
+      id: string;
+      name: string;
+      updatedBy: string;
+      description?: string;
+      searchQuery?: string;
+      tags: string[];
+      sortBy: WorkbookLibraryView["sortBy"];
+      sortDirection: WorkbookLibraryView["sortDirection"];
+      pinned?: boolean;
+    }): Promise<LibraryViewMutationResult> {
+      const view = normalizeLibraryView({
+        ...input,
+        updatedAt: new Date().toISOString(),
+      });
+
+      if (view.id.startsWith("demo_")) {
+        demoLibraryViews = [
+          ...demoLibraryViews.filter((entry) => entry.id !== view.id),
+          view,
+        ];
+        return { ok: true, view };
+      }
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const existingViews = Array.isArray(store.libraryViews) ? store.libraryViews : [];
+        const nextViews = [
+          ...existingViews.filter((entry) => entry.id !== view.id),
+          view,
+        ];
+
+        store.libraryViews = nextViews;
+        await writeStore(store);
+        return { ok: true, view };
       });
     },
 

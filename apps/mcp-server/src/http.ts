@@ -6,15 +6,21 @@ import { serverName, serverVersion } from "./server.js";
 import {
   applyApprovedProposalItems,
   appendStoredProposalItemComment,
+  getStoredWorkbookTags,
   getStoredSketchBoard,
   getStoredWorkbookReview,
   getStoreRuntimeStatus,
   listStoredWorkbooks,
+  listStoredWorkbookLibraryViews,
   type MutationResult,
+  type LibraryViewMutationResult,
+  type TagsMutationResult,
   saveUploadedWorkbook,
+  saveStoredWorkbookLibraryView,
   type SketchBoardMutationResult,
   updateStoredProposalItemDecision,
   updateStoredProposalDecision,
+  updateStoredWorkbookTags,
   updateStoredSketchBoard,
 } from "./store.js";
 
@@ -36,6 +42,7 @@ const proposalCommentSchema = z.object({
   author: z.string().trim().min(1),
   body: z.string().trim().min(1).max(4000),
   parentCommentId: z.string().trim().min(1).optional(),
+  replyToCommentId: z.string().trim().min(1).optional(),
   mentions: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
 });
 
@@ -69,6 +76,22 @@ const sketchBoardSchema = z.object({
   notes: z.string().trim().max(4000).optional(),
   nodes: z.array(sketchNodeSchema).max(40),
   links: z.array(sketchLinkSchema).max(80),
+});
+
+const workbookTagsSchema = z.object({
+  updatedBy: z.string().trim().min(1),
+  tags: z.array(z.string().trim().min(1).max(48)).max(32),
+});
+
+const libraryViewSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  updatedBy: z.string().trim().min(1),
+  description: z.string().trim().max(500).optional(),
+  searchQuery: z.string().trim().max(200).optional(),
+  tags: z.array(z.string().trim().min(1).max(48)).max(32),
+  sortBy: z.enum(["createdAt", "lastReviewedAt", "name", "sheetCount"]),
+  sortDirection: z.enum(["asc", "desc"]),
+  pinned: z.boolean().optional(),
 });
 
 class HttpError extends Error {
@@ -206,6 +229,32 @@ function sendSketchBoardResult(
   sendJson(response, 404, { error: notFoundMessage });
 }
 
+function sendTagsResult(
+  response: ServerResponse,
+  result: TagsMutationResult,
+  notFoundMessage: string,
+) {
+  if (result.ok) {
+    sendJson(response, 200, { tags: result.tags });
+    return;
+  }
+
+  sendJson(response, 404, { error: notFoundMessage });
+}
+
+function sendLibraryViewResult(
+  response: ServerResponse,
+  result: LibraryViewMutationResult,
+  notFoundMessage: string,
+) {
+  if (result.ok) {
+    sendJson(response, 200, { view: result.view });
+    return;
+  }
+
+  sendJson(response, 404, { error: notFoundMessage });
+}
+
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -263,6 +312,33 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  const tagsMatch = url.pathname.match(/^\/api\/workbooks\/([^/]+)\/tags$/);
+  if (method === "GET" && tagsMatch) {
+    const workbookId = decodeURIComponent(tagsMatch[1]);
+    const tags = await getStoredWorkbookTags(workbookId);
+
+    if (!tags) {
+      sendJson(response, 404, { error: "Workbook not found" });
+      return;
+    }
+
+    sendJson(response, 200, { workbookId, tags });
+    return;
+  }
+
+  if (method === "PUT" && tagsMatch) {
+    const workbookId = decodeURIComponent(tagsMatch[1]);
+    const body = await readValidatedJsonBody(request, workbookTagsSchema);
+    const result = await updateStoredWorkbookTags({
+      workbookId,
+      tags: body.tags,
+      updatedBy: body.updatedBy,
+    });
+
+    sendTagsResult(response, result, "Workbook not found");
+    return;
+  }
+
   const sketchBoardMatch = url.pathname.match(/^\/api\/workbooks\/([^/]+)\/sketch$/);
   if (method === "GET" && sketchBoardMatch) {
     const workbookId = decodeURIComponent(sketchBoardMatch[1]);
@@ -290,6 +366,32 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     });
 
     sendSketchBoardResult(response, result, "Workbook sketch board not found");
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/library/views") {
+    const views = await listStoredWorkbookLibraryViews();
+    sendJson(response, 200, { views });
+    return;
+  }
+
+  const libraryViewMatch = url.pathname.match(/^\/api\/library\/views\/([^/]+)$/);
+  if (method === "PUT" && libraryViewMatch) {
+    const viewId = decodeURIComponent(libraryViewMatch[1]);
+    const body = await readValidatedJsonBody(request, libraryViewSchema);
+    const result = await saveStoredWorkbookLibraryView({
+      id: viewId,
+      name: body.name,
+      updatedBy: body.updatedBy,
+      description: body.description,
+      searchQuery: body.searchQuery,
+      tags: body.tags,
+      sortBy: body.sortBy,
+      sortDirection: body.sortDirection,
+      pinned: body.pinned,
+    });
+
+    sendLibraryViewResult(response, result, "Workbook library view not found");
     return;
   }
 
@@ -381,6 +483,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       author: body.author,
       body: body.body,
       parentCommentId: body.parentCommentId,
+      replyToCommentId: body.replyToCommentId,
       mentions: body.mentions,
     });
 

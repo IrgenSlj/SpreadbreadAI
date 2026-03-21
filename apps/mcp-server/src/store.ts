@@ -3,14 +3,18 @@ import { getPostgresConnectionInfo, hasPostgresConfig } from "./postgres.js";
 import { createPostgresStoreBackend } from "./postgres-store.js";
 import type {
   MutationResult,
+  TagsMutationResult,
+  LibraryViewMutationResult,
   SketchBoardMutationResult,
   StoreBackend,
   StoredWorkbookRecord,
 } from "./store-backend.js";
 
 export type {
+  LibraryViewMutationResult,
   MutationFailureCode,
   MutationResult,
+  TagsMutationResult,
   SketchBoardMutationResult,
   StoredWorkbookRecord,
 } from "./store-backend.js";
@@ -57,6 +61,10 @@ export function getStoredWorkbookReview(workbookId: string) {
   return backend.getStoredWorkbookReview(workbookId);
 }
 
+export function getStoredWorkbookTags(workbookId: string) {
+  return backend.getStoredWorkbookTags(workbookId);
+}
+
 export function getStoredSketchBoard(workbookId: string) {
   return backend.getStoredSketchBoard(workbookId);
 }
@@ -67,6 +75,14 @@ export function saveUploadedWorkbook(input: {
   bytes: Uint8Array;
 }): Promise<StoredWorkbookRecord> {
   return backend.saveUploadedWorkbook(input);
+}
+
+export function updateStoredWorkbookTags(input: {
+  workbookId: string;
+  tags: string[];
+  updatedBy: string;
+}): Promise<TagsMutationResult> {
+  return backend.updateStoredWorkbookTags(input);
 }
 
 export function updateStoredProposalDecision(input: {
@@ -94,6 +110,7 @@ export function appendStoredProposalItemComment(input: {
   author: string;
   body: string;
   parentCommentId?: string;
+  replyToCommentId?: string;
   mentions?: string[];
 }): Promise<MutationResult> {
   return backend.appendStoredProposalItemComment(input);
@@ -108,6 +125,24 @@ export function updateStoredSketchBoard(input: {
   notes?: string;
 }): Promise<SketchBoardMutationResult> {
   return backend.updateStoredSketchBoard(input);
+}
+
+export function listStoredWorkbookLibraryViews() {
+  return backend.listStoredWorkbookLibraryViews();
+}
+
+export function saveStoredWorkbookLibraryView(input: {
+  id: string;
+  name: string;
+  updatedBy: string;
+  description?: string;
+  searchQuery?: string;
+  tags: string[];
+  sortBy: import("../../../packages/shared/src/index.js").WorkbookLibraryView["sortBy"];
+  sortDirection: import("../../../packages/shared/src/index.js").WorkbookLibraryView["sortDirection"];
+  pinned?: boolean;
+}): Promise<LibraryViewMutationResult> {
+  return backend.saveStoredWorkbookLibraryView(input);
 }
 
 export function applyApprovedProposalItems(input: {

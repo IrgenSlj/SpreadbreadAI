@@ -536,6 +536,101 @@ h2 {
   margin: 10px 0 0;
 }
 
+.saved-view-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.saved-view-panel label {
+  display: grid;
+  gap: 6px;
+}
+
+.saved-view-chips,
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workbook-card {
+  display: grid;
+  gap: 8px;
+}
+
+.saved-view-chip,
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid #c5dcc7;
+  background: #edf7ef;
+  color: var(--green-strong);
+  font-size: 0.74rem;
+}
+
+.saved-view-chip {
+  justify-content: space-between;
+  padding: 4px;
+  gap: 8px;
+  background: #f6fbf6;
+}
+
+.saved-view-apply {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.saved-view-apply small {
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.saved-view-delete,
+.tag-remove {
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 4px 8px;
+}
+
+.tag-chip {
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+.tag-chip.active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+
+.tag-editor {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.tag-editor strong {
+  font-size: 0.88rem;
+}
+
+.tag-editor-row {
+  display: flex;
+  gap: 8px;
+}
+
+.tag-editor-row input {
+  flex: 1;
+}
+
 .empty-state-card {
   display: grid;
   gap: 4px;
@@ -728,6 +823,26 @@ h2 {
   margin: 0;
 }
 
+.reply-button {
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.reply-button:hover,
+.saved-view-delete:hover,
+.tag-remove:hover {
+  text-decoration: underline;
+}
+
+.reply-label {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
 .comment-entry p {
   margin: 0;
   color: var(--text);
@@ -783,6 +898,26 @@ h2 {
 .comment-composer {
   display: grid;
   gap: 8px;
+}
+
+.reply-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #edf7ef;
+  color: var(--green-strong);
+  font-size: 0.8rem;
+}
+
+.reply-banner button {
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .comment-composer textarea {
@@ -1204,6 +1339,9 @@ h2 {
   background: #ffffff;
   border: 2px solid #217346;
   box-shadow: 0 8px 18px rgba(25, 47, 29, 0.08);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 
 .sketch-node-card strong {
@@ -1211,9 +1349,21 @@ h2 {
 }
 
 .sketch-node-card small,
-.sketch-node-card span {
+.sketch-node-card span,
+.sketch-node-card em {
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+.sketch-node-card em {
+  font-style: normal;
+  color: var(--green);
+}
+
+.sketch-node-card.dragging {
+  cursor: grabbing;
+  box-shadow: 0 12px 24px rgba(25, 47, 29, 0.16);
+  z-index: 2;
 }
 
 .sketch-link-chip {

@@ -356,6 +356,7 @@ export function parseWorkbookReviewSnapshot(
       latestVersionId: `${input.workbookId}_v001`,
       sheetCount: sheets.length,
       createdAt: input.uploadedAt,
+      tags: [],
       owner: "New upload",
       status: risks.some((risk) => risk.severity !== "low") ? "needs_review" : "healthy",
       lastReviewedAt: input.uploadedAt,
