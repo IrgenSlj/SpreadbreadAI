@@ -82,8 +82,12 @@ create table if not exists proposal_items (
   status text not null,
   reviewer text,
   reviewed_at timestamptz,
-  review_comment text
+  review_comment text,
+  comments_json jsonb not null default '[]'::jsonb
 );
+
+alter table if exists proposal_items
+  add column if not exists comments_json jsonb not null default '[]'::jsonb;
 
 create index if not exists proposal_items_proposal_id_idx
   on proposal_items (proposal_id);

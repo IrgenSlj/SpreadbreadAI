@@ -5,6 +5,7 @@ import { z } from "zod";
 import { serverName, serverVersion } from "./server.js";
 import {
   applyApprovedProposalItems,
+  appendStoredProposalItemComment,
   getStoredWorkbookReview,
   getStoreRuntimeStatus,
   listStoredWorkbooks,
@@ -26,6 +27,12 @@ const proposalDecisionSchema = z.object({
   decision: z.enum(["approve", "reject"]),
   reviewer: z.string().trim().min(1),
   comment: z.string().trim().optional(),
+});
+
+const proposalCommentSchema = z.object({
+  author: z.string().trim().min(1),
+  body: z.string().trim().min(1).max(4000),
+  parentCommentId: z.string().trim().min(1).optional(),
 });
 
 const applySchema = z.object({
@@ -109,16 +116,27 @@ function sendMutationResult(
   response: ServerResponse,
   result: MutationResult,
   notFoundMessage: string,
+  options?: { itemNotFoundMessage?: string; commentNotFoundMessage?: string },
 ) {
   if (result.ok) {
     sendJson(response, 200, { review: result.review });
     return;
   }
 
+  const itemNotFoundMessage = options?.itemNotFoundMessage ?? notFoundMessage;
+  const commentNotFoundMessage = options?.commentNotFoundMessage ?? notFoundMessage;
+
   switch (result.code) {
     case "not_found":
     case "item_not_found":
-      sendJson(response, 404, { error: notFoundMessage });
+      sendJson(
+        response,
+        404,
+        { error: result.code === "not_found" ? notFoundMessage : itemNotFoundMessage },
+      );
+      return;
+    case "comment_not_found":
+      sendJson(response, 404, { error: commentNotFoundMessage });
       return;
     case "already_applied":
       sendJson(response, 409, { error: "Proposal has already been applied" });
@@ -268,6 +286,28 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     });
 
     sendMutationResult(response, result, "Workbook or proposal item not found");
+    return;
+  }
+
+  const itemCommentMatch = url.pathname.match(
+    /^\/api\/workbooks\/([^/]+)\/proposal\/items\/([^/]+)\/comments$/,
+  );
+  if (method === "POST" && itemCommentMatch) {
+    const workbookId = decodeURIComponent(itemCommentMatch[1]);
+    const diffId = decodeURIComponent(itemCommentMatch[2]);
+    const body = await readValidatedJsonBody(request, proposalCommentSchema);
+    const result = await appendStoredProposalItemComment({
+      workbookId,
+      diffId,
+      author: body.author,
+      body: body.body,
+      parentCommentId: body.parentCommentId,
+    });
+
+    sendMutationResult(response, result, "Workbook or proposal item not found", {
+      itemNotFoundMessage: "Workbook or proposal item not found",
+      commentNotFoundMessage: "Parent comment not found",
+    });
     return;
   }
 

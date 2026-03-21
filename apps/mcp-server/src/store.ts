@@ -78,6 +78,16 @@ export function updateStoredProposalItemDecision(input: {
   return backend.updateStoredProposalItemDecision(input);
 }
 
+export function appendStoredProposalItemComment(input: {
+  workbookId: string;
+  diffId: string;
+  author: string;
+  body: string;
+  parentCommentId?: string;
+}): Promise<MutationResult> {
+  return backend.appendStoredProposalItemComment(input);
+}
+
 export function applyApprovedProposalItems(input: {
   workbookId: string;
   actor: string;

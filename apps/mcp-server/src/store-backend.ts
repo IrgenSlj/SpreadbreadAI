@@ -12,6 +12,7 @@ export interface StoredWorkbookRecord {
 
 export type MutationFailureCode =
   | "already_applied"
+  | "comment_not_found"
   | "item_not_found"
   | "locked"
   | "not_found"
@@ -42,6 +43,13 @@ export interface StoreBackend {
     decision: ApprovalDecision;
     reviewer: string;
     comment?: string;
+  }): Promise<MutationResult>;
+  appendStoredProposalItemComment(input: {
+    workbookId: string;
+    diffId: string;
+    author: string;
+    body: string;
+    parentCommentId?: string;
   }): Promise<MutationResult>;
   applyApprovedProposalItems(input: {
     workbookId: string;

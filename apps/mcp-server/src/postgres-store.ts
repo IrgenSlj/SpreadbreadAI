@@ -4,6 +4,7 @@ import type {
   ApprovalDecision,
   ProposalDetail,
   ProposalDiffEntry,
+  ProposalItemComment,
   ProposalItemStatus,
   WorkbookDetail,
   WorkbookNamedRange,
@@ -78,12 +79,92 @@ function itemDecisionToStatus(decision: ApprovalDecision): ProposalItemStatus {
   return decision === "approve" ? "approved" : "rejected";
 }
 
+function createCommentId(diffId: string) {
+  return `${diffId}_comment_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function normalizeProposalItemStatus(
   status: ProposalItemStatus | null | undefined,
 ): ProposalItemStatus {
   return status === "approved" || status === "rejected" || status === "pending"
     ? status
     : "pending";
+}
+
+function normalizeProposalItemComments(value: unknown): ProposalItemComment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const candidate = entry as Record<string, unknown>;
+    const id = typeof candidate.id === "string" ? candidate.id : "";
+    const author = typeof candidate.author === "string" ? candidate.author : "";
+    const body = typeof candidate.body === "string" ? candidate.body : "";
+    const createdAt = typeof candidate.createdAt === "string" ? candidate.createdAt : "";
+    const parentCommentId =
+      typeof candidate.parentCommentId === "string" ? candidate.parentCommentId : undefined;
+
+    if (!id || !author || !body || !createdAt) {
+      return [];
+    }
+
+    return [
+      {
+        id,
+        author,
+        body,
+        createdAt,
+        parentCommentId,
+      },
+    ];
+  });
+}
+
+function appendCommentToDiff(
+  diff: ProposalDiffEntry[],
+  input: {
+    diffId: string;
+    author: string;
+    body: string;
+    parentCommentId?: string;
+  },
+  createdAt: string,
+) {
+  const target = diff.find((entry) => entry.id === input.diffId);
+
+  if (!target) {
+    return { error: "item_not_found" as const };
+  }
+
+  const comments = target.comments ?? [];
+  if (input.parentCommentId && !comments.some((comment) => comment.id === input.parentCommentId)) {
+    return { error: "comment_not_found" as const };
+  }
+
+  const comment: ProposalItemComment = {
+    id: createCommentId(input.diffId),
+    author: input.author,
+    body: input.body,
+    createdAt,
+    parentCommentId: input.parentCommentId,
+  };
+
+  return {
+    nextDiff: diff.map((entry) =>
+      entry.id === input.diffId
+        ? {
+            ...entry,
+            comments: [...comments, comment],
+          }
+        : entry,
+    ),
+    comment,
+  };
 }
 
 function mutationSuccess(review: WorkbookReviewSnapshot): MutationResult {
@@ -243,8 +324,8 @@ async function insertSnapshot(
   for (const item of proposal.diff) {
     await client.query(
       `insert into proposal_items
-       (id, proposal_id, kind, cell, before_value, after_value, rationale, status, reviewer, reviewed_at, review_comment)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       (id, proposal_id, kind, cell, before_value, after_value, rationale, status, reviewer, reviewed_at, review_comment, comments_json)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
        on conflict (id) do update set
          kind = excluded.kind,
          cell = excluded.cell,
@@ -254,7 +335,8 @@ async function insertSnapshot(
          status = excluded.status,
          reviewer = excluded.reviewer,
          reviewed_at = excluded.reviewed_at,
-         review_comment = excluded.review_comment`,
+         review_comment = excluded.review_comment,
+         comments_json = excluded.comments_json`,
       [
         item.id,
         proposal.id,
@@ -267,6 +349,7 @@ async function insertSnapshot(
         item.reviewer ?? null,
         item.reviewedAt ?? null,
         item.reviewComment ?? null,
+        JSON.stringify(item.comments ?? []),
       ],
     );
   }
@@ -451,10 +534,11 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
         reviewer: string | null;
         reviewed_at: string | null;
         review_comment: string | null;
+        comments_json: unknown;
       }>(
         `select
            id, proposal_id, kind, cell, before_value, after_value, rationale,
-           status, reviewer, reviewed_at, review_comment
+           status, reviewer, reviewed_at, review_comment, comments_json
          from proposal_items
          where proposal_id in (
            select id from proposals where workbook_id = $1 order by created_at desc limit 1
@@ -521,6 +605,7 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
     reviewer: row.reviewer ?? undefined,
     reviewedAt: row.reviewed_at ?? undefined,
     reviewComment: row.review_comment ?? undefined,
+    comments: normalizeProposalItemComments(row.comments_json),
   }));
 
   const workbook: WorkbookDetail = {
@@ -736,6 +821,55 @@ export function createPostgresStoreBackend(): StoreBackend {
           input.decision === "approve" ? "proposal.item.approved" : "proposal.item.rejected",
           input.comment?.trim() ||
             `${input.decision === "approve" ? "Approved" : "Rejected"} proposal item ${input.diffId}.`,
+        );
+
+        const review = await loadSnapshot(client, input.workbookId);
+        return review ? mutationSuccess(review) : mutationFailure("not_found");
+      });
+    },
+
+    async appendStoredProposalItemComment(input): Promise<MutationResult> {
+      return withTransaction(async (client) => {
+        const current = await loadSnapshot(client, input.workbookId);
+        if (!current) {
+          return mutationFailure("not_found");
+        }
+
+        if (current.proposal.status === "applied") {
+          return mutationFailure("locked");
+        }
+
+        const existing = current.proposal.diff.find((entry) => entry.id === input.diffId);
+        if (!existing) {
+          return mutationFailure("item_not_found");
+        }
+
+        const comments = existing.comments ?? [];
+        if (input.parentCommentId && !comments.some((comment) => comment.id === input.parentCommentId)) {
+          return mutationFailure("comment_not_found");
+        }
+
+        const createdAt = new Date().toISOString();
+        const comment = {
+          id: createCommentId(input.diffId),
+          author: input.author,
+          body: input.body,
+          createdAt,
+          parentCommentId: input.parentCommentId,
+        };
+
+        await client.query(
+          `update proposal_items
+           set comments_json = $2::jsonb
+           where id = $1`,
+          [input.diffId, JSON.stringify([...comments, comment])],
+        );
+        await appendAuditEvent(
+          client,
+          input.workbookId,
+          input.author,
+          "proposal.item.commented",
+          `Comment added to proposal item ${input.diffId}.`,
         );
 
         const review = await loadSnapshot(client, input.workbookId);

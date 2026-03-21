@@ -18,6 +18,14 @@ export type ProposalItemStatus = "pending" | "approved" | "rejected";
 export type RiskSeverity = "low" | "medium" | "high";
 export type DiffKind = "remove" | "add" | "update" | "comment";
 
+export interface ProposalItemComment {
+  id: EntityId;
+  author: string;
+  body: string;
+  createdAt: string;
+  parentCommentId?: EntityId;
+}
+
 export interface WorkbookSheetSummary {
   name: string;
   rows: number;
@@ -78,6 +86,7 @@ export interface ProposalDiffEntry {
   reviewer?: string;
   reviewedAt?: string;
   reviewComment?: string;
+  comments?: ProposalItemComment[];
 }
 
 export interface ProposalSummary {
@@ -225,6 +234,14 @@ const demoProposal: ProposalDetail = {
       reviewer: "Finance Manager",
       reviewedAt: "2026-03-19T08:09:00.000Z",
       reviewComment: "Validated against revised coverage assumptions.",
+      comments: [
+        {
+          id: "diff_assumption_comment_1",
+          author: "Finance Manager",
+          body: "Keep this aligned with the revised pipeline extract before close.",
+          createdAt: "2026-03-19T08:07:00.000Z",
+        },
+      ],
     },
     {
       id: "diff_formula_fix",
@@ -236,6 +253,14 @@ const demoProposal: ProposalDetail = {
       status: "approved",
       reviewer: "Finance Manager",
       reviewedAt: "2026-03-19T08:09:30.000Z",
+      comments: [
+        {
+          id: "diff_formula_fix_comment_1",
+          author: "codex",
+          body: "This formula lost its pipeline dependency in the last workbook revision.",
+          createdAt: "2026-03-19T08:04:30.000Z",
+        },
+      ],
     },
     {
       id: "diff_comment",
@@ -244,6 +269,14 @@ const demoProposal: ProposalDetail = {
       after: "AI draft note: forecast reflects March pipeline refresh and flagged stale assumptions.",
       rationale: "Prepares reviewer commentary for signoff.",
       status: "pending",
+      comments: [
+        {
+          id: "diff_comment_comment_1",
+          author: "reviewer",
+          body: "Add the final signoff note after the remaining item is reviewed.",
+          createdAt: "2026-03-19T08:09:45.000Z",
+        },
+      ],
     },
   ],
 };
@@ -399,6 +432,7 @@ export function createUploadedWorkbookReview(
           after: "Reviewer note: uploaded workbook pending structured formula analysis.",
           rationale: "Creates a placeholder review artifact for the first upload flow.",
           status: "pending",
+          comments: [],
         },
       ],
     },

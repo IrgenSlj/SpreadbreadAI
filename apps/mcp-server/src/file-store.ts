@@ -5,6 +5,7 @@ import {
   demoReviewSnapshot,
   type ProposalDetail,
   type ProposalDiffEntry,
+  type ProposalItemComment,
   type ProposalItemStatus,
   type WorkbookReviewSnapshot,
   type WorkbookSummary,
@@ -112,6 +113,52 @@ function deriveProposalStatus(diff: ProposalDiffEntry[]): ProposalDetail["status
 
 function itemDecisionToStatus(decision: ApprovalDecision): ProposalItemStatus {
   return decision === "approve" ? "approved" : "rejected";
+}
+
+function createCommentId(diffId: string) {
+  return `${diffId}_comment_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function appendCommentToDiff(
+  diff: ProposalDiffEntry[],
+  input: {
+    diffId: string;
+    author: string;
+    body: string;
+    parentCommentId?: string;
+  },
+  createdAt: string,
+) {
+  const target = diff.find((entry) => entry.id === input.diffId);
+
+  if (!target) {
+    return { error: "item_not_found" as const };
+  }
+
+  const comments = target.comments ?? [];
+  if (input.parentCommentId && !comments.some((comment) => comment.id === input.parentCommentId)) {
+    return { error: "comment_not_found" as const };
+  }
+
+  const comment: ProposalItemComment = {
+    id: createCommentId(input.diffId),
+    author: input.author,
+    body: input.body,
+    createdAt,
+    parentCommentId: input.parentCommentId,
+  };
+
+  return {
+    nextDiff: diff.map((entry) =>
+      entry.id === input.diffId
+        ? {
+            ...entry,
+            comments: [...comments, comment],
+          }
+        : entry,
+    ),
+    comment,
+  };
 }
 
 function hasReviewedItems(diff: ProposalDiffEntry[]) {
@@ -546,6 +593,92 @@ export function createFileStoreBackend(): StoreBackend {
                 input.comment?.trim() ||
                 `${input.decision === "approve" ? "Approved" : "Rejected"} proposal item ${input.diffId}.`,
               createdAt: reviewedAt,
+            },
+          ],
+        };
+
+        await writeStore(store);
+        return mutationSuccess(record.snapshot);
+      });
+    },
+
+    async appendStoredProposalItemComment(input: {
+      workbookId: string;
+      diffId: string;
+      author: string;
+      body: string;
+      parentCommentId?: string;
+    }): Promise<MutationResult> {
+      const createdAt = new Date().toISOString();
+
+      if (input.workbookId === demoSnapshotState.workbook.id) {
+        if (demoSnapshotState.proposal.status === "applied") {
+          return mutationFailure("locked");
+        }
+
+        const appended = appendCommentToDiff(demoSnapshotState.proposal.diff, input, createdAt);
+        if ("error" in appended) {
+          return mutationFailure(
+            appended.error === "item_not_found" ? "item_not_found" : "comment_not_found",
+          );
+        }
+
+        demoSnapshotState = {
+          ...demoSnapshotState,
+          proposal: {
+            ...demoSnapshotState.proposal,
+            diff: appended.nextDiff,
+          },
+          auditEvents: [
+            ...demoSnapshotState.auditEvents,
+            {
+              id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
+              workbookId: input.workbookId,
+              actor: input.author,
+              action: "proposal.item.commented",
+              detail: `Comment added to proposal item ${input.diffId}.`,
+              createdAt,
+            },
+          ],
+        };
+
+        return mutationSuccess(demoSnapshotState);
+      }
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+
+        if (!record) {
+          return mutationFailure("not_found");
+        }
+
+        if (record.snapshot.proposal.status === "applied") {
+          return mutationFailure("locked");
+        }
+
+        const appended = appendCommentToDiff(record.snapshot.proposal.diff, input, createdAt);
+        if ("error" in appended) {
+          return mutationFailure(
+            appended.error === "item_not_found" ? "item_not_found" : "comment_not_found",
+          );
+        }
+
+        record.snapshot = {
+          ...record.snapshot,
+          proposal: {
+            ...record.snapshot.proposal,
+            diff: appended.nextDiff,
+          },
+          auditEvents: [
+            ...record.snapshot.auditEvents,
+            {
+              id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
+              workbookId: input.workbookId,
+              actor: input.author,
+              action: "proposal.item.commented",
+              detail: `Comment added to proposal item ${input.diffId}.`,
+              createdAt,
             },
           ],
         };
