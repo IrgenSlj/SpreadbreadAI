@@ -98,6 +98,22 @@ function snapshotToWorkbookSummary(snapshot: WorkbookReviewSnapshot): WorkbookSu
   };
 }
 
+function findFormulaPreview(snapshot: WorkbookReviewSnapshot) {
+  for (const sheet of snapshot.workbook.sheets) {
+    for (const row of sheet.sampleRows) {
+      const formulaCell = row.find((cell) => cell.startsWith("="));
+
+      if (formulaCell) {
+        return `${sheet.name}!${formulaCell}`;
+      }
+    }
+  }
+
+  const firstSheet = snapshot.workbook.sheets[0];
+
+  return firstSheet ? `=${firstSheet.name}!A1` : "=A1";
+}
+
 function App() {
   const [section, setSection] = useState<Section>("workbook");
   const [snapshot, setSnapshot] = useState<WorkbookReviewSnapshot>(demoReviewSnapshot);
@@ -148,6 +164,8 @@ function App() {
     : proposalHasItemDecisions
       ? "Item-level review has started. Whole-proposal approval is disabled so the workflow stays on one path."
       : "Choose either the proposal shortcut or item-level review first. Once review starts, the other path locks.";
+  const activeSheet = snapshot.workbook.sheets[0];
+  const formulaPreview = findFormulaPreview(snapshot);
 
   function canReviewItem(entry: ProposalDiffEntry) {
     return canUseItemReview && entry.status === "pending";
@@ -433,6 +451,68 @@ function App() {
           </article>
         </div>
       </header>
+
+      <section className="spreadsheet-chrome" aria-label="Spreadsheet shell controls">
+        <div className="ribbon" role="presentation">
+          <div className="ribbon-group">
+            <span>Clipboard</span>
+            <div className="ribbon-buttons">
+              <button type="button">Paste</button>
+              <button type="button">Copy</button>
+              <button type="button">Fill</button>
+            </div>
+          </div>
+          <div className="ribbon-group">
+            <span>Font</span>
+            <div className="ribbon-buttons">
+              <button type="button">Bold</button>
+              <button type="button">Italic</button>
+              <button type="button">Color</button>
+            </div>
+          </div>
+          <div className="ribbon-group">
+            <span>Review</span>
+            <div className="ribbon-buttons">
+              <button type="button">Comment</button>
+              <button type="button">Track</button>
+              <button type="button">Protect</button>
+            </div>
+          </div>
+          <div className="ribbon-meta">
+            <span>Autosave</span>
+            <strong>On</strong>
+          </div>
+        </div>
+
+        <div className="formula-bar">
+          <div className="name-box" aria-label="Selected cell reference">
+            <span>A1</span>
+          </div>
+          <div className="fx-label" aria-hidden="true">
+            fx
+          </div>
+          <div className="formula-display" aria-label="Formula bar">
+            {formulaPreview}
+          </div>
+        </div>
+
+        <div className="sheet-strip" aria-label="Workbook sheets">
+          {snapshot.workbook.sheets.map((sheet, index) => (
+            <button
+              key={sheet.name}
+              className={index === 0 ? "sheet-tab active" : "sheet-tab"}
+              type="button"
+            >
+              <span>{sheet.name}</span>
+              <small>{sheet.rows} rows</small>
+            </button>
+          ))}
+          <div className="sheet-strip-meta">
+            <span>Current workbook</span>
+            <strong>{activeSheet?.name ?? "Sheet 1"}</strong>
+          </div>
+        </div>
+      </section>
 
       <nav className="section-nav" aria-label="Primary sections">
         {sections.map((item) => (

@@ -57,10 +57,16 @@ The first schema file is:
 
 The runtime store facade will keep using the local file-backed path until `DATABASE_URL` is provided.
 
+Import the current file-store data into PostgreSQL:
+
+```bash
+cd apps/mcp-server && DATABASE_URL=postgres://... node --import tsx src/db-import.ts
+```
+
 ## Next Setup Steps
 
-1. migrate or seed review data into PostgreSQL
-2. add a dedicated migration command in the workspace toolchain
+1. run the new import flow against a real PostgreSQL instance
+2. add a workspace-managed dependency install and migration path
 3. replace the sketchpad placeholder with a real collaborative canvas
 4. expand workbook parsing and formula intelligence
 5. wire a dedicated workbook processing boundary
