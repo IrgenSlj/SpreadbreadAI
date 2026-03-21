@@ -14,6 +14,7 @@ export type ProposalStatus =
 
 export type ApprovalDecision = "approve" | "reject";
 export type ProposalItemStatus = "pending" | "approved" | "rejected";
+export type ReviewerRole = "Approver" | "Reviewer" | "Analyst";
 
 export type RiskSeverity = "low" | "medium" | "high";
 export type DiffKind = "remove" | "add" | "update" | "comment";
@@ -32,7 +33,7 @@ export interface ReviewerProfile {
   id: EntityId;
   handle: string;
   displayName: string;
-  role?: string;
+  role?: ReviewerRole;
   team?: string;
   email?: string;
   color?: string;

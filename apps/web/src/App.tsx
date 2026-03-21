@@ -6,7 +6,7 @@ import {
   type ProposalDiffEntry,
   type ProposalItemComment,
   type ReviewerProfile,
-  type ReviewerSession,
+  type ReviewerRole,
   type WorkbookLibraryView,
   type WorkbookSketchBoard,
   type WorkbookSummary,
@@ -56,15 +56,49 @@ type ReviewerProfilesResponse = {
   reviewers: ReviewerProfile[];
 };
 
+type ReviewerPermissionKey =
+  | "proposal.decide"
+  | "proposal.item.decide"
+  | "proposal.apply"
+  | "proposal.comment"
+  | "sketch.edit"
+  | "workbook.tags.write"
+  | "library.views.write"
+  | "notifications.read";
+
+type ReviewerSessionProfile = {
+  id?: string;
+  displayName?: string;
+  name?: string;
+  fullName?: string;
+  handle?: string;
+  role?: string;
+  permissions?: unknown;
+  allowedActions?: unknown;
+  access?: unknown;
+  authorization?: unknown;
+};
+
 type ReviewerSessionResponse = {
-  session: ReviewerSession | null;
+  session: {
+    currentProfile?: ReviewerSessionProfile;
+    profile?: ReviewerSessionProfile;
+    reviewer?: ReviewerSessionProfile;
+    currentReviewer?: ReviewerSessionProfile;
+    role?: string;
+    permissions?: unknown;
+    allowedActions?: unknown;
+    access?: unknown;
+    authorization?: unknown;
+  } | null;
 };
 
 type ReviewerIdentity = {
   id: string;
   displayName: string;
   handle: string;
-  role?: string;
+  role?: ReviewerRole;
+  permissions?: ReviewerPermissionKey[];
   source: "api" | "derived";
 };
 
@@ -113,6 +147,16 @@ type ItemCommentState = {
   submitting: boolean;
   error: string | null;
 };
+
+type ReviewerAuthorizationAction =
+  | "proposalDecision"
+  | "proposalItemDecision"
+  | "proposalApply"
+  | "itemComment"
+  | "sketchEdit"
+  | "workbookTags"
+  | "libraryViews"
+  | "notificationRead";
 
 type RuntimeBackendMode = "local" | "file-store" | "postgres" | "hybrid" | "unknown";
 
@@ -227,6 +271,288 @@ function snapshotToWorkbookSummary(snapshot: WorkbookReviewSnapshot): WorkbookSu
 
 function normalizeHandle(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function permissionLabel(permission: ReviewerPermissionKey) {
+  switch (permission) {
+    case "proposal.decide":
+      return "Proposal decisions";
+    case "proposal.item.decide":
+      return "Item reviews";
+    case "proposal.apply":
+      return "Apply approved items";
+    case "proposal.comment":
+      return "Comments";
+    case "sketch.edit":
+      return "Sketch editing";
+    case "workbook.tags.write":
+      return "Workbook tags";
+    case "library.views.write":
+      return "Saved views";
+    case "notifications.read":
+      return "Notifications";
+    default:
+      return permission;
+  }
+}
+
+function normalizePermissionKey(value: string): ReviewerPermissionKey | null {
+  const token = value.trim().toLowerCase();
+
+  if (!token) {
+    return null;
+  }
+
+  if (token.includes("notification") || token.includes("read")) {
+    return "notifications.read";
+  }
+
+  if (token.includes("sketch") || token.includes("board")) {
+    return "sketch.edit";
+  }
+
+  if (token.includes("tag")) {
+    return "workbook.tags.write";
+  }
+
+  if (
+    (token.includes("view") || token.includes("library")) &&
+    (token.includes("write") || token.includes("save") || token.includes("archive") || token.includes("delete"))
+  ) {
+    return "library.views.write";
+  }
+
+  if (token.includes("apply")) {
+    return "proposal.apply";
+  }
+
+  if (
+    token.includes("item") &&
+    (token.includes("review") || token.includes("decision") || token.includes("approve"))
+  ) {
+    return "proposal.item.decide";
+  }
+
+  if (token.includes("comment") || token.includes("reply") || token.includes("thread")) {
+    return "proposal.comment";
+  }
+
+  if (
+    token.includes("proposal") ||
+    token.includes("approve") ||
+    token.includes("decision") ||
+    token.includes("review")
+  ) {
+    return "proposal.decide";
+  }
+
+  return null;
+}
+
+function normalizePermissionList(value: unknown): ReviewerPermissionKey[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[,\s|]+/)
+      : value && typeof value === "object"
+        ? Object.entries(value as Record<string, unknown>).flatMap(([key, enabled]) =>
+            enabled ? [key] : [],
+          )
+        : [];
+
+  return Array.from(
+    new Set(
+      source.flatMap((entry) =>
+        typeof entry === "string"
+          ? [normalizePermissionKey(entry)].filter(
+              (permission): permission is ReviewerPermissionKey => permission !== null,
+            )
+          : [],
+      ),
+    ),
+  );
+}
+
+function defaultPermissionsForRole(role?: string) {
+  switch (role) {
+    case "Approver":
+      return [
+        "proposal.decide",
+        "proposal.item.decide",
+        "proposal.apply",
+        "proposal.comment",
+        "sketch.edit",
+        "workbook.tags.write",
+        "library.views.write",
+        "notifications.read",
+      ] satisfies ReviewerPermissionKey[];
+    case "Reviewer":
+      return [
+        "proposal.item.decide",
+        "proposal.comment",
+        "sketch.edit",
+        "notifications.read",
+      ] satisfies ReviewerPermissionKey[];
+    case "Analyst":
+    default:
+      return [
+        "proposal.comment",
+        "sketch.edit",
+        "notifications.read",
+      ] satisfies ReviewerPermissionKey[];
+  }
+}
+
+function collectPermissionsFromSessionProfile(profile: ReviewerSessionProfile | null) {
+  if (!profile) {
+    return [];
+  }
+
+  return normalizePermissionList(
+    profile.permissions ??
+      profile.allowedActions ??
+      profile.authorization ??
+      profile.access ??
+      [],
+  );
+}
+
+function extractReviewerSessionProfile(
+  session: ReviewerSessionResponse["session"],
+  fallbackReviewer?: ReviewerIdentity | null,
+) {
+  if (!session || typeof session !== "object") {
+    return null;
+  }
+
+  const record = session as ReviewerSessionResponse["session"] & Record<string, unknown>;
+  const fallbackProfile =
+    fallbackReviewer && typeof fallbackReviewer === "object"
+      ? {
+          id: fallbackReviewer.id,
+          displayName: fallbackReviewer.displayName,
+          handle: fallbackReviewer.handle,
+          role: fallbackReviewer.role,
+        }
+      : null;
+  const candidates = [
+    record.currentProfile,
+    record.profile,
+    record.reviewer,
+    record.currentReviewer,
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === "object") {
+      return {
+        ...(fallbackProfile ?? {}),
+        ...(candidate as ReviewerSessionProfile),
+      };
+    }
+  }
+
+  const topLevelPermissions = normalizePermissionList(
+    record.permissions ?? record.allowedActions ?? record.authorization ?? record.access ?? [],
+  );
+  const topLevelRole = typeof record.role === "string" ? record.role : undefined;
+
+  if (fallbackProfile || topLevelPermissions.length > 0 || topLevelRole) {
+    return {
+      ...(fallbackProfile ?? {}),
+      role: topLevelRole ?? fallbackProfile?.role,
+      permissions: topLevelPermissions,
+    };
+  }
+
+  return null;
+}
+
+function resolveReviewerAuthorization(
+  reviewer: ReviewerIdentity,
+  sessionProfile: ReviewerSessionProfile | null,
+  identityMode: "api" | "derived",
+) {
+  const sessionMatches =
+    !!sessionProfile &&
+    (
+      (typeof sessionProfile.id === "string" && sessionProfile.id === reviewer.id) ||
+      (typeof sessionProfile.handle === "string" &&
+        normalizeHandle(sessionProfile.handle) === normalizeHandle(reviewer.handle)) ||
+      (typeof sessionProfile.displayName === "string" &&
+        normalizeHandle(sessionProfile.displayName) === normalizeHandle(reviewer.displayName))
+    );
+
+  const sessionPermissions = sessionMatches ? collectPermissionsFromSessionProfile(sessionProfile) : [];
+  const roleLabel =
+    sessionMatches && typeof sessionProfile?.role === "string" && sessionProfile.role.trim().length > 0
+      ? sessionProfile.role.trim()
+      : reviewer.role?.trim().length
+        ? reviewer.role.trim()
+        : reviewer.displayName;
+  const roleSource =
+    sessionMatches && typeof sessionProfile?.role === "string" && sessionProfile.role.trim().length > 0
+      ? "api"
+      : "derived";
+  const permissions =
+    sessionPermissions.length > 0 ? sessionPermissions : defaultPermissionsForRole(roleLabel);
+  const permissionSource = sessionPermissions.length > 0 && identityMode === "api" ? "api" : "derived";
+  const summary = `Signed in as ${roleLabel} with ${permissions.map(permissionLabel).join(", ")} access.`;
+  const details =
+    permissionSource === "api"
+      ? "Backend-backed role and permission state"
+      : "Permissions derived from the reviewer role until the backend returns scoped grants";
+
+  const canApproveProposal = permissions.includes("proposal.decide");
+  const canReviewItems = permissions.includes("proposal.item.decide");
+  const canApplyApprovedItems = permissions.includes("proposal.apply");
+  const canCommentOnItems = permissions.includes("proposal.comment");
+  const canEditSketch = permissions.includes("sketch.edit");
+  const canEditWorkbookTags = permissions.includes("workbook.tags.write");
+  const canManageLibraryViews = permissions.includes("library.views.write");
+  const canToggleNotifications = permissions.includes("notifications.read");
+
+  return {
+    roleLabel,
+    roleSource,
+    permissionSource,
+    permissions,
+    summary,
+    details,
+    actionReasons: {
+      proposalDecision: canApproveProposal
+        ? ""
+        : `The ${roleLabel} role cannot approve or reject the full proposal.`,
+      proposalItemDecision: canReviewItems
+        ? ""
+        : `The ${roleLabel} role cannot approve or reject individual review items.`,
+      proposalApply: canApplyApprovedItems
+        ? ""
+        : `The ${roleLabel} role cannot apply approved items.`,
+      itemComment: canCommentOnItems
+        ? ""
+        : `The ${roleLabel} role cannot add or reply to proposal comments.`,
+      sketchEdit: canEditSketch
+        ? ""
+        : `The ${roleLabel} role cannot edit or save the sketch board.`,
+      workbookTags: canEditWorkbookTags
+        ? ""
+        : `The ${roleLabel} role cannot edit workbook tags.`,
+      libraryViews: canManageLibraryViews
+        ? ""
+        : `The ${roleLabel} role cannot save, archive, or delete saved views.`,
+      notificationRead: canToggleNotifications
+        ? ""
+        : `The ${roleLabel} role cannot change notification read state.`,
+    },
+    canApproveProposal,
+    canReviewItems,
+    canApplyApprovedItems,
+    canCommentOnItems,
+    canEditSketch,
+    canEditWorkbookTags,
+    canManageLibraryViews,
+    canToggleNotifications,
+  };
 }
 
 function mentionHandleForReviewer(value: string) {
@@ -375,6 +701,10 @@ function normalizeReviewerDirectory(value: unknown): ReviewerIdentity[] {
         display_name?: unknown;
         fullName?: unknown;
         source?: unknown;
+        permissions?: unknown;
+        allowedActions?: unknown;
+        access?: unknown;
+        authorization?: unknown;
       };
 
       const displayName =
@@ -397,7 +727,19 @@ function normalizeReviewerDirectory(value: unknown): ReviewerIdentity[] {
             : handle,
         displayName,
         handle,
-        role: typeof reviewer.role === "string" ? reviewer.role : undefined,
+        role:
+          reviewer.role === "Approver" ||
+          reviewer.role === "Reviewer" ||
+          reviewer.role === "Analyst"
+            ? reviewer.role
+            : undefined,
+        permissions: normalizePermissionList(
+          reviewer.permissions ??
+            reviewer.allowedActions ??
+            reviewer.authorization ??
+            reviewer.access ??
+            [],
+        ),
         source: reviewer.source === "api" ? "api" : "derived",
       } satisfies ReviewerIdentity;
     })
@@ -475,24 +817,24 @@ function createDerivedRuntimeInfo(
 
 const fallbackReviewerDirectory: ReviewerIdentity[] = [
   {
-    id: "finance-manager",
+    id: "finance_manager",
     displayName: "Finance Manager",
-    handle: "finance.manager",
-    role: "Finance",
+    handle: "finance_manager",
+    role: "Approver",
     source: "derived",
   },
   {
-    id: "fpa-lead",
-    displayName: "FP&A Lead",
-    handle: "fpa.lead",
-    role: "Finance",
+    id: "controller",
+    displayName: "Controller",
+    handle: "controller",
+    role: "Reviewer",
     source: "derived",
   },
   {
-    id: "operations-reviewer",
-    displayName: "Operations Reviewer",
-    handle: "operations.reviewer",
-    role: "Operations",
+    id: "analyst_1",
+    displayName: "Analyst 1",
+    handle: "analyst_1",
+    role: "Analyst",
     source: "derived",
   },
 ];
@@ -516,6 +858,9 @@ function App() {
     "derived",
   );
   const [reviewerIdentityError, setReviewerIdentityError] = useState<string | null>(null);
+  const [reviewerSessionProfile, setReviewerSessionProfile] = useState<ReviewerSessionProfile | null>(
+    null,
+  );
   const [reviewComment, setReviewComment] = useState("");
   const [runtimeBackend, setRuntimeBackend] = useState<RuntimeBackendInfo>(
     createDerivedRuntimeInfo([createDemoWorkbookSummary()], demoReviewSnapshot),
@@ -562,6 +907,99 @@ function App() {
   );
   const reviewerName = activeReviewer.displayName;
   const reviewerHandle = mentionHandleForReviewer(activeReviewer.handle || reviewerName);
+  const reviewerAuthorization = useMemo(
+    () => resolveReviewerAuthorization(activeReviewer, reviewerSessionProfile, reviewerIdentityMode),
+    [activeReviewer, reviewerIdentityMode, reviewerSessionProfile],
+  );
+
+  function getAuthorizationReason(
+    action: ReviewerAuthorizationAction,
+    entry?: ProposalDiffEntry,
+  ) {
+    if (action === "proposalDecision" && !reviewerAuthorization.canApproveProposal) {
+      return reviewerAuthorization.actionReasons.proposalDecision;
+    }
+
+    if (action === "proposalItemDecision" && !reviewerAuthorization.canReviewItems) {
+      return reviewerAuthorization.actionReasons.proposalItemDecision;
+    }
+
+    if (action === "proposalApply" && !reviewerAuthorization.canApplyApprovedItems) {
+      return reviewerAuthorization.actionReasons.proposalApply;
+    }
+
+    if (action === "itemComment" && !reviewerAuthorization.canCommentOnItems) {
+      return reviewerAuthorization.actionReasons.itemComment;
+    }
+
+    if (action === "sketchEdit" && !reviewerAuthorization.canEditSketch) {
+      return reviewerAuthorization.actionReasons.sketchEdit;
+    }
+
+    if (action === "workbookTags" && !reviewerAuthorization.canEditWorkbookTags) {
+      return reviewerAuthorization.actionReasons.workbookTags;
+    }
+
+    if (action === "libraryViews" && !reviewerAuthorization.canManageLibraryViews) {
+      return reviewerAuthorization.actionReasons.libraryViews;
+    }
+
+    if (action === "notificationRead" && !reviewerAuthorization.canToggleNotifications) {
+      return reviewerAuthorization.actionReasons.notificationRead;
+    }
+
+    if (mutationInFlight) {
+      return "Please wait for the current change to finish.";
+    }
+
+    switch (action) {
+      case "proposalDecision":
+        if (proposalHasItemDecisions) {
+          return "Item-level review has started, so whole-proposal approval is locked.";
+        }
+        if (snapshot.proposal.status !== "pending_approval") {
+          return "This proposal is already locked. Upload a new workbook to start a fresh review.";
+        }
+        return null;
+      case "proposalItemDecision":
+        if (proposalIsLocked) {
+          return "This proposal is locked. Upload a new workbook to continue reviewing.";
+        }
+        if (entry?.status !== "pending") {
+          return "This review item is already resolved.";
+        }
+        return null;
+      case "proposalApply":
+        if (proposalIsLocked) {
+          return "Applied proposals are locked. Start a new upload to continue editing.";
+        }
+        if (pendingItems.length > 0) {
+          return "Resolve all pending items before applying the approved ones.";
+        }
+        if (approvedItems.length === 0) {
+          return "Approve at least one item before applying changes.";
+        }
+        return null;
+      case "itemComment":
+        if (proposalIsLocked) {
+          return "This proposal is locked. Upload a new workbook to continue commenting.";
+        }
+        if (reviewerName.trim().length === 0) {
+          return "Choose and sign in a reviewer first.";
+        }
+        return null;
+      case "sketchEdit":
+        return null;
+      case "workbookTags":
+        return null;
+      case "libraryViews":
+        return null;
+      case "notificationRead":
+        return null;
+      default:
+        return null;
+    }
+  }
 
   const pendingRisks = useMemo(
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
@@ -589,13 +1027,16 @@ function App() {
     snapshot.proposal.status === "applied" ||
     snapshot.proposal.status === "approved" ||
     snapshot.proposal.status === "rejected";
-  const canUseProposalShortcut = !mutationInFlight && !proposalHasItemDecisions && snapshot.proposal.status === "pending_approval";
-  const canUseItemReview = !mutationInFlight && !proposalIsLocked;
-  const canApplyApprovedItems =
-    !mutationInFlight &&
-    !proposalIsLocked &&
-    pendingItems.length === 0 &&
-    approvedItems.length > 0;
+  const proposalDecisionReason = getAuthorizationReason("proposalDecision");
+  const proposalItemDecisionReason = getAuthorizationReason("proposalItemDecision");
+  const applyApprovedItemsReason = getAuthorizationReason("proposalApply");
+  const sketchEditReason = getAuthorizationReason("sketchEdit");
+  const workbookTagsReason = getAuthorizationReason("workbookTags");
+  const libraryViewsReason = getAuthorizationReason("libraryViews");
+  const notificationReadReason = getAuthorizationReason("notificationRead");
+  const canUseProposalShortcut = proposalDecisionReason === null;
+  const canUseItemReview = proposalItemDecisionReason === null;
+  const canApplyApprovedItems = applyApprovedItemsReason === null;
   const workflowStatusMessage = proposalIsLocked
     ? snapshot.proposal.status === "applied"
       ? "Applied proposals are locked. Start a new upload to continue editing."
@@ -777,6 +1218,10 @@ function App() {
     notificationId: string,
     read: boolean,
   ) {
+    if (!reviewerAuthorization.canToggleNotifications) {
+      return;
+    }
+
     const reviewerId = reviewerHandle.replace(/^@/, "");
     const url = `/api/reviewer-notifications/${encodeURIComponent(notificationId)}/${read ? "read" : "unread"}`;
 
@@ -817,6 +1262,10 @@ function App() {
   }
 
   function markNotificationRead(notificationId: string, read = true) {
+    if (!reviewerAuthorization.canToggleNotifications) {
+      return;
+    }
+
     updateReviewNotificationFeed((current) =>
       current.map((notification) =>
         notification.id === notificationId
@@ -832,6 +1281,10 @@ function App() {
   }
 
   function markAllNotificationsRead() {
+    if (!reviewerAuthorization.canToggleNotifications) {
+      return;
+    }
+
     updateReviewNotificationFeed((current) =>
       current.map((notification) => ({
         ...notification,
@@ -932,6 +1385,7 @@ function App() {
     return (
       !proposalIsLocked &&
       !mutationInFlight &&
+      reviewerAuthorization.canCommentOnItems &&
       reviewerName.trim().length > 0 &&
       !getItemCommentState(entry.id).submitting
     );
@@ -947,6 +1401,10 @@ function App() {
     linkId: string,
     updater: (link: WorkbookSketchBoard["links"][number]) => WorkbookSketchBoard["links"][number],
   ) {
+    if (!reviewerAuthorization.canEditSketch) {
+      return;
+    }
+
     updateSketchBoard((current) => ({
       ...current,
       links: current.links.map((link) => (link.id === linkId ? updater(link) : link)),
@@ -956,6 +1414,10 @@ function App() {
   }
 
   function addSketchLink() {
+    if (!reviewerAuthorization.canEditSketch) {
+      return;
+    }
+
     const fromNodeId = sketchBoard.nodes[0]?.id;
     const toNodeId = sketchBoard.nodes[1]?.id ?? sketchBoard.nodes[0]?.id;
 
@@ -983,6 +1445,10 @@ function App() {
   }
 
   function removeSketchLink(linkId: string) {
+    if (!reviewerAuthorization.canEditSketch) {
+      return;
+    }
+
     updateSketchBoard((current) => ({
       ...current,
       links: current.links.filter((link) => link.id !== linkId),
@@ -996,6 +1462,10 @@ function App() {
   }
 
   async function addTagToActiveWorkbook() {
+    if (workbookTagsReason !== null) {
+      return;
+    }
+
     const normalized = workbookTagDraft.trim().toLowerCase();
 
     if (!normalized) {
@@ -1043,6 +1513,10 @@ function App() {
   }
 
   async function saveCurrentWorkbookView() {
+    if (libraryViewsReason !== null) {
+      return;
+    }
+
     const trimmedName = savedViewName.trim();
 
     if (!trimmedName) {
@@ -1094,7 +1568,7 @@ function App() {
   }
 
   async function archiveSavedWorkbookView(viewId: string) {
-    if (mutationInFlight) {
+    if (mutationInFlight || libraryViewsReason !== null) {
       return;
     }
 
@@ -1129,7 +1603,7 @@ function App() {
   }
 
   async function deleteSavedWorkbookView(viewId: string) {
-    if (mutationInFlight) {
+    if (mutationInFlight || libraryViewsReason !== null) {
       return;
     }
 
@@ -1154,6 +1628,10 @@ function App() {
   }
 
   async function removeTagFromWorkbook(workbookId: string, tag: string) {
+    if (workbookTagsReason !== null) {
+      return;
+    }
+
     const workbook = workbooks.find((entry) => entry.id === workbookId);
     const nextTags = (workbook?.tags ?? []).filter((item) => item !== tag);
 
@@ -1195,7 +1673,7 @@ function App() {
     event: ReactPointerEvent<HTMLDivElement>,
     nodeId: string,
   ) {
-    if (mutationInFlight) {
+    if (mutationInFlight || !reviewerAuthorization.canEditSketch) {
       return;
     }
 
@@ -1215,6 +1693,10 @@ function App() {
   }
 
   function addSketchNodeFromLabel(label: string, color: string) {
+    if (!reviewerAuthorization.canEditSketch) {
+      return;
+    }
+
     updateSketchBoard((current) => ({
       ...current,
       nodes: [
@@ -1392,12 +1874,17 @@ function App() {
         ? ((await sessionResponse.json()) as ReviewerSessionResponse)
         : { session: null };
       const reviewers = normalizeReviewerDirectory(reviewersData.reviewers ?? []);
+      const sessionProfile = extractReviewerSessionProfile(
+        sessionData.session,
+        reviewers[0] ?? fallbackReviewerDirectory[0],
+      );
 
       if (reviewers.length > 0) {
         const activeId =
           sessionData.session?.currentProfile?.id ?? reviewers[0].id;
 
         setReviewerDirectory(reviewers);
+        setReviewerSessionProfile(sessionProfile);
         setSelectedReviewerId(
           reviewers.some((reviewer) => reviewer.id === activeId)
             ? activeId
@@ -1413,6 +1900,7 @@ function App() {
     }
 
     setReviewerDirectory(fallbackReviewerDirectory);
+    setReviewerSessionProfile(null);
     setSelectedReviewerId((current) =>
       fallbackReviewerDirectory.some((reviewer) => reviewer.id === current)
         ? current
@@ -1477,6 +1965,7 @@ function App() {
       if (response.ok) {
         const data = (await response.json()) as ReviewerSessionResponse;
         const activeId = data.session?.currentProfile?.id ?? reviewer.id;
+        setReviewerSessionProfile(extractReviewerSessionProfile(data.session, reviewer));
         setSelectedReviewerId(activeId);
         setReviewerIdentityMode("api");
         return;
@@ -1492,6 +1981,7 @@ function App() {
     }
 
     setReviewerIdentityMode("derived");
+    setReviewerSessionProfile(null);
     setSelectedReviewerId(reviewer.id);
   }
 
@@ -1798,7 +2288,7 @@ function App() {
   }
 
   async function handleSketchSave() {
-    if (mutationInFlight) {
+    if (mutationInFlight || !reviewerAuthorization.canEditSketch) {
       return;
     }
 
@@ -2094,12 +2584,16 @@ function App() {
                   </label>
                   <button
                     className="mini-button comment"
-                    disabled={savedViewName.trim().length === 0}
+                    disabled={savedViewName.trim().length === 0 || libraryViewsReason !== null}
+                    title={libraryViewsReason ?? undefined}
                     onClick={() => saveCurrentWorkbookView()}
                     type="button"
                   >
                     Save view
                   </button>
+                  {libraryViewsReason ? (
+                    <p className="authorization-note">{libraryViewsReason}</p>
+                  ) : null}
                   {savedWorkbookViews.length > 0 ? (
                     <div className="saved-view-chips">
                       {savedWorkbookViews.map((view) => (
@@ -2125,7 +2619,8 @@ function App() {
                           {!view.archivedAt ? (
                             <button
                               className="saved-view-delete"
-                              disabled={mutationInFlight}
+                              disabled={mutationInFlight || libraryViewsReason !== null}
+                              title={libraryViewsReason ?? undefined}
                               onClick={() => void archiveSavedWorkbookView(view.id)}
                               type="button"
                             >
@@ -2134,7 +2629,8 @@ function App() {
                           ) : null}
                           <button
                             className="saved-view-delete"
-                            disabled={mutationInFlight}
+                            disabled={mutationInFlight || libraryViewsReason !== null}
+                            title={libraryViewsReason ?? undefined}
                             onClick={() => void deleteSavedWorkbookView(view.id)}
                             type="button"
                           >
@@ -2193,6 +2689,8 @@ function App() {
                                 <button
                                   key={`${workbook.id}-${tag}-remove`}
                                   className="tag-remove"
+                                  disabled={workbookTagsReason !== null}
+                                  title={workbookTagsReason ?? undefined}
                                   onClick={() => removeTagFromWorkbook(workbook.id, tag)}
                                   type="button"
                                 >
@@ -2222,13 +2720,17 @@ function App() {
                     />
                     <button
                       className="mini-button comment"
-                      disabled={workbookTagDraft.trim().length === 0}
+                      disabled={workbookTagDraft.trim().length === 0 || workbookTagsReason !== null}
+                      title={workbookTagsReason ?? undefined}
                       onClick={() => addTagToActiveWorkbook()}
                       type="button"
                     >
                       Add tag
                     </button>
                   </div>
+                  {workbookTagsReason ? (
+                    <p className="authorization-note">{workbookTagsReason}</p>
+                  ) : null}
                 </div>
               </div>
             </section>
@@ -2361,6 +2863,7 @@ function App() {
                       {reviewerDirectory.map((reviewer) => (
                         <option key={reviewer.id} value={reviewer.id}>
                           {reviewer.displayName} · {reviewer.handle}
+                          {reviewer.role ? ` · ${reviewer.role}` : ""}
                         </option>
                       ))}
                     </select>
@@ -2375,10 +2878,40 @@ function App() {
                 </div>
                 <p className="review-meta">
                   Signed in as {reviewerName} ({reviewerHandle})
+                  {activeReviewer.role ? ` · ${activeReviewer.role}` : ""}
                   {reviewerIdentityMode === "api"
                     ? " via backend session."
                     : " using the local reviewer roster until the API exists."}
                 </p>
+                <div className="authorization-panel">
+                  <div className="authorization-panel-head">
+                    <div>
+                      <span>Role / access</span>
+                      <strong>{reviewerAuthorization.roleLabel}</strong>
+                    </div>
+                    <small>
+                      {reviewerAuthorization.roleSource === "api"
+                        ? "Role from backend session"
+                        : "Role derived from the reviewer roster"}
+                    </small>
+                  </div>
+                  <div className="authorization-chip-row">
+                    {reviewerAuthorization.permissions.map((permission) => (
+                      <span key={permission} className="authorization-chip">
+                        {permissionLabel(permission)}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="review-meta">
+                    {reviewerAuthorization.summary}
+                    <br />
+                    {reviewerAuthorization.details}
+                  </p>
+                  <p className="authorization-note">
+                    Disabled actions stay visible so reviewers can see what their current access
+                    allows.
+                  </p>
+                </div>
                 <label>
                   <span>Decision comment</span>
                   <textarea
@@ -2391,6 +2924,7 @@ function App() {
                   <button
                     className="decision-button approve"
                     disabled={!canUseProposalShortcut}
+                    title={proposalDecisionReason ?? undefined}
                     onClick={() => void handleProposalDecision("approve")}
                     type="button"
                   >
@@ -2399,6 +2933,7 @@ function App() {
                   <button
                     className="decision-button reject"
                     disabled={!canUseProposalShortcut}
+                    title={proposalDecisionReason ?? undefined}
                     onClick={() => void handleProposalDecision("reject")}
                     type="button"
                   >
@@ -2407,12 +2942,18 @@ function App() {
                   <button
                     className="decision-button apply"
                     disabled={!canApplyApprovedItems}
+                    title={applyApprovedItemsReason ?? undefined}
                     onClick={() => void handleApplyApprovedItems()}
                     type="button"
                   >
                     Apply Approved Items
                   </button>
                 </div>
+                {(proposalDecisionReason || applyApprovedItemsReason) ? (
+                  <p className="authorization-note">
+                    {proposalDecisionReason || applyApprovedItemsReason}
+                  </p>
+                ) : null}
                 {snapshot.proposal.reviewer ? (
                   <p className="review-meta">
                     Reviewed by {snapshot.proposal.reviewer}
@@ -2459,6 +3000,8 @@ function App() {
                         </small>
                         <button
                           className="notification-toggle"
+                          disabled={!reviewerAuthorization.canToggleNotifications}
+                          title={notificationReadReason ?? undefined}
                           onClick={() =>
                             markNotificationRead(notification.id, !notification.readAt)
                           }
@@ -2476,13 +3019,17 @@ function App() {
                   <strong>{unreadNotificationCount} unread</strong>
                   <button
                     className="notification-toggle"
-                    disabled={unreadNotificationCount === 0}
+                    disabled={unreadNotificationCount === 0 || !reviewerAuthorization.canToggleNotifications}
+                    title={notificationReadReason ?? undefined}
                     onClick={() => markAllNotificationsRead()}
                     type="button"
                   >
                     Mark all read
                   </button>
                 </div>
+                {notificationReadReason ? (
+                  <p className="authorization-note">{notificationReadReason}</p>
+                ) : null}
                 {reviewNotificationFeedError ? (
                   <p className="comment-error">{reviewNotificationFeedError}</p>
                 ) : null}
@@ -2524,6 +3071,8 @@ function App() {
                     const commentState = getItemCommentState(entry.id);
                     const commentDraft = getItemCommentDraft(entry.id);
                     const replyTarget = getReplyTarget(entry.id);
+                    const itemDecisionReason = getAuthorizationReason("proposalItemDecision", entry);
+                    const commentReason = getAuthorizationReason("itemComment", entry);
                     const mentionCandidates = Array.from(
                       new Set(comments.flatMap((comment) => extractMentions(comment.body))),
                     );
@@ -2542,6 +3091,12 @@ function App() {
                             <strong>{comment.author}</strong>
                             <button
                               className="reply-button"
+                              disabled={!reviewerAuthorization.canCommentOnItems}
+                              title={
+                                reviewerAuthorization.canCommentOnItems
+                                  ? undefined
+                                  : reviewerAuthorization.actionReasons.itemComment
+                              }
                               onClick={() => startReply(entry.id, comment)}
                               type="button"
                             >
@@ -2574,6 +3129,7 @@ function App() {
                             <button
                               className="mini-button approve"
                               disabled={!canReviewItem(entry)}
+                              title={itemDecisionReason ?? undefined}
                               onClick={() => void handleProposalItemDecision(entry.id, "approve")}
                               type="button"
                             >
@@ -2582,6 +3138,7 @@ function App() {
                             <button
                               className="mini-button reject"
                               disabled={!canReviewItem(entry)}
+                              title={itemDecisionReason ?? undefined}
                               onClick={() => void handleProposalItemDecision(entry.id, "reject")}
                               type="button"
                             >
@@ -2644,6 +3201,12 @@ function App() {
                                   Replying to {replyTarget.author} with {replyTarget.handle}
                                 </span>
                                 <button
+                                  disabled={!reviewerAuthorization.canCommentOnItems}
+                                  title={
+                                    reviewerAuthorization.canCommentOnItems
+                                      ? undefined
+                                      : reviewerAuthorization.actionReasons.itemComment
+                                  }
                                   onClick={() => setReplyTarget(entry.id, null)}
                                   type="button"
                                 >
@@ -2654,6 +3217,7 @@ function App() {
                             <textarea
                               aria-label={`Add comment for ${entry.cell}`}
                               disabled={!canCommentOnItem(entry)}
+                              title={commentReason ?? undefined}
                               onChange={(event) =>
                                 setItemCommentDraft(entry.id, event.target.value)
                               }
@@ -2668,6 +3232,7 @@ function App() {
                                   !canCommentOnItem(entry) ||
                                   commentDraft.trim().length === 0
                                 }
+                                title={commentReason ?? undefined}
                                 onClick={() => void handleProposalItemComment(entry.id)}
                                 type="button"
                               >
@@ -2676,6 +3241,9 @@ function App() {
                               <small>Use handles like {reviewerHandle}</small>
                             </div>
                           </div>
+                          {commentReason ? (
+                            <p className="authorization-note">{commentReason}</p>
+                          ) : null}
                           {commentState.error ? (
                             <p className="comment-error">{commentState.error}</p>
                           ) : null}
@@ -2739,6 +3307,8 @@ function App() {
                 <label>
                   <span>Board title</span>
                   <input
+                    disabled={!reviewerAuthorization.canEditSketch}
+                    title={sketchEditReason ?? undefined}
                     onChange={(event) =>
                       updateSketchBoard((current) => ({
                         ...current,
@@ -2752,6 +3322,8 @@ function App() {
                 <label>
                   <span>Board notes</span>
                   <textarea
+                    disabled={!reviewerAuthorization.canEditSketch}
+                    title={sketchEditReason ?? undefined}
                     onChange={(event) =>
                       updateSketchBoard((current) => ({
                         ...current,
@@ -2765,6 +3337,8 @@ function App() {
                 <div className="action-row">
                   <button
                     className="decision-button approve"
+                    disabled={!reviewerAuthorization.canEditSketch}
+                    title={sketchEditReason ?? undefined}
                     onClick={() =>
                       addSketchNodeFromLabel(
                         snapshot.workbook.sheets[0]?.name ?? "Workbook Node",
@@ -2777,6 +3351,8 @@ function App() {
                   </button>
                   <button
                     className="decision-button apply"
+                    disabled={!reviewerAuthorization.canEditSketch}
+                    title={sketchEditReason ?? undefined}
                     onClick={() => addSketchNodeFromLabel("Approval", "#6dbb75")}
                     type="button"
                   >
@@ -2784,13 +3360,15 @@ function App() {
                   </button>
                   <button
                     className="decision-button apply"
-                    disabled={mutationInFlight}
+                    disabled={mutationInFlight || !reviewerAuthorization.canEditSketch}
+                    title={sketchEditReason ?? undefined}
                     onClick={() => void handleSketchSave()}
                     type="button"
                   >
                     Save Board
                   </button>
                 </div>
+                {sketchEditReason ? <p className="authorization-note">{sketchEditReason}</p> : null}
                 {sketchError ? <p className="comment-error">{sketchError}</p> : null}
                 <p className="review-meta">
                   Updated by {sketchBoard.updatedBy} at{" "}
@@ -2854,8 +3432,11 @@ function App() {
                     className={
                       dragState?.nodeId === node.id
                         ? "sketch-node-card dragging"
-                        : "sketch-node-card"
+                        : reviewerAuthorization.canEditSketch
+                          ? "sketch-node-card"
+                          : "sketch-node-card locked"
                     }
+                    aria-disabled={!reviewerAuthorization.canEditSketch}
                     onPointerDown={(event) => startNodeDrag(event, node.id)}
                     style={{
                       left: `${node.x}px`,
@@ -2882,6 +3463,8 @@ function App() {
                     <label>
                       <span>Label</span>
                       <input
+                        disabled={!reviewerAuthorization.canEditSketch}
+                        title={sketchEditReason ?? undefined}
                         onChange={(event) =>
                           updateSketchBoard((current) => ({
                             ...current,
@@ -2902,6 +3485,8 @@ function App() {
                     <label>
                       <span>X / Y</span>
                       <input
+                        disabled={!reviewerAuthorization.canEditSketch}
+                        title={sketchEditReason ?? undefined}
                         onChange={(event) => {
                           const value = Number.parseInt(event.target.value || "0", 10);
                           updateSketchBoard((current) => ({
@@ -2920,6 +3505,8 @@ function App() {
                         value={node.x}
                       />
                       <input
+                        disabled={!reviewerAuthorization.canEditSketch}
+                        title={sketchEditReason ?? undefined}
                         onChange={(event) => {
                           const value = Number.parseInt(event.target.value || "0", 10);
                           updateSketchBoard((current) => ({
@@ -2948,7 +3535,8 @@ function App() {
                     </div>
                     <button
                       className="mini-button comment"
-                      disabled={sketchBoard.nodes.length < 2}
+                      disabled={sketchBoard.nodes.length < 2 || !reviewerAuthorization.canEditSketch}
+                      title={sketchEditReason ?? undefined}
                       onClick={() => addSketchLink()}
                       type="button"
                     >
@@ -2966,22 +3554,26 @@ function App() {
                               : "sketch-link-item"
                           }
                         >
-                          <div className="sketch-link-item-head">
-                            <div>
-                              <strong>{link.label || "Untitled link"}</strong>
-                              <small>{link.id}</small>
-                            </div>
-                            <button
-                              className="reply-button"
-                              onClick={() => setSelectedSketchLinkId(link.id)}
-                              type="button"
-                            >
+                    <div className="sketch-link-item-head">
+                      <div>
+                        <strong>{link.label || "Untitled link"}</strong>
+                        <small>{link.id}</small>
+                      </div>
+                      <button
+                        className="reply-button"
+                        disabled={!reviewerAuthorization.canEditSketch}
+                        title={sketchEditReason ?? undefined}
+                        onClick={() => setSelectedSketchLinkId(link.id)}
+                        type="button"
+                      >
                               {selectedSketchLinkId === link.id ? "Selected" : "Select"}
                             </button>
                           </div>
                           <label>
                             <span>From</span>
                             <select
+                              disabled={!reviewerAuthorization.canEditSketch}
+                              title={sketchEditReason ?? undefined}
                               onChange={(event) =>
                                 updateSketchLink(link.id, (current) => ({
                                   ...current,
@@ -3000,6 +3592,8 @@ function App() {
                           <label>
                             <span>To</span>
                             <select
+                              disabled={!reviewerAuthorization.canEditSketch}
+                              title={sketchEditReason ?? undefined}
                               onChange={(event) =>
                                 updateSketchLink(link.id, (current) => ({
                                   ...current,
@@ -3018,6 +3612,8 @@ function App() {
                           <label>
                             <span>Label</span>
                             <input
+                              disabled={!reviewerAuthorization.canEditSketch}
+                              title={sketchEditReason ?? undefined}
                               onChange={(event) =>
                                 updateSketchLink(link.id, (current) => ({
                                   ...current,
@@ -3032,6 +3628,8 @@ function App() {
                           <div className="comment-composer-row">
                             <button
                               className="mini-button reject"
+                              disabled={!reviewerAuthorization.canEditSketch}
+                              title={sketchEditReason ?? undefined}
                               onClick={() => removeSketchLink(link.id)}
                               type="button"
                             >
@@ -3051,6 +3649,7 @@ function App() {
                       Selected link: {selectedSketchLink.label || selectedSketchLink.id}
                     </p>
                   ) : null}
+                  {sketchEditReason ? <p className="authorization-note">{sketchEditReason}</p> : null}
                 </div>
               </div>
             </div>

@@ -5,6 +5,7 @@ import {
   type ReviewerNotification,
   type ReviewerNotificationFeed,
   type ReviewerProfile,
+  type ReviewerRole,
   type ReviewerSession,
   type WorkbookLibraryView,
   demoReviewSnapshot,
@@ -16,6 +17,7 @@ import {
   type WorkbookSketchBoard,
   type WorkbookSummary,
 } from "../../../packages/shared/src/index.js";
+import { authorizeReviewerAction } from "./authorization.js";
 import { parseWorkbookReviewSnapshot } from "./parser.js";
 import type {
   LibraryViewDeletionResult,
@@ -301,6 +303,14 @@ function normalizeReviewer(value: string) {
   return value.trim().toLowerCase().replace(/^@/, "");
 }
 
+function normalizeReviewerRole(role?: string): ReviewerRole | undefined {
+  if (role === "Approver" || role === "Reviewer" || role === "Analyst") {
+    return role;
+  }
+
+  return undefined;
+}
+
 function createReviewerProfile(input: {
   id?: string;
   handle: string;
@@ -322,7 +332,7 @@ function createReviewerProfile(input: {
     id: normalizedId,
     handle: normalizedHandle,
     displayName: input.displayName.trim(),
-    role: input.role?.trim() || undefined,
+    role: normalizeReviewerRole(input.role?.trim()),
     team: input.team?.trim() || undefined,
     email: input.email?.trim() || undefined,
     color: input.color?.trim() || undefined,
@@ -445,6 +455,19 @@ function defaultReviewerSession(profiles: ReviewerProfile[] = defaultReviewerPro
     updatedAt: signedInAt,
     currentProfile,
   };
+}
+
+async function authorizeReviewerMutation(
+  store: WorkbookStoreFile,
+  permission: Parameters<typeof authorizeReviewerAction>[1],
+  actor?: string,
+) {
+  const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+  const session =
+    normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+    defaultReviewerSession(reviewers);
+
+  return authorizeReviewerAction(session, permission, actor);
 }
 
 function buildCommentNotifications(input: {
@@ -857,6 +880,13 @@ export function createFileStoreBackend(): StoreBackend {
       tags: string[];
       updatedBy: string;
     }): Promise<TagsMutationResult> {
+      const store = await readStore();
+      const auth = await authorizeReviewerMutation(store, "tag_write", input.updatedBy);
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" };
+      }
+
+      const updatedBy = auth.reviewer.displayName;
       const updatedAt = new Date().toISOString();
       const tags = normalizeWorkbookTags(input.tags);
 
@@ -872,7 +902,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.updatedBy,
+              actor: updatedBy,
               action: "workbook.tags.updated",
               detail: `Workbook tags updated to ${tags.length > 0 ? tags.join(", ") : "none"}.`,
               createdAt: updatedAt,
@@ -902,7 +932,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.updatedBy,
+              actor: updatedBy,
               action: "workbook.tags.updated",
               detail: `Workbook tags updated to ${tags.length > 0 ? tags.join(", ") : "none"}.`,
               createdAt: updatedAt,
@@ -966,6 +996,13 @@ export function createFileStoreBackend(): StoreBackend {
       reviewer: string;
       comment?: string;
     }): Promise<MutationResult> {
+      const store = await readStore();
+      const auth = await authorizeReviewerMutation(store, "proposal_review", input.reviewer);
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" };
+      }
+
+      const reviewer = auth.reviewer.displayName;
       if (input.workbookId === demoSnapshotState.workbook.id) {
         if (demoSnapshotState.proposal.status === "applied") {
           return mutationFailure("locked");
@@ -979,7 +1016,7 @@ export function createFileStoreBackend(): StoreBackend {
         const nextDiff = applyDecisionToAllItems(
           demoSnapshotState.proposal.diff,
           input.decision,
-          input.reviewer,
+          reviewer,
           reviewedAt,
           input.comment,
         );
@@ -990,7 +1027,7 @@ export function createFileStoreBackend(): StoreBackend {
             ...demoSnapshotState.proposal,
             diff: nextDiff,
             status: deriveProposalStatus(nextDiff),
-            reviewer: input.reviewer,
+            reviewer,
             reviewedAt,
             reviewComment: input.comment,
           },
@@ -999,7 +1036,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.reviewer,
+              actor: reviewer,
               action:
                 input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
               detail:
@@ -1014,9 +1051,9 @@ export function createFileStoreBackend(): StoreBackend {
 
         addDemoNotification(
           createReviewerNotification({
-            reviewer: input.reviewer,
+            reviewer,
             title: "Proposal review recorded",
-            body: `${demoSnapshotState.workbook.name} was ${input.decision}d by ${input.reviewer}.`,
+            body: `${demoSnapshotState.workbook.name} was ${input.decision}d by ${reviewer}.`,
             action: input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
             createdAt: reviewedAt,
             workbookId: input.workbookId,
@@ -1047,7 +1084,7 @@ export function createFileStoreBackend(): StoreBackend {
         const nextDiff = applyDecisionToAllItems(
           record.snapshot.proposal.diff,
           input.decision,
-          input.reviewer,
+          reviewer,
           reviewedAt,
           input.comment,
         );
@@ -1058,7 +1095,7 @@ export function createFileStoreBackend(): StoreBackend {
             ...record.snapshot.proposal,
             diff: nextDiff,
             status: deriveProposalStatus(nextDiff),
-            reviewer: input.reviewer,
+            reviewer,
             reviewedAt,
             reviewComment: input.comment,
           },
@@ -1067,7 +1104,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.reviewer,
+              actor: reviewer,
               action:
                 input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
               detail:
@@ -1083,9 +1120,9 @@ export function createFileStoreBackend(): StoreBackend {
         store.notifications = store.notifications ?? [];
         store.notifications.unshift(
           createReviewerNotification({
-            reviewer: input.reviewer,
+            reviewer,
             title: "Proposal review recorded",
-            body: `${record.snapshot.workbook.name} was ${input.decision}d by ${input.reviewer}.`,
+            body: `${record.snapshot.workbook.name} was ${input.decision}d by ${reviewer}.`,
             action: input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
             createdAt: reviewedAt,
             workbookId: input.workbookId,
@@ -1105,6 +1142,13 @@ export function createFileStoreBackend(): StoreBackend {
       reviewer: string;
       comment?: string;
     }): Promise<MutationResult> {
+      const store = await readStore();
+      const auth = await authorizeReviewerMutation(store, "item_review", input.reviewer);
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" };
+      }
+
+      const reviewer = auth.reviewer.displayName;
       const reviewedAt = new Date().toISOString();
 
       if (input.workbookId === demoSnapshotState.workbook.id) {
@@ -1127,7 +1171,7 @@ export function createFileStoreBackend(): StoreBackend {
             ? {
                 ...entry,
                 status: itemDecisionToStatus(input.decision),
-                reviewer: input.reviewer,
+                reviewer,
                 reviewedAt,
                 reviewComment: input.comment,
               }
@@ -1140,7 +1184,7 @@ export function createFileStoreBackend(): StoreBackend {
             ...demoSnapshotState.proposal,
             diff: nextDiff,
             status: deriveProposalStatus(nextDiff),
-            reviewer: input.reviewer,
+            reviewer,
             reviewedAt,
             reviewComment: input.comment,
           },
@@ -1149,7 +1193,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.reviewer,
+              actor: reviewer,
               action:
                 input.decision === "approve"
                   ? "proposal.item.approved"
@@ -1164,9 +1208,9 @@ export function createFileStoreBackend(): StoreBackend {
 
         addDemoNotification(
           createReviewerNotification({
-            reviewer: input.reviewer,
+            reviewer,
             title: "Proposal item reviewed",
-            body: `${demoSnapshotState.workbook.name} item ${input.diffId} was ${input.decision}d by ${input.reviewer}.`,
+            body: `${demoSnapshotState.workbook.name} item ${input.diffId} was ${input.decision}d by ${reviewer}.`,
             action:
               input.decision === "approve"
                 ? "proposal.item.approved"
@@ -1214,7 +1258,7 @@ export function createFileStoreBackend(): StoreBackend {
             ? {
                 ...entry,
                 status: itemDecisionToStatus(input.decision),
-                reviewer: input.reviewer,
+                reviewer,
                 reviewedAt,
                 reviewComment: input.comment,
               }
@@ -1227,7 +1271,7 @@ export function createFileStoreBackend(): StoreBackend {
             ...record.snapshot.proposal,
             diff: nextDiff,
             status: deriveProposalStatus(nextDiff),
-            reviewer: input.reviewer,
+            reviewer,
             reviewedAt,
             reviewComment: input.comment,
           },
@@ -1236,7 +1280,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.reviewer,
+              actor: reviewer,
               action:
                 input.decision === "approve"
                   ? "proposal.item.approved"
@@ -1252,9 +1296,9 @@ export function createFileStoreBackend(): StoreBackend {
         store.notifications = store.notifications ?? [];
         store.notifications.unshift(
           createReviewerNotification({
-            reviewer: input.reviewer,
+            reviewer,
             title: "Proposal item reviewed",
-            body: `${record.snapshot.workbook.name} item ${input.diffId} was ${input.decision}d by ${input.reviewer}.`,
+            body: `${record.snapshot.workbook.name} item ${input.diffId} was ${input.decision}d by ${reviewer}.`,
             action:
               input.decision === "approve"
                 ? "proposal.item.approved"
@@ -1280,6 +1324,13 @@ export function createFileStoreBackend(): StoreBackend {
       replyToCommentId?: string;
       mentions?: string[];
     }): Promise<MutationResult> {
+      const store = await readStore();
+      const auth = await authorizeReviewerMutation(store, "comment", input.author);
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" };
+      }
+
+      const author = auth.reviewer.displayName;
       const createdAt = new Date().toISOString();
 
       if (input.workbookId === demoSnapshotState.workbook.id) {
@@ -1305,7 +1356,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.author,
+              actor: author,
               action: "proposal.item.commented",
               detail: `Comment added to proposal item ${input.diffId}.`,
               createdAt,
@@ -1319,7 +1370,7 @@ export function createFileStoreBackend(): StoreBackend {
           proposalId: demoSnapshotState.proposal.id,
           proposalItemId: input.diffId,
           proposalCell: appended.proposalCell,
-          author: input.author,
+          author,
           comment: appended.comment,
           repliedToComment: appended.repliedToComment,
         })) {
@@ -1359,7 +1410,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.author,
+              actor: author,
               action: "proposal.item.commented",
               detail: `Comment added to proposal item ${input.diffId}.`,
               createdAt,
@@ -1374,7 +1425,7 @@ export function createFileStoreBackend(): StoreBackend {
           proposalId: record.snapshot.proposal.id,
           proposalItemId: input.diffId,
           proposalCell: appended.proposalCell,
-          author: input.author,
+          author,
           comment: appended.comment,
           repliedToComment: appended.repliedToComment,
         });
@@ -1393,6 +1444,13 @@ export function createFileStoreBackend(): StoreBackend {
       links: WorkbookSketchBoard["links"];
       notes?: string;
     }): Promise<SketchBoardMutationResult> {
+      const store = await readStore();
+      const auth = await authorizeReviewerMutation(store, "sketch_write", input.updatedBy);
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" };
+      }
+
+      const updatedBy = auth.reviewer.displayName;
       const updatedAt = new Date().toISOString();
 
       if (input.workbookId === demoSnapshotState.workbook.id) {
@@ -1401,7 +1459,7 @@ export function createFileStoreBackend(): StoreBackend {
           workbookId: demoSnapshotState.workbook.id,
           title: input.title.trim() || `${demoSnapshotState.workbook.name} Sketch Board`,
           updatedAt,
-          updatedBy: input.updatedBy,
+          updatedBy,
           nodes: [...input.nodes],
           links: [...input.links],
           notes: input.notes?.trim() || undefined,
@@ -1418,7 +1476,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.updatedBy,
+              actor: updatedBy,
               action: "sketch.updated",
               detail: "Workbook sketch board updated.",
               createdAt: updatedAt,
@@ -1442,7 +1500,7 @@ export function createFileStoreBackend(): StoreBackend {
           workbookId: record.snapshot.workbook.id,
           title: input.title.trim() || `${record.snapshot.workbook.name} Sketch Board`,
           updatedAt,
-          updatedBy: input.updatedBy,
+          updatedBy,
           nodes: [...input.nodes],
           links: [...input.links],
           notes: input.notes?.trim() || undefined,
@@ -1459,7 +1517,7 @@ export function createFileStoreBackend(): StoreBackend {
             {
               id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
               workbookId: input.workbookId,
-              actor: input.updatedBy,
+              actor: updatedBy,
               action: "sketch.updated",
               detail: "Workbook sketch board updated.",
               createdAt: updatedAt,
@@ -1491,11 +1549,23 @@ export function createFileStoreBackend(): StoreBackend {
       sortDirection: WorkbookLibraryView["sortDirection"];
       pinned?: boolean;
     }): Promise<LibraryViewMutationResult> {
+      const store = await readStore();
+      const auth = await authorizeReviewerMutation(
+        store,
+        "library_view_write",
+        input.updatedBy,
+      );
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" };
+      }
+
+      const updatedBy = auth.reviewer.displayName;
       if (input.id.startsWith("demo_")) {
         const existingView = demoLibraryViews.find((entry) => entry.id === input.id);
         const view = normalizeLibraryView({
           ...input,
           updatedAt: new Date().toISOString(),
+          updatedBy,
           archivedAt: existingView?.archivedAt,
           archivedBy: existingView?.archivedBy,
         });
@@ -1514,6 +1584,7 @@ export function createFileStoreBackend(): StoreBackend {
         const view = normalizeLibraryView({
           ...input,
           updatedAt: new Date().toISOString(),
+          updatedBy,
           archivedAt: existingView?.archivedAt,
           archivedBy: existingView?.archivedBy,
         });
@@ -1532,6 +1603,17 @@ export function createFileStoreBackend(): StoreBackend {
       id: string;
       archivedBy: string;
     }): Promise<LibraryViewMutationResult> {
+      const store = await readStore();
+      const auth = await authorizeReviewerMutation(
+        store,
+        "library_view_write",
+        input.archivedBy,
+      );
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" };
+      }
+
+      const archivedBy = auth.reviewer.displayName;
       const archivedAt = new Date().toISOString();
 
       if (input.id.startsWith("demo_")) {
@@ -1544,9 +1626,9 @@ export function createFileStoreBackend(): StoreBackend {
         const view = normalizeLibraryView({
           ...existingView,
           updatedAt: archivedAt,
-          updatedBy: input.archivedBy,
+          updatedBy: archivedBy,
           archivedAt,
-          archivedBy: input.archivedBy,
+          archivedBy,
         });
 
         demoLibraryViews = [
@@ -1567,9 +1649,9 @@ export function createFileStoreBackend(): StoreBackend {
         const view = normalizeLibraryView({
           ...existingView,
           updatedAt: archivedAt,
-          updatedBy: input.archivedBy,
+          updatedBy: archivedBy,
           archivedAt,
-          archivedBy: input.archivedBy,
+          archivedBy,
         });
 
         store.libraryViews = [
@@ -1584,6 +1666,12 @@ export function createFileStoreBackend(): StoreBackend {
     async deleteStoredWorkbookLibraryView(input: {
       id: string;
     }): Promise<LibraryViewDeletionResult> {
+      const store = await readStore();
+      const auth = await authorizeReviewerMutation(store, "library_view_write");
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" };
+      }
+
       if (input.id.startsWith("demo_")) {
         const existingView = demoLibraryViews.find((entry) => entry.id === input.id);
 
@@ -1750,8 +1838,15 @@ export function createFileStoreBackend(): StoreBackend {
       actor: string;
       note?: string;
     }): Promise<MutationResult> {
+      const store = await readStore();
+      const auth = await authorizeReviewerMutation(store, "apply", input.actor);
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" };
+      }
+
+      const actor = auth.reviewer.displayName;
       if (input.workbookId === demoSnapshotState.workbook.id) {
-        const nextSnapshot = appendApplyResult(demoSnapshotState, input.actor, input.note);
+        const nextSnapshot = appendApplyResult(demoSnapshotState, actor, input.note);
 
         if (!nextSnapshot) {
           return mutationFailure(
@@ -1765,7 +1860,7 @@ export function createFileStoreBackend(): StoreBackend {
 
         addDemoNotification(
           createReviewerNotification({
-            reviewer: input.actor,
+            reviewer: actor,
             title: "Approved items applied",
             body: `${demoSnapshotState.workbook.name} was advanced to ${nextSnapshot.workbook.latestVersionId}.`,
             action: "proposal.applied",
@@ -1785,7 +1880,7 @@ export function createFileStoreBackend(): StoreBackend {
           return mutationFailure("not_found");
         }
 
-        const nextSnapshot = appendApplyResult(record.snapshot, input.actor, input.note);
+        const nextSnapshot = appendApplyResult(record.snapshot, actor, input.note);
 
         if (!nextSnapshot) {
           return mutationFailure(
@@ -1800,7 +1895,7 @@ export function createFileStoreBackend(): StoreBackend {
         store.notifications = store.notifications ?? [];
         store.notifications.unshift(
           createReviewerNotification({
-            reviewer: input.actor,
+            reviewer: actor,
             title: "Approved items applied",
             body: `${record.snapshot.workbook.name} was advanced to ${nextSnapshot.workbook.latestVersionId}.`,
             action: "proposal.applied",

@@ -236,6 +236,11 @@ function sendMutationResult(
         error: "Applied proposals are locked from further review changes",
       });
       return;
+    case "forbidden":
+      sendJson(response, 403, {
+        error: "Reviewer does not have permission for this action",
+      });
+      return;
     case "review_path_locked":
       sendJson(response, 409, {
         error: "Whole-proposal approval is unavailable after item-level review has started",
@@ -262,7 +267,11 @@ function sendSketchBoardResult(
     return;
   }
 
-  sendJson(response, 404, { error: notFoundMessage });
+  sendJson(
+    response,
+    result.code === "forbidden" ? 403 : 404,
+    { error: result.code === "forbidden" ? "Reviewer does not have permission for this action" : notFoundMessage },
+  );
 }
 
 function sendTagsResult(
@@ -275,7 +284,11 @@ function sendTagsResult(
     return;
   }
 
-  sendJson(response, 404, { error: notFoundMessage });
+  sendJson(
+    response,
+    result.code === "forbidden" ? 403 : 404,
+    { error: result.code === "forbidden" ? "Reviewer does not have permission for this action" : notFoundMessage },
+  );
 }
 
 function sendLibraryViewResult(
@@ -288,7 +301,11 @@ function sendLibraryViewResult(
     return;
   }
 
-  sendJson(response, 404, { error: notFoundMessage });
+  sendJson(
+    response,
+    result.code === "forbidden" ? 403 : 404,
+    { error: result.code === "forbidden" ? "Reviewer does not have permission for this action" : notFoundMessage },
+  );
 }
 
 function sendLibraryViewDeleteResult(
@@ -301,7 +318,11 @@ function sendLibraryViewDeleteResult(
     return;
   }
 
-  sendJson(response, 404, { error: notFoundMessage });
+  sendJson(
+    response,
+    result.code === "forbidden" ? 403 : 404,
+    { error: result.code === "forbidden" ? "Reviewer does not have permission for this action" : notFoundMessage },
+  );
 }
 
 function sendReviewerNotificationResult(

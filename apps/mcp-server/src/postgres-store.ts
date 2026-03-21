@@ -5,6 +5,7 @@ import type {
   ReviewerNotification,
   ReviewerNotificationFeed,
   ReviewerProfile,
+  ReviewerRole,
   ReviewerSession,
   WorkbookLibraryView,
   ProposalDetail,
@@ -20,6 +21,7 @@ import type {
   WorkbookSummary,
   WorkbookVersionSummary,
 } from "../../../packages/shared/src/index.js";
+import { authorizeReviewerAction } from "./authorization.js";
 import { parseWorkbookReviewSnapshot } from "./parser.js";
 import { withTransaction } from "./postgres.js";
 import type {
@@ -206,6 +208,14 @@ function normalizeReviewer(value: string) {
   return value.trim().toLowerCase().replace(/^@/, "");
 }
 
+function normalizeReviewerRole(role?: string): ReviewerRole | undefined {
+  if (role === "Approver" || role === "Reviewer" || role === "Analyst") {
+    return role;
+  }
+
+  return undefined;
+}
+
 function normalizeReviewerProfile(row: {
   handle: string;
   name: string;
@@ -218,7 +228,7 @@ function normalizeReviewerProfile(row: {
     id: normalizeReviewer(row.handle),
     handle: normalizeReviewer(row.handle),
     displayName: row.name,
-    role: row.role,
+    role: normalizeReviewerRole(row.role),
     team: row.team ?? undefined,
     email: row.email ?? undefined,
     active: row.active,
@@ -314,6 +324,16 @@ async function ensureCurrentReviewerSession(
     updatedAt: row.updated_at ?? row.signed_in_at,
     currentProfile,
   };
+}
+
+async function authorizeReviewerMutation(
+  client: PgClient,
+  permission: Parameters<typeof authorizeReviewerAction>[1],
+  actor?: string,
+) {
+  const reviewers = await ensureReviewerProfiles(client);
+  const session = await ensureCurrentReviewerSession(client, reviewers);
+  return authorizeReviewerAction(session, permission, actor);
 }
 
 function buildCommentNotifications(input: {
@@ -1362,6 +1382,12 @@ export function createPostgresStoreBackend(): StoreBackend {
       updatedBy: string;
     }): Promise<TagsMutationResult> {
       return withTransaction(async (client) => {
+        const auth = await authorizeReviewerMutation(client, "tag_write", input.updatedBy);
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const updatedBy = auth.reviewer.displayName;
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
           return { ok: false, code: "not_found" };
@@ -1379,7 +1405,7 @@ export function createPostgresStoreBackend(): StoreBackend {
         await appendAuditEvent(
           client,
           input.workbookId,
-          input.updatedBy,
+          updatedBy,
           "workbook.tags.updated",
           `Workbook tags updated to ${tags.length > 0 ? tags.join(", ") : "none"}.`,
         );
@@ -1390,6 +1416,12 @@ export function createPostgresStoreBackend(): StoreBackend {
 
     async updateStoredProposalDecision(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
+        const auth = await authorizeReviewerMutation(client, "proposal_review", input.reviewer);
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const reviewer = auth.reviewer.displayName;
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
           return mutationFailure("not_found");
@@ -1407,7 +1439,7 @@ export function createPostgresStoreBackend(): StoreBackend {
         const nextDiff = current.proposal.diff.map((entry) => ({
           ...entry,
           status: itemDecisionToStatus(input.decision),
-          reviewer: input.reviewer,
+          reviewer,
           reviewedAt,
           reviewComment: input.comment,
         }));
@@ -1417,18 +1449,18 @@ export function createPostgresStoreBackend(): StoreBackend {
           `update proposals
            set status = $2, reviewer = $3, reviewed_at = $4, review_comment = $5
            where id = $1`,
-          [current.proposal.id, nextStatus, input.reviewer, reviewedAt, input.comment ?? null],
+          [current.proposal.id, nextStatus, reviewer, reviewedAt, input.comment ?? null],
         );
         await client.query(
           `update proposal_items
            set status = $2, reviewer = $3, reviewed_at = $4, review_comment = $5
            where proposal_id = $1`,
-          [current.proposal.id, itemDecisionToStatus(input.decision), input.reviewer, reviewedAt, input.comment ?? null],
+          [current.proposal.id, itemDecisionToStatus(input.decision), reviewer, reviewedAt, input.comment ?? null],
         );
         await appendAuditEvent(
           client,
           input.workbookId,
-          input.reviewer,
+          reviewer,
           input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
           input.comment?.trim() ||
             (input.decision === "approve"
@@ -1436,9 +1468,9 @@ export function createPostgresStoreBackend(): StoreBackend {
               : "Proposal rejected in the PostgreSQL workflow."),
         );
         await appendReviewerNotification(client, {
-          reviewer: input.reviewer,
+          reviewer,
           title: "Proposal review recorded",
-          body: `${current.workbook.name} was ${input.decision}d by ${input.reviewer}.`,
+          body: `${current.workbook.name} was ${input.decision}d by ${reviewer}.`,
           action: input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
           createdAt: reviewedAt,
           workbookId: input.workbookId,
@@ -1452,6 +1484,12 @@ export function createPostgresStoreBackend(): StoreBackend {
 
     async updateStoredProposalItemDecision(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
+        const auth = await authorizeReviewerMutation(client, "item_review", input.reviewer);
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const reviewer = auth.reviewer.displayName;
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
           return mutationFailure("not_found");
@@ -1474,7 +1512,7 @@ export function createPostgresStoreBackend(): StoreBackend {
           `update proposal_items
            set status = $2, reviewer = $3, reviewed_at = $4, review_comment = $5
            where id = $1`,
-          [input.diffId, itemDecisionToStatus(input.decision), input.reviewer, reviewedAt, input.comment ?? null],
+          [input.diffId, itemDecisionToStatus(input.decision), reviewer, reviewedAt, input.comment ?? null],
         );
 
         const nextDiff = current.proposal.diff.map((entry) =>
@@ -1482,7 +1520,7 @@ export function createPostgresStoreBackend(): StoreBackend {
             ? {
                 ...entry,
                 status: itemDecisionToStatus(input.decision),
-                reviewer: input.reviewer,
+                reviewer,
                 reviewedAt,
                 reviewComment: input.comment,
               }
@@ -1494,20 +1532,20 @@ export function createPostgresStoreBackend(): StoreBackend {
           `update proposals
            set status = $2, reviewer = $3, reviewed_at = $4, review_comment = $5
            where id = $1`,
-          [current.proposal.id, nextStatus, input.reviewer, reviewedAt, input.comment ?? null],
+          [current.proposal.id, nextStatus, reviewer, reviewedAt, input.comment ?? null],
         );
         await appendAuditEvent(
           client,
           input.workbookId,
-          input.reviewer,
+          reviewer,
           input.decision === "approve" ? "proposal.item.approved" : "proposal.item.rejected",
           input.comment?.trim() ||
             `${input.decision === "approve" ? "Approved" : "Rejected"} proposal item ${input.diffId}.`,
         );
         await appendReviewerNotification(client, {
-          reviewer: input.reviewer,
+          reviewer,
           title: "Proposal item reviewed",
-          body: `${current.workbook.name} item ${input.diffId} was ${input.decision}d by ${input.reviewer}.`,
+          body: `${current.workbook.name} item ${input.diffId} was ${input.decision}d by ${reviewer}.`,
           action:
             input.decision === "approve"
               ? "proposal.item.approved"
@@ -1533,6 +1571,12 @@ export function createPostgresStoreBackend(): StoreBackend {
       mentions?: string[];
     }): Promise<MutationResult> {
       return withTransaction(async (client) => {
+        const auth = await authorizeReviewerMutation(client, "comment", input.author);
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const author = auth.reviewer.displayName;
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
           return mutationFailure("not_found");
@@ -1559,7 +1603,7 @@ export function createPostgresStoreBackend(): StoreBackend {
         const createdAt = new Date().toISOString();
         const comment = {
           id: createCommentId(input.diffId),
-          author: input.author,
+          author,
           body: input.body,
           createdAt,
           parentCommentId: replyToCommentId,
@@ -1579,7 +1623,7 @@ export function createPostgresStoreBackend(): StoreBackend {
         await appendAuditEvent(
           client,
           input.workbookId,
-          input.author,
+          author,
           "proposal.item.commented",
           `Comment added to proposal item ${input.diffId}.`,
         );
@@ -1589,7 +1633,7 @@ export function createPostgresStoreBackend(): StoreBackend {
           proposalId: current.proposal.id,
           proposalItemId: input.diffId,
           proposalCell: existing.cell,
-          author: input.author,
+          author,
           comment,
           repliedToComment,
         })) {
@@ -1610,6 +1654,12 @@ export function createPostgresStoreBackend(): StoreBackend {
       notes?: string;
     }): Promise<SketchBoardMutationResult> {
       return withTransaction(async (client) => {
+        const auth = await authorizeReviewerMutation(client, "sketch_write", input.updatedBy);
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const updatedBy = auth.reviewer.displayName;
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
           return { ok: false, code: "not_found" };
@@ -1621,7 +1671,7 @@ export function createPostgresStoreBackend(): StoreBackend {
           workbookId: current.workbook.id,
           title: input.title.trim() || `${current.workbook.name} Sketch Board`,
           updatedAt,
-          updatedBy: input.updatedBy,
+          updatedBy,
           nodes: [...input.nodes],
           links: [...input.links],
           notes: input.notes?.trim() || undefined,
@@ -1636,7 +1686,7 @@ export function createPostgresStoreBackend(): StoreBackend {
         await appendAuditEvent(
           client,
           input.workbookId,
-          input.updatedBy,
+          updatedBy,
           "sketch.updated",
           "Workbook sketch board updated.",
         );
@@ -1700,6 +1750,12 @@ export function createPostgresStoreBackend(): StoreBackend {
       pinned?: boolean;
     }): Promise<LibraryViewMutationResult> {
       return withTransaction(async (client) => {
+        const auth = await authorizeReviewerMutation(client, "library_view_write", input.updatedBy);
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const updatedBy = auth.reviewer.displayName;
         const updatedAt = new Date().toISOString();
         const existing = await client.query<{
           archived_at: string | null;
@@ -1711,6 +1767,7 @@ export function createPostgresStoreBackend(): StoreBackend {
         const view = normalizeLibraryView({
           ...input,
           updatedAt,
+          updatedBy,
           archivedAt: existing.rows[0]?.archived_at ?? undefined,
           archivedBy: existing.rows[0]?.archived_by ?? undefined,
         });
@@ -1756,6 +1813,12 @@ export function createPostgresStoreBackend(): StoreBackend {
       archivedBy: string;
     }): Promise<LibraryViewMutationResult> {
       return withTransaction(async (client) => {
+        const auth = await authorizeReviewerMutation(client, "library_view_write", input.archivedBy);
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const archivedBy = auth.reviewer.displayName;
         const existing = await client.query<{
           id: string;
           name: string;
@@ -1786,9 +1849,9 @@ export function createPostgresStoreBackend(): StoreBackend {
           id: existingRow.id,
           name: existingRow.name,
           updatedAt: archivedAt,
-          updatedBy: input.archivedBy,
+          updatedBy: archivedBy,
           archivedAt,
-          archivedBy: input.archivedBy,
+          archivedBy,
           description: existingRow.description ?? undefined,
           searchQuery: existingRow.search_query ?? undefined,
           tags: normalizeWorkbookTags(existingRow.tags_json),
@@ -1815,6 +1878,12 @@ export function createPostgresStoreBackend(): StoreBackend {
       id: string;
     }): Promise<LibraryViewDeletionResult> {
       return withTransaction(async (client) => {
+        const session = await ensureCurrentReviewerSession(client, await ensureReviewerProfiles(client));
+        const auth = authorizeReviewerAction(session, "library_view_write");
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
         const result = await client.query<{ id: string }>(
           `delete from workbook_library_views where id = $1 returning id`,
           [input.id],
@@ -1950,6 +2019,12 @@ export function createPostgresStoreBackend(): StoreBackend {
 
     async applyApprovedProposalItems(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
+        const auth = await authorizeReviewerMutation(client, "apply", input.actor);
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const actor = auth.reviewer.displayName;
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
           return mutationFailure("not_found");
@@ -1968,7 +2043,7 @@ export function createPostgresStoreBackend(): StoreBackend {
         const nextVersion: WorkbookVersionSummary = {
           id: nextVersionId(current.workbook.latestVersionId),
           createdAt: reviewedAt,
-          createdBy: input.actor,
+          createdBy: actor,
           note:
             input.note?.trim() ||
             `Applied ${approvedItems.length} approved proposal item${approvedItems.length === 1 ? "" : "s"}.`,
@@ -2016,7 +2091,7 @@ export function createPostgresStoreBackend(): StoreBackend {
                applied_by = $2,
                applied_version_id = $5
            where id = $1`,
-          [current.proposal.id, input.actor, reviewedAt, input.note?.trim() ?? null, nextVersion.id],
+          [current.proposal.id, actor, reviewedAt, input.note?.trim() ?? null, nextVersion.id],
         );
         await client.query(
           `update proposal_items
@@ -2027,13 +2102,13 @@ export function createPostgresStoreBackend(): StoreBackend {
         await appendAuditEvent(
           client,
           input.workbookId,
-          input.actor,
+          actor,
           "proposal.applied",
           input.note?.trim() ||
             `Applied ${approvedItems.length} approved proposal item${approvedItems.length === 1 ? "" : "s"} to workbook version ${nextVersion.id}.`,
         );
         await appendReviewerNotification(client, {
-          reviewer: input.actor,
+          reviewer: actor,
           title: "Approved items applied",
           body: `${current.workbook.name} was advanced to ${nextVersion.id}.`,
           action: "proposal.applied",

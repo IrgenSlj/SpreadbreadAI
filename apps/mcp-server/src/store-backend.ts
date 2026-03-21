@@ -25,6 +25,7 @@ export type MutationFailureCode =
   | "comment_not_found"
   | "item_not_found"
   | "locked"
+  | "forbidden"
   | "not_found"
   | "nothing_to_apply"
   | "review_path_locked";
@@ -35,19 +36,19 @@ export type MutationResult =
 
 export type TagsMutationResult =
   | { ok: true; tags: string[] }
-  | { ok: false; code: MutationFailureCode };
+  | { ok: false; code: MutationFailureCode | "forbidden" };
 
 export type SketchBoardMutationResult =
   | { ok: true; sketchBoard: WorkbookSketchBoard }
-  | { ok: false; code: MutationFailureCode };
+  | { ok: false; code: MutationFailureCode | "forbidden" };
 
 export type LibraryViewMutationResult =
   | { ok: true; view: WorkbookLibraryView }
-  | { ok: false; code: MutationFailureCode };
+  | { ok: false; code: MutationFailureCode | "forbidden" };
 
 export type LibraryViewDeletionResult =
   | { ok: true; deletedId: string }
-  | { ok: false; code: MutationFailureCode };
+  | { ok: false; code: MutationFailureCode | "forbidden" };
 
 export type ReviewerNotificationMutationResult =
   | { ok: true; notification: ReviewerNotification }

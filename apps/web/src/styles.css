@@ -1300,6 +1300,69 @@ h2 {
   color: var(--green-strong);
 }
 
+.authorization-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #c9dbc8;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff, #f5faf5);
+}
+
+.authorization-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: start;
+}
+
+.authorization-panel-head span {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--green);
+}
+
+.authorization-panel-head strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 0.96rem;
+}
+
+.authorization-panel-head small {
+  color: var(--muted);
+  text-align: right;
+  line-height: 1.35;
+}
+
+.authorization-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.authorization-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid #c8ddc7;
+  border-radius: 999px;
+  background: #edf8ef;
+  color: var(--green-strong);
+  font-size: 0.74rem;
+}
+
+.authorization-note {
+  margin: 0;
+  color: var(--warning);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
 .sheet-list article,
 .named-range-list article,
 .proposal-meta article,
@@ -1541,6 +1604,12 @@ h2 {
   z-index: 2;
 }
 
+.sketch-node-card.locked {
+  cursor: not-allowed;
+  border-color: #c9dbc8;
+  background: linear-gradient(180deg, #fafdf9, #f4f8f4);
+}
+
 .sketch-link-editor {
   display: grid;
   gap: 12px;
@@ -1645,6 +1714,15 @@ h2 {
   background: #fff;
   color: var(--text);
   padding: 9px 11px;
+}
+
+.sketch-link-item label select:disabled,
+.sketch-link-item label input:disabled,
+.sketch-controls input:disabled,
+.sketch-controls textarea:disabled,
+.sketch-node-list input:disabled {
+  background: #f4f8f4;
+  color: var(--muted);
 }
 
 .node {
@@ -1777,6 +1855,14 @@ h2 {
 
   .reviewer-signin-row {
     grid-template-columns: 1fr;
+  }
+
+  .authorization-panel-head {
+    flex-direction: column;
+  }
+
+  .authorization-panel-head small {
+    text-align: left;
   }
 
   .decision-button,
