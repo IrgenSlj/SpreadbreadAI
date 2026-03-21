@@ -4,6 +4,8 @@ import {
   type ApprovalDecision,
   type ReviewerNotification,
   type ReviewerNotificationFeed,
+  type ReviewerProfile,
+  type ReviewerSession,
   type WorkbookLibraryView,
   demoReviewSnapshot,
   type ProposalDetail,
@@ -21,6 +23,7 @@ import type {
   MutationFailureCode,
   MutationResult,
   ReviewerNotificationMutationResult,
+  ReviewerSessionMutationResult,
   SketchBoardMutationResult,
   TagsMutationResult,
   StoreBackend,
@@ -31,6 +34,9 @@ interface WorkbookStoreFile {
   records: StoredWorkbookRecord[];
   libraryViews?: WorkbookLibraryView[];
   notifications?: ReviewerNotification[];
+  reviewers?: ReviewerProfile[];
+  reviewerProfiles?: ReviewerProfile[];
+  currentReviewerSession?: ReviewerSession;
 }
 
 const dataRoot = path.resolve(process.cwd(), ".data");
@@ -40,6 +46,43 @@ let storeMutationChain = Promise.resolve();
 let demoSnapshotState = structuredClone(demoReviewSnapshot);
 let demoLibraryViews: WorkbookLibraryView[] = [];
 let demoNotifications: ReviewerNotification[] = [];
+const reviewerSeedTimestamp = "2026-01-01T00:00:00.000Z";
+
+const defaultReviewerProfiles: ReviewerProfile[] = [
+  {
+    id: "finance_manager",
+    handle: "finance_manager",
+    displayName: "Finance Manager",
+    role: "Approver",
+    team: "FP&A",
+    email: "finance.manager@spreadbread.local",
+    active: true,
+    createdAt: reviewerSeedTimestamp,
+    updatedAt: reviewerSeedTimestamp,
+  },
+  {
+    id: "controller",
+    handle: "controller",
+    displayName: "Controller",
+    role: "Reviewer",
+    team: "Accounting",
+    email: "controller@spreadbread.local",
+    active: true,
+    createdAt: reviewerSeedTimestamp,
+    updatedAt: reviewerSeedTimestamp,
+  },
+  {
+    id: "analyst_1",
+    handle: "analyst_1",
+    displayName: "Analyst 1",
+    role: "Analyst",
+    team: "Finance Ops",
+    email: "analyst.1@spreadbread.local",
+    active: true,
+    createdAt: reviewerSeedTimestamp,
+    updatedAt: reviewerSeedTimestamp,
+  },
+];
 
 function sanitizeFileName(fileName: string) {
   const trimmed = fileName.trim();
@@ -256,6 +299,152 @@ function createReviewerNotification(input: {
 
 function normalizeReviewer(value: string) {
   return value.trim().toLowerCase().replace(/^@/, "");
+}
+
+function createReviewerProfile(input: {
+  id?: string;
+  handle: string;
+  displayName: string;
+  role?: string;
+  team?: string;
+  email?: string;
+  color?: string;
+  active?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}): ReviewerProfile {
+  const normalizedHandle = normalizeReviewer(input.handle);
+  const normalizedId = normalizeReviewer(input.id ?? normalizedHandle);
+  const createdAt = input.createdAt ?? reviewerSeedTimestamp;
+  const updatedAt = input.updatedAt ?? createdAt;
+
+  return {
+    id: normalizedId,
+    handle: normalizedHandle,
+    displayName: input.displayName.trim(),
+    role: input.role?.trim() || undefined,
+    team: input.team?.trim() || undefined,
+    email: input.email?.trim() || undefined,
+    color: input.color?.trim() || undefined,
+    active: input.active ?? true,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function normalizeReviewerProfile(value: unknown): ReviewerProfile | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const handle =
+    typeof candidate.handle === "string"
+      ? candidate.handle
+      : typeof candidate.id === "string"
+        ? candidate.id
+        : "";
+  const displayName =
+    typeof candidate.displayName === "string"
+      ? candidate.displayName
+      : typeof candidate.name === "string"
+        ? candidate.name
+        : handle;
+
+  if (!handle || !displayName) {
+    return null;
+  }
+
+  const profile = createReviewerProfile({
+    id: typeof candidate.id === "string" ? candidate.id : handle,
+    handle,
+    displayName,
+    role: typeof candidate.role === "string" ? candidate.role : undefined,
+    team: typeof candidate.team === "string" ? candidate.team : undefined,
+    email: typeof candidate.email === "string" ? candidate.email : undefined,
+    color: typeof candidate.color === "string" ? candidate.color : undefined,
+    active: typeof candidate.active === "boolean" ? candidate.active : true,
+    createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : undefined,
+    updatedAt: typeof candidate.updatedAt === "string" ? candidate.updatedAt : undefined,
+  });
+
+  return profile.active ? profile : null;
+}
+
+function normalizeReviewerProfiles(reviewers: unknown[] | undefined): ReviewerProfile[] {
+  const profiles = reviewers && reviewers.length > 0 ? reviewers : defaultReviewerProfiles;
+  const seen = new Set<string>();
+
+  return profiles.flatMap((reviewer) => {
+    const profile = normalizeReviewerProfile(reviewer);
+    if (!profile) {
+      return [];
+    }
+
+    if (seen.has(profile.id)) {
+      return [];
+    }
+
+    seen.add(profile.id);
+    return [profile];
+  });
+}
+
+function normalizeReviewerSession(
+  value: unknown,
+  profiles: ReviewerProfile[],
+): ReviewerSession | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const handle =
+    typeof candidate.reviewerProfileId === "string"
+      ? normalizeReviewer(candidate.reviewerProfileId)
+      : typeof candidate.reviewerHandle === "string"
+        ? normalizeReviewer(candidate.reviewerHandle)
+        : typeof candidate.reviewer === "object" &&
+            candidate.reviewer !== null &&
+            typeof (candidate.reviewer as Record<string, unknown>).handle === "string"
+          ? normalizeReviewer((candidate.reviewer as Record<string, unknown>).handle as string)
+          : "";
+  const currentProfile =
+    profiles.find((profile) => profile.id === handle) ??
+    profiles.find((profile) => profile.handle === handle) ??
+    null;
+
+  if (!currentProfile) {
+    return null;
+  }
+
+  const signedInAt =
+    typeof candidate.signedInAt === "string" && candidate.signedInAt
+      ? candidate.signedInAt
+      : reviewerSeedTimestamp;
+  const updatedAt =
+    typeof candidate.updatedAt === "string" && candidate.updatedAt
+      ? candidate.updatedAt
+      : signedInAt;
+
+  return {
+    reviewerProfileId: currentProfile.id,
+    signedInAt,
+    updatedAt,
+    currentProfile,
+  };
+}
+
+function defaultReviewerSession(profiles: ReviewerProfile[] = defaultReviewerProfiles): ReviewerSession {
+  const currentProfile = profiles[0] ?? defaultReviewerProfiles[0];
+  const signedInAt = new Date().toISOString();
+
+  return {
+    reviewerProfileId: currentProfile.id,
+    signedInAt,
+    updatedAt: signedInAt,
+    currentProfile,
+  };
 }
 
 function buildCommentNotifications(input: {
@@ -523,6 +712,59 @@ function mutationFailure(code: MutationFailureCode): MutationResult {
 
 export function createFileStoreBackend(): StoreBackend {
   return {
+    async listReviewerProfiles(): Promise<ReviewerProfile[]> {
+      const store = await readStore();
+      return normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+    },
+
+    async getReviewerSession(): Promise<ReviewerSession | null> {
+      const store = await readStore();
+      const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+      const session =
+        normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+        defaultReviewerSession(reviewers);
+
+      if (!session.currentProfile) {
+        return null;
+      }
+
+      return session;
+    },
+
+    async setReviewerSession(input: {
+      reviewerProfileId?: string;
+      reviewerHandle?: string;
+    }): Promise<ReviewerSessionMutationResult> {
+      const reviewerIdentifier = normalizeReviewer(
+        input.reviewerProfileId ?? input.reviewerHandle ?? "",
+      );
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+        const reviewer =
+          reviewers.find((entry) => entry.id === reviewerIdentifier) ??
+          reviewers.find((entry) => entry.handle === reviewerIdentifier);
+
+        if (!reviewer) {
+          return { ok: false, code: "not_found" } as const;
+        }
+
+        const session = {
+          reviewerProfileId: reviewer.id,
+          signedInAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          currentProfile: reviewer,
+        };
+
+        store.reviewers = reviewers;
+        store.reviewerProfiles = reviewers;
+        store.currentReviewerSession = session;
+        await writeStore(store);
+        return { ok: true, session };
+      });
+    },
+
     async listStoredWorkbooks(): Promise<WorkbookSummary[]> {
       const store = await readStore();
       const persisted = store.records.map((record) => ({

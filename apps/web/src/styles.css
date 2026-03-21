@@ -1226,7 +1226,8 @@ h2 {
 }
 
 .review-form input,
-.review-form textarea {
+.review-form textarea,
+.review-form select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -1237,6 +1238,7 @@ h2 {
 
 .review-form input:focus,
 .review-form textarea:focus,
+.review-form select:focus,
 .library-toolbar input:focus,
 .library-toolbar select:focus,
 .comment-filter-controls input:focus,
@@ -1254,6 +1256,18 @@ h2 {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.reviewer-signin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.reviewer-signin-row .decision-button {
+  min-height: 42px;
+  align-self: end;
 }
 
 .decision-button {
@@ -1759,6 +1773,10 @@ h2 {
   .comment-filter-head {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .reviewer-signin-row {
+    grid-template-columns: 1fr;
   }
 
   .decision-button,

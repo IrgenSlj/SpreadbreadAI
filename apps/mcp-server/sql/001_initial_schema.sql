@@ -164,3 +164,22 @@ create index if not exists reviewer_notifications_reviewer_idx
 
 create index if not exists reviewer_notifications_unread_idx
   on reviewer_notifications (reviewer, read_at, created_at desc);
+
+create table if not exists reviewer_profiles (
+  handle text primary key,
+  name text not null,
+  role text not null,
+  team text,
+  email text,
+  active boolean not null default true
+);
+
+create table if not exists reviewer_sessions (
+  session_key text primary key,
+  reviewer_handle text not null references reviewer_profiles(handle) on delete cascade,
+  signed_in_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+
+alter table if exists reviewer_sessions
+  add column if not exists updated_at timestamptz not null default now();

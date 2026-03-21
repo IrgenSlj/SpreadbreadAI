@@ -5,6 +5,7 @@ import type {
   MutationResult,
   LibraryViewDeletionResult,
   ReviewerNotificationMutationResult,
+  ReviewerSessionMutationResult,
   TagsMutationResult,
   LibraryViewMutationResult,
   SketchBoardMutationResult,
@@ -18,6 +19,7 @@ export type {
   MutationFailureCode,
   MutationResult,
   ReviewerNotificationMutationResult,
+  ReviewerSessionMutationResult,
   TagsMutationResult,
   SketchBoardMutationResult,
   StoredWorkbookRecord,
@@ -55,6 +57,21 @@ export async function getStoreRuntimeStatus() {
 
 export function getStoreBackend() {
   return backend;
+}
+
+export function listReviewerProfiles() {
+  return backend.listReviewerProfiles();
+}
+
+export function getReviewerSession() {
+  return backend.getReviewerSession();
+}
+
+export function setReviewerSession(input: {
+  reviewerProfileId?: string;
+  reviewerHandle?: string;
+}): Promise<ReviewerSessionMutationResult> {
+  return backend.setReviewerSession(input);
 }
 
 export function listStoredWorkbooks() {

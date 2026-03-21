@@ -4,6 +4,8 @@ import type {
   ApprovalDecision,
   ReviewerNotification,
   ReviewerNotificationFeed,
+  ReviewerProfile,
+  ReviewerSession,
   WorkbookLibraryView,
   ProposalDetail,
   ProposalDiffEntry,
@@ -26,6 +28,7 @@ import type {
   MutationResult,
   LibraryViewMutationResult,
   ReviewerNotificationMutationResult,
+  ReviewerSessionMutationResult,
   SketchBoardMutationResult,
   TagsMutationResult,
   StoreBackend,
@@ -38,6 +41,43 @@ type PgClient = Parameters<typeof withTransaction>[0] extends (client: infer T) 
 
 const dataRoot = path.resolve(process.cwd(), ".data");
 const uploadsDir = path.join(dataRoot, "uploads");
+const reviewerSeedTimestamp = "2026-01-01T00:00:00.000Z";
+const currentReviewerSessionKey = "current";
+const defaultReviewerProfiles: ReviewerProfile[] = [
+  {
+    id: "finance_manager",
+    handle: "finance_manager",
+    displayName: "Finance Manager",
+    role: "Approver",
+    team: "FP&A",
+    email: "finance.manager@spreadbread.local",
+    active: true,
+    createdAt: reviewerSeedTimestamp,
+    updatedAt: reviewerSeedTimestamp,
+  },
+  {
+    id: "controller",
+    handle: "controller",
+    displayName: "Controller",
+    role: "Reviewer",
+    team: "Accounting",
+    email: "controller@spreadbread.local",
+    active: true,
+    createdAt: reviewerSeedTimestamp,
+    updatedAt: reviewerSeedTimestamp,
+  },
+  {
+    id: "analyst_1",
+    handle: "analyst_1",
+    displayName: "Analyst 1",
+    role: "Analyst",
+    team: "Finance Ops",
+    email: "analyst.1@spreadbread.local",
+    active: true,
+    createdAt: reviewerSeedTimestamp,
+    updatedAt: reviewerSeedTimestamp,
+  },
+];
 
 function sanitizeFileName(fileName: string) {
   const trimmed = fileName.trim();
@@ -164,6 +204,116 @@ function createReviewerNotification(input: {
 
 function normalizeReviewer(value: string) {
   return value.trim().toLowerCase().replace(/^@/, "");
+}
+
+function normalizeReviewerProfile(row: {
+  handle: string;
+  name: string;
+  role: string;
+  team: string | null;
+  email: string | null;
+  active: boolean;
+}): ReviewerProfile {
+  return {
+    id: normalizeReviewer(row.handle),
+    handle: normalizeReviewer(row.handle),
+    displayName: row.name,
+    role: row.role,
+    team: row.team ?? undefined,
+    email: row.email ?? undefined,
+    active: row.active,
+    createdAt: reviewerSeedTimestamp,
+    updatedAt: reviewerSeedTimestamp,
+  };
+}
+
+async function ensureReviewerProfiles(client: PgClient): Promise<ReviewerProfile[]> {
+  for (const reviewer of defaultReviewerProfiles) {
+    await client.query(
+      `insert into reviewer_profiles (handle, name, role, team, email, active)
+       values ($1, $2, $3, $4, $5, $6)
+       on conflict (handle) do update set
+         name = excluded.name,
+         role = excluded.role,
+         team = excluded.team,
+         email = excluded.email,
+         active = excluded.active`,
+      [
+        reviewer.handle,
+        reviewer.displayName,
+        reviewer.role ?? "Reviewer",
+        reviewer.team ?? null,
+        reviewer.email ?? null,
+        reviewer.active,
+      ],
+    );
+  }
+
+  const result = await client.query<{
+    handle: string;
+    name: string;
+    role: string;
+    team: string | null;
+    email: string | null;
+    active: boolean;
+  }>(
+    `select handle, name, role, team, email, active
+     from reviewer_profiles
+     where active = true
+     order by name asc`,
+  );
+
+  return result.rows.map((row) => normalizeReviewerProfile(row));
+}
+
+async function ensureCurrentReviewerSession(
+  client: PgClient,
+  profiles: ReviewerProfile[],
+): Promise<ReviewerSession> {
+  const sessionResult = await client.query<{
+    reviewer_handle: string;
+    signed_in_at: string;
+    updated_at: string | null;
+  }>(
+    `select reviewer_handle, signed_in_at, updated_at
+     from reviewer_sessions
+     where session_key = $1
+     limit 1`,
+    [currentReviewerSessionKey],
+  );
+
+  const row = sessionResult.rows[0];
+  const currentProfile =
+    (row &&
+      (profiles.find((profile) => profile.handle === normalizeReviewer(row.reviewer_handle)) ??
+        profiles.find((profile) => profile.id === normalizeReviewer(row.reviewer_handle)))) ||
+    profiles[0];
+
+  if (!currentProfile) {
+    throw new Error("Reviewer profiles are required");
+  }
+
+  if (!row) {
+    const signedInAt = new Date().toISOString();
+    await client.query(
+      `insert into reviewer_sessions (session_key, reviewer_handle, signed_in_at, updated_at)
+       values ($1, $2, $3, $4)`,
+      [currentReviewerSessionKey, currentProfile.handle, signedInAt, signedInAt],
+    );
+    return {
+      reviewerProfileId: currentProfile.id,
+      signedInAt,
+      updatedAt: signedInAt,
+      currentProfile,
+    };
+  }
+
+  return {
+    reviewerProfileId: currentProfile.id,
+    signedInAt: row.signed_in_at,
+    updatedAt: row.updated_at ?? row.signed_in_at,
+    currentProfile,
+  };
 }
 
 function buildCommentNotifications(input: {
@@ -1096,6 +1246,57 @@ async function insertReviewerNotification(
 
 export function createPostgresStoreBackend(): StoreBackend {
   return {
+    async listReviewerProfiles(): Promise<ReviewerProfile[]> {
+      return withTransaction((client) => ensureReviewerProfiles(client));
+    },
+
+    async getReviewerSession(): Promise<ReviewerSession | null> {
+      return withTransaction(async (client) => {
+        const reviewers = await ensureReviewerProfiles(client);
+        return ensureCurrentReviewerSession(client, reviewers);
+      });
+    },
+
+    async setReviewerSession(input: {
+      reviewerProfileId?: string;
+      reviewerHandle?: string;
+    }): Promise<ReviewerSessionMutationResult> {
+      return withTransaction(async (client) => {
+        const reviewers = await ensureReviewerProfiles(client);
+        const reviewerIdentifier = normalizeReviewer(
+          input.reviewerProfileId ?? input.reviewerHandle ?? "",
+        );
+        const reviewer =
+          reviewers.find((entry) => entry.id === reviewerIdentifier) ??
+          reviewers.find((entry) => entry.handle === reviewerIdentifier);
+
+        if (!reviewer) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const signedInAt = new Date().toISOString();
+        await client.query(
+          `insert into reviewer_sessions (session_key, reviewer_handle, signed_in_at, updated_at)
+           values ($1, $2, $3, $4)
+           on conflict (session_key) do update set
+             reviewer_handle = excluded.reviewer_handle,
+             signed_in_at = excluded.signed_in_at,
+             updated_at = excluded.updated_at`,
+          [currentReviewerSessionKey, reviewer.handle, signedInAt, signedInAt],
+        );
+
+        return {
+          ok: true,
+          session: {
+            reviewerProfileId: reviewer.id,
+            signedInAt,
+            updatedAt: signedInAt,
+            currentProfile: reviewer,
+          },
+        };
+      });
+    },
+
     async listStoredWorkbooks(): Promise<WorkbookSummary[]> {
       return withTransaction((client) => buildWorkbookSummaryRows(client));
     },
@@ -1869,6 +2070,111 @@ export async function importStoredWorkbookRecords(input: {
       imported,
       skipped: 0,
       workbookIds: input.records.map((record) => record.snapshot.workbook.id),
+    };
+  });
+}
+
+export async function importReviewerState(input: {
+  profiles?: ReviewerProfile[];
+  currentReviewerSession?: ReviewerSession | null;
+}) {
+  return withTransaction(async (client) => {
+    let importedProfiles = 0;
+
+    for (const profile of input.profiles ?? []) {
+      const candidate = profile as Partial<ReviewerProfile> & { name?: string };
+      const handle = candidate.handle?.trim() || candidate.id?.trim() || "";
+      const displayName =
+        candidate.displayName?.trim() || candidate.name?.trim() || handle;
+      if (!handle || !displayName) {
+        continue;
+      }
+
+      const normalized = {
+        id: normalizeReviewer(candidate.id ?? handle),
+        handle: normalizeReviewer(handle),
+        displayName,
+        role: candidate.role?.trim() || undefined,
+        team: candidate.team?.trim() || undefined,
+        email: candidate.email?.trim() || undefined,
+        active: candidate.active ?? true,
+      };
+
+      await client.query(
+        `insert into reviewer_profiles (handle, name, role, team, email, active)
+         values ($1, $2, $3, $4, $5, $6)
+         on conflict (handle) do update set
+           name = excluded.name,
+           role = excluded.role,
+           team = excluded.team,
+           email = excluded.email,
+           active = excluded.active`,
+        [
+          normalized.handle,
+          normalized.displayName,
+          normalized.role ?? "Reviewer",
+          normalized.team ?? null,
+          normalized.email ?? null,
+          normalized.active,
+        ],
+      );
+      importedProfiles += 1;
+    }
+
+    const profiles = await ensureReviewerProfiles(client);
+
+    const sessionCandidate = input.currentReviewerSession as
+      | {
+          reviewerProfileId?: string;
+          reviewerHandle?: string;
+          signedInAt?: string;
+          updatedAt?: string;
+          reviewer?: { id?: string; handle?: string };
+          currentProfile?: { id?: string; handle?: string };
+        }
+      | null
+      | undefined;
+    const session =
+      sessionCandidate?.currentProfile ||
+      sessionCandidate?.reviewer ||
+      sessionCandidate?.reviewerProfileId ||
+      sessionCandidate?.reviewerHandle
+        ? sessionCandidate
+        : null;
+
+    if (session) {
+      const reviewerIdentifier = normalizeReviewer(
+        session.reviewerProfileId ??
+          session.reviewerHandle ??
+          session.reviewer?.id ??
+          session.reviewer?.handle ??
+          session.currentProfile?.id ??
+          session.currentProfile?.handle ??
+          "",
+      );
+      const currentProfile =
+        profiles.find((entry) => entry.id === reviewerIdentifier) ??
+        profiles.find((entry) => entry.handle === reviewerIdentifier) ??
+        profiles[0];
+
+      if (currentProfile) {
+        const signedInAt = session.signedInAt ?? new Date().toISOString();
+        const updatedAt = session.updatedAt ?? signedInAt;
+        await client.query(
+          `insert into reviewer_sessions (session_key, reviewer_handle, signed_in_at, updated_at)
+           values ($1, $2, $3, $4)
+           on conflict (session_key) do update set
+             reviewer_handle = excluded.reviewer_handle,
+             signed_in_at = excluded.signed_in_at,
+             updated_at = excluded.updated_at`,
+          [currentReviewerSessionKey, currentProfile.handle, signedInAt, updatedAt],
+        );
+      }
+    }
+
+    return {
+      importedProfiles,
+      reviewerProfiles: profiles,
     };
   });
 }

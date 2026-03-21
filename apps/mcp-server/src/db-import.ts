@@ -2,16 +2,21 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ReviewerNotification,
+  ReviewerProfile,
+  ReviewerSession,
   WorkbookReviewSnapshot,
   WorkbookVersionSummary,
 } from "../../../packages/shared/src/index.js";
 import { hasPostgresConfig } from "./postgres.js";
-import { importStoredWorkbookRecords } from "./postgres-store.js";
+import { importReviewerState, importStoredWorkbookRecords } from "./postgres-store.js";
 import type { StoredWorkbookRecord } from "./store-backend.js";
 
 interface FileStorePayload {
   records: StoredWorkbookRecord[];
   notifications?: ReviewerNotification[];
+  reviewerProfiles?: ReviewerProfile[];
+  reviewers?: ReviewerProfile[];
+  currentReviewerSession?: ReviewerSession;
 }
 
 const dataRoot = path.resolve(process.cwd(), ".data");
@@ -86,6 +91,17 @@ async function main() {
     records: normalizedRecords,
     notifications: Array.isArray(payload.notifications) ? payload.notifications : [],
   });
+
+  const reviewerState = await importReviewerState({
+    profiles:
+      Array.isArray(payload.reviewerProfiles) && payload.reviewerProfiles.length > 0
+        ? payload.reviewerProfiles
+        : Array.isArray(payload.reviewers)
+          ? payload.reviewers
+          : undefined,
+    currentReviewerSession: payload.currentReviewerSession ?? null,
+  });
+
   console.log(
     JSON.stringify(
       {
@@ -93,6 +109,7 @@ async function main() {
         imported: result.imported,
         skipped: result.skipped,
         workbookIds: result.workbookIds,
+        reviewerProfilesImported: reviewerState.importedProfiles,
       },
       null,
       2,

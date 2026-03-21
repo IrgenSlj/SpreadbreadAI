@@ -5,6 +5,8 @@ import {
   demoReviewSnapshot,
   type ProposalDiffEntry,
   type ProposalItemComment,
+  type ReviewerProfile,
+  type ReviewerSession,
   type WorkbookLibraryView,
   type WorkbookSketchBoard,
   type WorkbookSummary,
@@ -48,6 +50,26 @@ type WorkbookTagsResponse = {
 
 type WorkbookLibraryViewsResponse = {
   views: WorkbookLibraryView[];
+};
+
+type ReviewerProfilesResponse = {
+  reviewers: ReviewerProfile[];
+};
+
+type ReviewerSessionResponse = {
+  session: ReviewerSession | null;
+};
+
+type ReviewerIdentity = {
+  id: string;
+  displayName: string;
+  handle: string;
+  role?: string;
+  source: "api" | "derived";
+};
+
+type ReviewerDirectoryResponse = {
+  reviewers?: ReviewerProfile[];
 };
 
 type ReviewNotificationFeedItem = {
@@ -337,6 +359,51 @@ function normalizeReviewNotificationFeed(value: unknown): ReviewNotificationFeed
     .filter((item) => item.detail.length > 0);
 }
 
+function normalizeReviewerDirectory(value: unknown): ReviewerIdentity[] {
+  const sourceEntries = Array.isArray(value)
+    ? value
+    : Array.isArray((value as ReviewerDirectoryResponse | null)?.reviewers)
+      ? (value as ReviewerDirectoryResponse).reviewers ?? []
+      : value && typeof value === "object"
+        ? [value as Partial<ReviewerIdentity>]
+      : [];
+
+  return sourceEntries
+    .map((item, index) => {
+      const reviewer = item as Partial<ReviewerIdentity> & {
+        name?: unknown;
+        display_name?: unknown;
+        fullName?: unknown;
+        source?: unknown;
+      };
+
+      const displayName =
+        typeof reviewer.displayName === "string" && reviewer.displayName.length > 0
+          ? reviewer.displayName
+          : typeof reviewer.name === "string" && reviewer.name.length > 0
+            ? reviewer.name
+            : typeof reviewer.fullName === "string" && reviewer.fullName.length > 0
+              ? reviewer.fullName
+              : `Reviewer ${index + 1}`;
+      const handle =
+        typeof reviewer.handle === "string" && reviewer.handle.length > 0
+          ? reviewer.handle
+          : normalizeHandle(displayName) || `reviewer_${index + 1}`;
+
+      return {
+        id:
+          typeof reviewer.id === "string" && reviewer.id.length > 0
+            ? reviewer.id
+            : handle,
+        displayName,
+        handle,
+        role: typeof reviewer.role === "string" ? reviewer.role : undefined,
+        source: reviewer.source === "api" ? "api" : "derived",
+      } satisfies ReviewerIdentity;
+    })
+    .filter((item) => item.displayName.length > 0);
+}
+
 function findFormulaPreview(snapshot: WorkbookReviewSnapshot) {
   for (const sheet of snapshot.workbook.sheets) {
     for (const row of sheet.sampleRows) {
@@ -406,6 +473,30 @@ function createDerivedRuntimeInfo(
   };
 }
 
+const fallbackReviewerDirectory: ReviewerIdentity[] = [
+  {
+    id: "finance-manager",
+    displayName: "Finance Manager",
+    handle: "finance.manager",
+    role: "Finance",
+    source: "derived",
+  },
+  {
+    id: "fpa-lead",
+    displayName: "FP&A Lead",
+    handle: "fpa.lead",
+    role: "Finance",
+    source: "derived",
+  },
+  {
+    id: "operations-reviewer",
+    displayName: "Operations Reviewer",
+    handle: "operations.reviewer",
+    role: "Operations",
+    source: "derived",
+  },
+];
+
 function App() {
   const [section, setSection] = useState<Section>("workbook");
   const [snapshot, setSnapshot] = useState<WorkbookReviewSnapshot>(demoReviewSnapshot);
@@ -415,7 +506,16 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [activeMutation, setActiveMutation] = useState<MutationAction | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [reviewerName, setReviewerName] = useState("Finance Manager");
+  const [reviewerDirectory, setReviewerDirectory] = useState<ReviewerIdentity[]>(
+    fallbackReviewerDirectory,
+  );
+  const [selectedReviewerId, setSelectedReviewerId] = useState(
+    fallbackReviewerDirectory[0].id,
+  );
+  const [reviewerIdentityMode, setReviewerIdentityMode] = useState<"api" | "derived">(
+    "derived",
+  );
+  const [reviewerIdentityError, setReviewerIdentityError] = useState<string | null>(null);
   const [reviewComment, setReviewComment] = useState("");
   const [runtimeBackend, setRuntimeBackend] = useState<RuntimeBackendInfo>(
     createDerivedRuntimeInfo([createDemoWorkbookSummary()], demoReviewSnapshot),
@@ -452,6 +552,16 @@ function App() {
   const [sketchError, setSketchError] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const sketchCanvasRef = useRef<HTMLDivElement | null>(null);
+
+  const activeReviewer = useMemo(
+    () =>
+      reviewerDirectory.find((reviewer) => reviewer.id === selectedReviewerId) ??
+      reviewerDirectory[0] ??
+      fallbackReviewerDirectory[0],
+    [reviewerDirectory, selectedReviewerId],
+  );
+  const reviewerName = activeReviewer.displayName;
+  const reviewerHandle = mentionHandleForReviewer(activeReviewer.handle || reviewerName);
 
   const pendingRisks = useMemo(
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
@@ -495,7 +605,6 @@ function App() {
       : "Choose either the proposal shortcut or item-level review first. Once review starts, the other path locks.";
   const activeSheet = snapshot.workbook.sheets[0];
   const formulaPreview = findFormulaPreview(snapshot);
-  const reviewerHandle = mentionHandleForReviewer(reviewerName);
   const filteredWorkbooks = useMemo(() => {
     const query = workbookSearchQuery.trim().toLowerCase();
 
@@ -1172,6 +1281,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    void loadReviewerDirectory();
+  }, []);
+
+  useEffect(() => {
     void loadLibraryViews(showArchivedViews).catch(() => undefined);
   }, [showArchivedViews]);
 
@@ -1261,6 +1374,53 @@ function App() {
     }
   }
 
+  async function loadReviewerDirectory() {
+    setReviewerIdentityError(null);
+
+    try {
+      const [reviewersResponse, sessionResponse] = await Promise.all([
+        fetch("/api/reviewers"),
+        fetch("/api/session/reviewer"),
+      ]);
+
+      if (!reviewersResponse.ok) {
+        throw new Error(`Reviewer directory failed (${reviewersResponse.status})`);
+      }
+
+      const reviewersData = (await reviewersResponse.json()) as ReviewerDirectoryResponse;
+      const sessionData = sessionResponse.ok
+        ? ((await sessionResponse.json()) as ReviewerSessionResponse)
+        : { session: null };
+      const reviewers = normalizeReviewerDirectory(reviewersData.reviewers ?? []);
+
+      if (reviewers.length > 0) {
+        const activeId =
+          sessionData.session?.currentProfile?.id ?? reviewers[0].id;
+
+        setReviewerDirectory(reviewers);
+        setSelectedReviewerId(
+          reviewers.some((reviewer) => reviewer.id === activeId)
+            ? activeId
+            : reviewers[0].id,
+        );
+        setReviewerIdentityMode("api");
+        return;
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        setReviewerIdentityError(error.message);
+      }
+    }
+
+    setReviewerDirectory(fallbackReviewerDirectory);
+    setSelectedReviewerId((current) =>
+      fallbackReviewerDirectory.some((reviewer) => reviewer.id === current)
+        ? current
+        : fallbackReviewerDirectory[0].id,
+    );
+    setReviewerIdentityMode("derived");
+  }
+
   async function loadReviewerNotificationFeed() {
     const reviewerId = reviewerHandle.replace(/^@/, "");
     const endpoint = `/api/reviewer-notifications?reviewer=${encodeURIComponent(reviewerId)}&includeRead=true`;
@@ -1292,6 +1452,47 @@ function App() {
       buildDerivedReviewNotificationFeed(snapshot, reviewerHandle, reviewerName),
     );
     setReviewNotificationFeedMode("derived");
+  }
+
+  async function handleReviewerSignIn() {
+    const reviewer = reviewerDirectory.find((item) => item.id === selectedReviewerId);
+
+    if (!reviewer) {
+      return;
+    }
+
+    setReviewerIdentityError(null);
+
+    try {
+      const response = await fetch("/api/session/reviewer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          reviewerHandle: reviewer.handle,
+        }),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as ReviewerSessionResponse;
+        const activeId = data.session?.currentProfile?.id ?? reviewer.id;
+        setSelectedReviewerId(activeId);
+        setReviewerIdentityMode("api");
+        return;
+      }
+
+      if (response.status !== 404) {
+        throw new Error(`Reviewer sign-in failed (${response.status})`);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        setReviewerIdentityError(error.message);
+      }
+    }
+
+    setReviewerIdentityMode("derived");
+    setSelectedReviewerId(reviewer.id);
   }
 
   async function loadWorkbooks(options: {
@@ -2150,14 +2351,34 @@ function App() {
               </div>
               <p className="workflow-note">{workflowStatusMessage}</p>
               <div className="review-form">
-                <label>
-                  <span>Reviewer</span>
-                  <input
-                    onChange={(event) => setReviewerName(event.target.value)}
-                    type="text"
-                    value={reviewerName}
-                  />
-                </label>
+                <div className="reviewer-signin-row">
+                  <label>
+                    <span>Reviewer account</span>
+                    <select
+                      onChange={(event) => setSelectedReviewerId(event.target.value)}
+                      value={selectedReviewerId}
+                    >
+                      {reviewerDirectory.map((reviewer) => (
+                        <option key={reviewer.id} value={reviewer.id}>
+                          {reviewer.displayName} · {reviewer.handle}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="decision-button apply"
+                    onClick={() => void handleReviewerSignIn()}
+                    type="button"
+                  >
+                    Sign in
+                  </button>
+                </div>
+                <p className="review-meta">
+                  Signed in as {reviewerName} ({reviewerHandle})
+                  {reviewerIdentityMode === "api"
+                    ? " via backend session."
+                    : " using the local reviewer roster until the API exists."}
+                </p>
                 <label>
                   <span>Decision comment</span>
                   <textarea
@@ -2203,6 +2424,7 @@ function App() {
                       : ""}
                   </p>
                 ) : null}
+                {reviewerIdentityError ? <p className="comment-error">{reviewerIdentityError}</p> : null}
               </div>
               <div className="comment-filter-panel">
                 <div className="comment-filter-head">

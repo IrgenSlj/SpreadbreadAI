@@ -12,8 +12,10 @@ import {
   getStoredSketchBoard,
   getStoredWorkbookReview,
   getStoreRuntimeStatus,
+  getReviewerSession,
   listStoredWorkbooks,
   listStoredWorkbookLibraryViews,
+  listReviewerProfiles,
   listReviewerNotifications,
   type LibraryViewDeletionResult,
   type MutationResult,
@@ -24,6 +26,7 @@ import {
   type TagsMutationResult,
   saveUploadedWorkbook,
   saveStoredWorkbookLibraryView,
+  setReviewerSession,
   type SketchBoardMutationResult,
   updateStoredProposalItemDecision,
   updateStoredProposalDecision,
@@ -116,6 +119,16 @@ const reviewerNotificationsQuerySchema = z.object({
 const reviewerNotificationStateSchema = z.object({
   reviewer: z.string().trim().min(1),
 });
+
+const reviewerSessionSchema = z
+  .object({
+    reviewerProfileId: z.string().trim().min(1).optional(),
+    reviewerHandle: z.string().trim().min(1).optional(),
+  })
+  .refine(
+    (value) => Boolean(value.reviewerProfileId || value.reviewerHandle),
+    "A reviewerProfileId or reviewerHandle is required",
+  );
 
 class HttpError extends Error {
   constructor(
@@ -304,6 +317,27 @@ function sendReviewerNotificationResult(
   sendJson(response, 404, { error: notFoundMessage });
 }
 
+function sendReviewerSessionResult(
+  response: ServerResponse,
+  result:
+    | { ok: true; session: unknown }
+    | { ok: false; code: string }
+    | { reviewerProfileId?: string; signedInAt?: string; updatedAt?: string; currentProfile?: unknown }
+    | null,
+) {
+  if (result && typeof result === "object" && "ok" in result) {
+    if (result.ok) {
+      sendJson(response, 200, { session: result.session });
+      return;
+    }
+
+    sendJson(response, 404, { error: "Reviewer profile not found" });
+    return;
+  }
+
+  sendJson(response, 200, { session: result ?? null });
+}
+
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -338,6 +372,28 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       version: serverVersion,
       runtime,
     });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/reviewers") {
+    const reviewers = await listReviewerProfiles();
+    sendJson(response, 200, { reviewers });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/api/session/reviewer") {
+    const session = await getReviewerSession();
+    sendJson(response, 200, { session });
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/api/session/reviewer") {
+    const body = await readValidatedJsonBody(request, reviewerSessionSchema);
+    const result = await setReviewerSession({
+      reviewerProfileId: body.reviewerProfileId,
+      reviewerHandle: body.reviewerHandle,
+    });
+    sendReviewerSessionResult(response, result);
     return;
   }
 

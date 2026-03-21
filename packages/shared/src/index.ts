@@ -28,6 +28,31 @@ export interface ProposalItemComment {
   mentions?: string[];
 }
 
+export interface ReviewerProfile {
+  id: EntityId;
+  handle: string;
+  displayName: string;
+  role?: string;
+  team?: string;
+  email?: string;
+  color?: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewerProfileDirectory {
+  currentReviewerProfileId?: EntityId;
+  profiles: ReviewerProfile[];
+}
+
+export interface ReviewerSession {
+  reviewerProfileId: EntityId;
+  signedInAt: string;
+  updatedAt: string;
+  currentProfile?: ReviewerProfile;
+}
+
 export interface ReviewerNotification {
   id: EntityId;
   reviewer: string;

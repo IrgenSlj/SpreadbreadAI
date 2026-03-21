@@ -2,6 +2,8 @@ import type {
   ApprovalDecision,
   ReviewerNotification,
   ReviewerNotificationFeed,
+  ReviewerProfile,
+  ReviewerSession,
   WorkbookLibraryView,
   WorkbookReviewSnapshot,
   WorkbookSketchBoard,
@@ -51,7 +53,17 @@ export type ReviewerNotificationMutationResult =
   | { ok: true; notification: ReviewerNotification }
   | { ok: false; code: MutationFailureCode };
 
+export type ReviewerSessionMutationResult =
+  | { ok: true; session: ReviewerSession }
+  | { ok: false; code: MutationFailureCode };
+
 export interface StoreBackend {
+  listReviewerProfiles(): Promise<ReviewerProfile[]>;
+  getReviewerSession(): Promise<ReviewerSession | null>;
+  setReviewerSession(input: {
+    reviewerProfileId?: string;
+    reviewerHandle?: string;
+  }): Promise<ReviewerSessionMutationResult>;
   listStoredWorkbooks(): Promise<WorkbookSummary[]>;
   getStoredWorkbookReview(workbookId: string): Promise<WorkbookReviewSnapshot | null>;
   getStoredWorkbookTags(workbookId: string): Promise<string[] | null>;
