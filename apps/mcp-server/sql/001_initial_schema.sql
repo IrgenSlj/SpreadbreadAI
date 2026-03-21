@@ -5,8 +5,12 @@ create table if not exists workbooks (
   status text not null,
   created_at timestamptz not null,
   last_reviewed_at timestamptz not null,
-  latest_version_id text not null
+  latest_version_id text not null,
+  sketch_json jsonb not null default '{}'::jsonb
 );
+
+alter table if exists workbooks
+  add column if not exists sketch_json jsonb not null default '{}'::jsonb;
 
 create table if not exists workbook_versions (
   id text primary key,

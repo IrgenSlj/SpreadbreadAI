@@ -11,6 +11,7 @@ import type {
   WorkbookReviewSnapshot,
   WorkbookRisk,
   WorkbookSheetSummary,
+  WorkbookSketchBoard,
   WorkbookSummary,
   WorkbookVersionSummary,
 } from "../../../packages/shared/src/index.js";
@@ -19,6 +20,7 @@ import { withTransaction } from "./postgres.js";
 import type {
   MutationFailureCode,
   MutationResult,
+  SketchBoardMutationResult,
   StoreBackend,
   StoredWorkbookRecord,
 } from "./store-backend.js";
@@ -83,6 +85,47 @@ function createCommentId(diffId: string) {
   return `${diffId}_comment_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function normalizeMentionHandles(values: unknown[]): string[] {
+  const handles = new Set<string>();
+
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const normalized = value.trim().replace(/^@/, "");
+    if (normalized) {
+      handles.add(normalized);
+    }
+  }
+
+  return [...handles];
+}
+
+function extractMentions(body: string): string[] {
+  const matches = body.matchAll(/(?:^|[^A-Za-z0-9._-])@([A-Za-z0-9._-]{2,64})/g);
+  return normalizeMentionHandles([...matches].map((match) => match[1]));
+}
+
+function createSketchBoard(
+  workbookId: string,
+  title: string,
+  updatedAt: string,
+  updatedBy: string,
+  notes?: string,
+): WorkbookSketchBoard {
+  return {
+    id: `${workbookId}_sketch_board`,
+    workbookId,
+    title: `${title} Sketch Board`,
+    updatedAt,
+    updatedBy,
+    nodes: [],
+    links: [],
+    notes: notes?.trim() || "Sketch board created for workbook review.",
+  };
+}
+
 function normalizeProposalItemStatus(
   status: ProposalItemStatus | null | undefined,
 ): ProposalItemStatus {
@@ -108,6 +151,9 @@ function normalizeProposalItemComments(value: unknown): ProposalItemComment[] {
     const createdAt = typeof candidate.createdAt === "string" ? candidate.createdAt : "";
     const parentCommentId =
       typeof candidate.parentCommentId === "string" ? candidate.parentCommentId : undefined;
+    const mentions = Array.isArray(candidate.mentions)
+      ? normalizeMentionHandles(candidate.mentions)
+      : undefined;
 
     if (!id || !author || !body || !createdAt) {
       return [];
@@ -120,9 +166,94 @@ function normalizeProposalItemComments(value: unknown): ProposalItemComment[] {
         body,
         createdAt,
         parentCommentId,
+        mentions: mentions && mentions.length > 0 ? mentions : undefined,
       },
     ];
   });
+}
+
+function normalizeWorkbookSketchBoard(
+  value: unknown,
+  workbookId: string,
+  workbookName: string,
+  updatedAt: string,
+): WorkbookSketchBoard {
+  if (!value || typeof value !== "object") {
+    return createSketchBoard(workbookId, workbookName, updatedAt, "system");
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const title = typeof candidate.title === "string" ? candidate.title : `${workbookName} Sketch Board`;
+  const updatedBy = typeof candidate.updatedBy === "string" ? candidate.updatedBy : "system";
+  const nodes = Array.isArray(candidate.nodes) ? candidate.nodes : [];
+  const links = Array.isArray(candidate.links) ? candidate.links : [];
+  const notes = typeof candidate.notes === "string" ? candidate.notes : undefined;
+
+  return {
+    id:
+      typeof candidate.id === "string" && candidate.id.trim().length > 0
+        ? candidate.id
+        : `${workbookId}_sketch_board`,
+    workbookId,
+    title,
+    updatedAt: typeof candidate.updatedAt === "string" ? candidate.updatedAt : updatedAt,
+    updatedBy,
+    nodes: nodes.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+
+      const node = entry as Record<string, unknown>;
+      const id = typeof node.id === "string" ? node.id : "";
+      const label = typeof node.label === "string" ? node.label : "";
+      const x = typeof node.x === "number" ? node.x : Number.NaN;
+      const y = typeof node.y === "number" ? node.y : Number.NaN;
+      const width = typeof node.width === "number" ? node.width : Number.NaN;
+      const height = typeof node.height === "number" ? node.height : Number.NaN;
+      const color = typeof node.color === "string" ? node.color : undefined;
+
+      if (!id || !label || Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(width) || Number.isNaN(height)) {
+        return [];
+      }
+
+      return [
+        {
+          id,
+          label,
+          x,
+          y,
+          width,
+          height,
+          color,
+        },
+      ];
+    }),
+    links: links.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+
+      const link = entry as Record<string, unknown>;
+      const id = typeof link.id === "string" ? link.id : "";
+      const fromNodeId = typeof link.fromNodeId === "string" ? link.fromNodeId : "";
+      const toNodeId = typeof link.toNodeId === "string" ? link.toNodeId : "";
+      const label = typeof link.label === "string" ? link.label : undefined;
+
+      if (!id || !fromNodeId || !toNodeId) {
+        return [];
+      }
+
+      return [
+        {
+          id,
+          fromNodeId,
+          toNodeId,
+          label,
+        },
+      ];
+    }),
+    notes,
+  };
 }
 
 function appendCommentToDiff(
@@ -132,6 +263,7 @@ function appendCommentToDiff(
     author: string;
     body: string;
     parentCommentId?: string;
+    mentions?: string[];
   },
   createdAt: string,
 ) {
@@ -152,6 +284,10 @@ function appendCommentToDiff(
     body: input.body,
     createdAt,
     parentCommentId: input.parentCommentId,
+    mentions: normalizeMentionHandles([
+      ...extractMentions(input.body),
+      ...(input.mentions ?? []),
+    ]),
   };
 
   return {
@@ -199,15 +335,16 @@ async function insertSnapshot(
   const latestVersion = versions[0];
 
   await client.query(
-    `insert into workbooks (id, name, owner, status, created_at, last_reviewed_at, latest_version_id)
-     values ($1, $2, $3, $4, $5, $6, $7)
+    `insert into workbooks (id, name, owner, status, created_at, last_reviewed_at, latest_version_id, sketch_json)
+     values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
      on conflict (id) do update set
        name = excluded.name,
        owner = excluded.owner,
        status = excluded.status,
        created_at = excluded.created_at,
        last_reviewed_at = excluded.last_reviewed_at,
-       latest_version_id = excluded.latest_version_id`,
+       latest_version_id = excluded.latest_version_id,
+       sketch_json = excluded.sketch_json`,
     [
       workbook.id,
       workbook.name,
@@ -216,6 +353,10 @@ async function insertSnapshot(
       workbook.createdAt,
       workbook.lastReviewedAt,
       workbook.latestVersionId,
+      JSON.stringify(
+        workbook.sketchBoard ??
+          createSketchBoard(workbook.id, workbook.name, workbook.lastReviewedAt, "system"),
+      ),
     ],
   );
 
@@ -432,8 +573,9 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
     created_at: string;
     last_reviewed_at: string;
     latest_version_id: string;
+    sketch_json: unknown;
   }>(
-    `select id, name, owner, status, created_at, last_reviewed_at, latest_version_id
+    `select id, name, owner, status, created_at, last_reviewed_at, latest_version_id, sketch_json
      from workbooks
      where id = $1`,
     [workbookId],
@@ -621,6 +763,12 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
     risks,
     namedRanges,
     versions,
+    sketchBoard: normalizeWorkbookSketchBoard(
+      workbookRow.sketch_json,
+      workbookRow.id,
+      workbookRow.name,
+      workbookRow.last_reviewed_at,
+    ),
   };
 
   return {
@@ -676,6 +824,13 @@ export function createPostgresStoreBackend(): StoreBackend {
 
     async getStoredWorkbookReview(workbookId: string): Promise<WorkbookReviewSnapshot | null> {
       return withTransaction((client) => loadSnapshot(client, workbookId));
+    },
+
+    async getStoredSketchBoard(workbookId: string): Promise<WorkbookSketchBoard | null> {
+      return withTransaction(async (client) => {
+        const snapshot = await loadSnapshot(client, workbookId);
+        return snapshot?.workbook.sketchBoard ?? null;
+      });
     },
 
     async saveUploadedWorkbook(input): Promise<StoredWorkbookRecord> {
@@ -828,7 +983,14 @@ export function createPostgresStoreBackend(): StoreBackend {
       });
     },
 
-    async appendStoredProposalItemComment(input): Promise<MutationResult> {
+    async appendStoredProposalItemComment(input: {
+      workbookId: string;
+      diffId: string;
+      author: string;
+      body: string;
+      parentCommentId?: string;
+      mentions?: string[];
+    }): Promise<MutationResult> {
       return withTransaction(async (client) => {
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
@@ -856,6 +1018,10 @@ export function createPostgresStoreBackend(): StoreBackend {
           body: input.body,
           createdAt,
           parentCommentId: input.parentCommentId,
+          mentions: normalizeMentionHandles([
+            ...extractMentions(input.body),
+            ...(input.mentions ?? []),
+          ]),
         };
 
         await client.query(
@@ -874,6 +1040,50 @@ export function createPostgresStoreBackend(): StoreBackend {
 
         const review = await loadSnapshot(client, input.workbookId);
         return review ? mutationSuccess(review) : mutationFailure("not_found");
+      });
+    },
+
+    async updateStoredSketchBoard(input: {
+      workbookId: string;
+      title: string;
+      updatedBy: string;
+      nodes: WorkbookSketchBoard["nodes"];
+      links: WorkbookSketchBoard["links"];
+      notes?: string;
+    }): Promise<SketchBoardMutationResult> {
+      return withTransaction(async (client) => {
+        const current = await loadSnapshot(client, input.workbookId);
+        if (!current) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const updatedAt = new Date().toISOString();
+        const sketchBoard: WorkbookSketchBoard = {
+          id: `${current.workbook.id}_sketch_board`,
+          workbookId: current.workbook.id,
+          title: input.title.trim() || `${current.workbook.name} Sketch Board`,
+          updatedAt,
+          updatedBy: input.updatedBy,
+          nodes: [...input.nodes],
+          links: [...input.links],
+          notes: input.notes?.trim() || undefined,
+        };
+
+        await client.query(
+          `update workbooks
+           set sketch_json = $2::jsonb
+           where id = $1`,
+          [current.workbook.id, JSON.stringify(sketchBoard)],
+        );
+        await appendAuditEvent(
+          client,
+          input.workbookId,
+          input.updatedBy,
+          "sketch.updated",
+          "Workbook sketch board updated.",
+        );
+
+        return { ok: true, sketchBoard };
       });
     },
 

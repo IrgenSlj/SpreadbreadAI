@@ -24,6 +24,37 @@ export interface ProposalItemComment {
   body: string;
   createdAt: string;
   parentCommentId?: EntityId;
+  mentions?: string[];
+}
+
+export interface WorkbookSketchNode {
+  id: EntityId;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color?: string;
+  linkKind?: "sheet" | "proposal" | "risk";
+  linkTargetId?: string;
+}
+
+export interface WorkbookSketchLink {
+  id: EntityId;
+  fromNodeId: EntityId;
+  toNodeId: EntityId;
+  label?: string;
+}
+
+export interface WorkbookSketchBoard {
+  id: EntityId;
+  workbookId: WorkbookId;
+  title: string;
+  updatedAt: string;
+  updatedBy: string;
+  nodes: WorkbookSketchNode[];
+  links: WorkbookSketchLink[];
+  notes?: string;
 }
 
 export interface WorkbookSheetSummary {
@@ -73,6 +104,7 @@ export interface WorkbookDetail extends WorkbookSummary {
   risks: WorkbookRisk[];
   namedRanges: WorkbookNamedRange[];
   versions: WorkbookVersionSummary[];
+  sketchBoard?: WorkbookSketchBoard;
 }
 
 export interface ProposalDiffEntry {
@@ -123,6 +155,32 @@ export interface WorkbookReviewSnapshot {
   workbook: WorkbookDetail;
   proposal: ProposalDetail;
   auditEvents: AuditEvent[];
+}
+
+export interface SketchBoardNode {
+  id: EntityId;
+  label: string;
+  x: number;
+  y: number;
+  color: "green" | "lime" | "mint";
+  linkKind?: "sheet" | "proposal" | "risk";
+  linkTargetId?: string;
+}
+
+export interface SketchBoardConnection {
+  id: EntityId;
+  fromNodeId: EntityId;
+  toNodeId: EntityId;
+}
+
+export interface SketchBoard {
+  id: EntityId;
+  workbookId: WorkbookId;
+  title: string;
+  updatedAt: string;
+  updatedBy: string;
+  nodes: SketchBoardNode[];
+  connections: SketchBoardConnection[];
 }
 
 const demoWorkbook: WorkbookDetail = {
@@ -322,6 +380,62 @@ export const demoReviewSnapshot: WorkbookReviewSnapshot = {
   auditEvents: demoAuditEvents,
 };
 
+export const demoSketchBoard: WorkbookSketchBoard = {
+  id: "board_q2_forecast",
+  workbookId: demoWorkbook.id,
+  title: "Q2 Forecast Operating Plan",
+  updatedAt: "2026-03-19T08:12:00.000Z",
+  updatedBy: "Finance Manager",
+  nodes: [
+    {
+      id: "board_node_assumptions",
+      label: "Assumptions",
+      x: 10,
+      y: 20,
+      width: 160,
+      height: 74,
+      color: "green",
+      linkKind: "sheet",
+      linkTargetId: "Assumptions",
+    },
+    {
+      id: "board_node_forecast",
+      label: "Forecast Rollup",
+      x: 220,
+      y: 80,
+      width: 176,
+      height: 74,
+      color: "mint",
+      linkKind: "sheet",
+      linkTargetId: "Forecast",
+    },
+    {
+      id: "board_node_signoff",
+      label: "Finance Signoff",
+      x: 430,
+      y: 24,
+      width: 168,
+      height: 74,
+      color: "lime",
+      linkKind: "proposal",
+      linkTargetId: demoProposal.id,
+    },
+  ],
+  links: [
+    {
+      id: "board_conn_1",
+      fromNodeId: "board_node_assumptions",
+      toNodeId: "board_node_forecast",
+    },
+    {
+      id: "board_conn_2",
+      fromNodeId: "board_node_forecast",
+      toNodeId: "board_node_signoff",
+    },
+  ],
+  notes: "Seeded board linking workbook structure to the approval flow.",
+};
+
 export function listDemoWorkbooks(): WorkbookSummary[] {
   return [
     {
@@ -338,6 +452,85 @@ export function getDemoReviewSnapshot(
   workbookId: WorkbookId,
 ): WorkbookReviewSnapshot | null {
   return workbookId === demoReviewSnapshot.workbook.id ? demoReviewSnapshot : null;
+}
+
+export function createSeededSketchBoard(
+  snapshot: WorkbookReviewSnapshot,
+  updatedBy = "system",
+): WorkbookSketchBoard {
+  const createdAt = snapshot.auditEvents[0]?.createdAt ?? snapshot.workbook.createdAt;
+  const firstSheet = snapshot.workbook.sheets[0];
+  const secondSheet = snapshot.workbook.sheets[1];
+
+  const nodeCandidates: Array<WorkbookSketchNode | null> = [
+    firstSheet
+      ? {
+          id: `${snapshot.workbook.id}_board_sheet_1`,
+          label: firstSheet.name,
+          x: 20,
+          y: 32,
+          width: 170,
+          height: 76,
+          color: "green",
+          linkKind: "sheet",
+          linkTargetId: firstSheet.name,
+        }
+      : null,
+    secondSheet
+      ? {
+          id: `${snapshot.workbook.id}_board_sheet_2`,
+          label: secondSheet.name,
+          x: 238,
+          y: 118,
+          width: 170,
+          height: 76,
+          color: "mint",
+          linkKind: "sheet",
+          linkTargetId: secondSheet.name,
+        }
+      : null,
+    {
+      id: `${snapshot.workbook.id}_board_proposal`,
+      label: "Review Proposal",
+      x: 438,
+      y: 42,
+      width: 182,
+      height: 76,
+      color: "lime",
+      linkKind: "proposal",
+      linkTargetId: snapshot.proposal.id,
+    },
+  ];
+  const nodes = nodeCandidates.filter(
+    (node): node is WorkbookSketchNode => node !== null,
+  );
+
+  const links: WorkbookSketchLink[] = [];
+  if (nodes.length >= 2) {
+    links.push({
+      id: `${snapshot.workbook.id}_board_conn_1`,
+      fromNodeId: nodes[0].id,
+      toNodeId: nodes[1].id,
+    });
+  }
+  if (nodes.length >= 3) {
+    links.push({
+      id: `${snapshot.workbook.id}_board_conn_2`,
+      fromNodeId: nodes[1].id,
+      toNodeId: nodes[2].id,
+    });
+  }
+
+  return {
+    id: `${snapshot.workbook.id}_board`,
+    workbookId: snapshot.workbook.id,
+    title: `${snapshot.workbook.name} Review Board`,
+    updatedAt: createdAt,
+    updatedBy,
+    nodes,
+    links,
+    notes: "Persisted review board for workbook planning and approval handoff.",
+  };
 }
 
 export function createUploadedWorkbookReview(

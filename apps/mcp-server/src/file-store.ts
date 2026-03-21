@@ -8,18 +8,21 @@ import {
   type ProposalItemComment,
   type ProposalItemStatus,
   type WorkbookReviewSnapshot,
+  type WorkbookSketchBoard,
   type WorkbookSummary,
 } from "../../../packages/shared/src/index.js";
 import { parseWorkbookReviewSnapshot } from "./parser.js";
 import type {
   MutationFailureCode,
   MutationResult,
+  SketchBoardMutationResult,
   StoreBackend,
   StoredWorkbookRecord,
 } from "./store-backend.js";
 
 interface WorkbookStoreFile {
   records: StoredWorkbookRecord[];
+  sketchBoards?: WorkbookSketchBoard[];
 }
 
 const dataRoot = path.resolve(process.cwd(), ".data");
@@ -78,6 +81,10 @@ async function writeStore(store: WorkbookStoreFile) {
   await writeFile(storeFilePath, JSON.stringify(store, null, 2));
 }
 
+function getStoredSketchBoards(store: WorkbookStoreFile): WorkbookSketchBoard[] {
+  return Array.isArray(store.sketchBoards) ? store.sketchBoards : [];
+}
+
 async function runSerializedMutation<T>(operation: () => Promise<T>): Promise<T> {
   const next = storeMutationChain.then(operation, operation);
   storeMutationChain = next.then(
@@ -119,6 +126,63 @@ function createCommentId(diffId: string) {
   return `${diffId}_comment_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function normalizeMentionHandles(values: unknown[]): string[] {
+  const handles = new Set<string>();
+
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const normalized = value.trim().replace(/^@/, "");
+    if (normalized) {
+      handles.add(normalized);
+    }
+  }
+
+  return [...handles];
+}
+
+function extractMentions(body: string): string[] {
+  const matches = body.matchAll(/(?:^|[^A-Za-z0-9._-])@([A-Za-z0-9._-]{2,64})/g);
+  return normalizeMentionHandles([...matches].map((match) => match[1]));
+}
+
+function createSketchBoard(
+  workbookId: string,
+  title: string,
+  updatedAt: string,
+  updatedBy: string,
+  notes?: string,
+): WorkbookSketchBoard {
+  return {
+    id: `${workbookId}_sketch_board`,
+    workbookId,
+    title: `${title} Sketch Board`,
+    updatedAt,
+    updatedBy,
+    nodes: [],
+    links: [],
+    notes: notes?.trim() || "Sketch board created for workbook review.",
+  };
+}
+
+if (!demoSnapshotState.workbook.sketchBoard) {
+  demoSnapshotState = {
+    ...demoSnapshotState,
+    workbook: {
+      ...demoSnapshotState.workbook,
+      sketchBoard: createSketchBoard(
+        demoSnapshotState.workbook.id,
+        demoSnapshotState.workbook.name,
+        demoSnapshotState.workbook.lastReviewedAt,
+        "system",
+        "Generated from the demo workbook.",
+      ),
+    },
+  };
+}
+
 function appendCommentToDiff(
   diff: ProposalDiffEntry[],
   input: {
@@ -126,6 +190,7 @@ function appendCommentToDiff(
     author: string;
     body: string;
     parentCommentId?: string;
+    mentions?: string[];
   },
   createdAt: string,
 ) {
@@ -146,6 +211,10 @@ function appendCommentToDiff(
     body: input.body,
     createdAt,
     parentCommentId: input.parentCommentId,
+    mentions: normalizeMentionHandles([
+      ...extractMentions(input.body),
+      ...(input.mentions ?? []),
+    ]),
   };
 
   return {
@@ -302,6 +371,47 @@ export function createFileStoreBackend(): StoreBackend {
       const match = store.records.find((record) => record.snapshot.workbook.id === workbookId);
 
       return match?.snapshot ?? null;
+    },
+
+    async getStoredSketchBoard(workbookId: string): Promise<WorkbookSketchBoard | null> {
+      if (workbookId === demoSnapshotState.workbook.id) {
+        return (
+          demoSnapshotState.workbook.sketchBoard ??
+          createSketchBoard(
+            demoSnapshotState.workbook.id,
+            demoSnapshotState.workbook.name,
+            demoSnapshotState.workbook.lastReviewedAt,
+            "system",
+            "Generated from the demo workbook.",
+          )
+        );
+      }
+
+      const store = await readStore();
+      const match = store.records.find((record) => record.snapshot.workbook.id === workbookId);
+
+      if (!match) {
+        return null;
+      }
+
+        if (!match.snapshot.workbook.sketchBoard) {
+        match.snapshot = {
+          ...match.snapshot,
+          workbook: {
+            ...match.snapshot.workbook,
+            sketchBoard: createSketchBoard(
+              match.snapshot.workbook.id,
+              match.snapshot.workbook.name,
+              match.snapshot.workbook.lastReviewedAt,
+              "system",
+            ),
+          },
+        };
+
+        await writeStore(store);
+      }
+
+      return match.snapshot.workbook.sketchBoard ?? null;
     },
 
     async saveUploadedWorkbook(input: {
@@ -608,6 +718,7 @@ export function createFileStoreBackend(): StoreBackend {
       author: string;
       body: string;
       parentCommentId?: string;
+      mentions?: string[];
     }): Promise<MutationResult> {
       const createdAt = new Date().toISOString();
 
@@ -685,6 +796,93 @@ export function createFileStoreBackend(): StoreBackend {
 
         await writeStore(store);
         return mutationSuccess(record.snapshot);
+      });
+    },
+
+    async updateStoredSketchBoard(input: {
+      workbookId: string;
+      title: string;
+      updatedBy: string;
+      nodes: WorkbookSketchBoard["nodes"];
+      links: WorkbookSketchBoard["links"];
+      notes?: string;
+    }): Promise<SketchBoardMutationResult> {
+      const updatedAt = new Date().toISOString();
+
+      if (input.workbookId === demoSnapshotState.workbook.id) {
+        const sketchBoard: WorkbookSketchBoard = {
+          id: `${demoSnapshotState.workbook.id}_sketch_board`,
+          workbookId: demoSnapshotState.workbook.id,
+          title: input.title.trim() || `${demoSnapshotState.workbook.name} Sketch Board`,
+          updatedAt,
+          updatedBy: input.updatedBy,
+          nodes: [...input.nodes],
+          links: [...input.links],
+          notes: input.notes?.trim() || undefined,
+        };
+
+        demoSnapshotState = {
+          ...demoSnapshotState,
+          workbook: {
+            ...demoSnapshotState.workbook,
+            sketchBoard,
+          },
+          auditEvents: [
+            ...demoSnapshotState.auditEvents,
+            {
+              id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
+              workbookId: input.workbookId,
+              actor: input.updatedBy,
+              action: "sketch.updated",
+              detail: "Workbook sketch board updated.",
+              createdAt: updatedAt,
+            },
+          ],
+        };
+
+        return { ok: true, sketchBoard };
+      }
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+
+        if (!record) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const sketchBoard: WorkbookSketchBoard = {
+          id: `${record.snapshot.workbook.id}_sketch_board`,
+          workbookId: record.snapshot.workbook.id,
+          title: input.title.trim() || `${record.snapshot.workbook.name} Sketch Board`,
+          updatedAt,
+          updatedBy: input.updatedBy,
+          nodes: [...input.nodes],
+          links: [...input.links],
+          notes: input.notes?.trim() || undefined,
+        };
+
+        record.snapshot = {
+          ...record.snapshot,
+          workbook: {
+            ...record.snapshot.workbook,
+            sketchBoard,
+          },
+          auditEvents: [
+            ...record.snapshot.auditEvents,
+            {
+              id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
+              workbookId: input.workbookId,
+              actor: input.updatedBy,
+              action: "sketch.updated",
+              detail: "Workbook sketch board updated.",
+              createdAt: updatedAt,
+            },
+          ],
+        };
+
+        await writeStore(store);
+        return { ok: true, sketchBoard };
       });
     },
 

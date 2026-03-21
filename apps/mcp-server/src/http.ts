@@ -6,13 +6,16 @@ import { serverName, serverVersion } from "./server.js";
 import {
   applyApprovedProposalItems,
   appendStoredProposalItemComment,
+  getStoredSketchBoard,
   getStoredWorkbookReview,
   getStoreRuntimeStatus,
   listStoredWorkbooks,
   type MutationResult,
   saveUploadedWorkbook,
+  type SketchBoardMutationResult,
   updateStoredProposalItemDecision,
   updateStoredProposalDecision,
+  updateStoredSketchBoard,
 } from "./store.js";
 
 const defaultPort = Number.parseInt(process.env.PORT ?? "4242", 10);
@@ -33,11 +36,39 @@ const proposalCommentSchema = z.object({
   author: z.string().trim().min(1),
   body: z.string().trim().min(1).max(4000),
   parentCommentId: z.string().trim().min(1).optional(),
+  mentions: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
 });
 
 const applySchema = z.object({
   actor: z.string().trim().min(1),
   note: z.string().trim().optional(),
+});
+
+const sketchNodeSchema = z.object({
+  id: z.string().trim().min(1),
+  label: z.string().trim().min(1).max(120),
+  x: z.number(),
+  y: z.number(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+  color: z.string().trim().min(1).max(40).optional(),
+  linkKind: z.enum(["sheet", "proposal", "risk"]).optional(),
+  linkTargetId: z.string().trim().min(1).optional(),
+});
+
+const sketchLinkSchema = z.object({
+  id: z.string().trim().min(1),
+  fromNodeId: z.string().trim().min(1),
+  toNodeId: z.string().trim().min(1),
+  label: z.string().trim().max(120).optional(),
+});
+
+const sketchBoardSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  updatedBy: z.string().trim().min(1),
+  notes: z.string().trim().max(4000).optional(),
+  nodes: z.array(sketchNodeSchema).max(40),
+  links: z.array(sketchLinkSchema).max(80),
 });
 
 class HttpError extends Error {
@@ -52,7 +83,7 @@ class HttpError extends Error {
 
 function withCors(response: ServerResponse) {
   response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-File-Name");
 }
 
@@ -157,6 +188,24 @@ function sendMutationResult(
   }
 }
 
+function sendSketchBoardResult(
+  response: ServerResponse,
+  result: SketchBoardMutationResult | null,
+  notFoundMessage: string,
+) {
+  if (!result) {
+    sendJson(response, 404, { error: notFoundMessage });
+    return;
+  }
+
+  if (result.ok) {
+    sendJson(response, 200, { sketchBoard: result.sketchBoard });
+    return;
+  }
+
+  sendJson(response, 404, { error: notFoundMessage });
+}
+
 async function handleRequest(request: IncomingMessage, response: ServerResponse) {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -211,6 +260,36 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
 
     sendJson(response, 200, { review });
+    return;
+  }
+
+  const sketchBoardMatch = url.pathname.match(/^\/api\/workbooks\/([^/]+)\/sketch$/);
+  if (method === "GET" && sketchBoardMatch) {
+    const workbookId = decodeURIComponent(sketchBoardMatch[1]);
+    const sketchBoard = await getStoredSketchBoard(workbookId);
+
+    if (!sketchBoard) {
+      sendJson(response, 404, { error: "Workbook sketch board not found" });
+      return;
+    }
+
+    sendJson(response, 200, { sketchBoard });
+    return;
+  }
+
+  if (method === "PUT" && sketchBoardMatch) {
+    const workbookId = decodeURIComponent(sketchBoardMatch[1]);
+    const body = await readValidatedJsonBody(request, sketchBoardSchema);
+    const result = await updateStoredSketchBoard({
+      workbookId,
+      title: body.title,
+      updatedBy: body.updatedBy,
+      nodes: body.nodes,
+      links: body.links,
+      notes: body.notes,
+    });
+
+    sendSketchBoardResult(response, result, "Workbook sketch board not found");
     return;
   }
 
@@ -302,6 +381,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       author: body.author,
       body: body.body,
       parentCommentId: body.parentCommentId,
+      mentions: body.mentions,
     });
 
     sendMutationResult(response, result, "Workbook or proposal item not found", {

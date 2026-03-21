@@ -8,6 +8,7 @@ import type {
   WorkbookNamedRange,
   WorkbookRisk,
   WorkbookSheetSummary,
+  WorkbookSketchBoard,
 } from "../../../packages/shared/src/index.js";
 
 interface ParsedWorkbookInput {
@@ -315,6 +316,23 @@ function buildAuditEvents(
   ];
 }
 
+function createWorkbookSketchBoard(
+  workbookId: string,
+  title: string,
+  updatedAt: string,
+): WorkbookSketchBoard {
+  return {
+    id: `${workbookId}_sketch_board`,
+    workbookId,
+    title: `${title} Sketch Board`,
+    updatedAt,
+    updatedBy: "system",
+    nodes: [],
+    links: [],
+    notes: "Initial board created from workbook upload.",
+  };
+}
+
 export function parseWorkbookReviewSnapshot(
   input: ParsedWorkbookInput,
 ): WorkbookReviewSnapshot {
@@ -352,6 +370,11 @@ export function parseWorkbookReviewSnapshot(
           note: "Initial parsed workbook snapshot",
         },
       ],
+      sketchBoard: createWorkbookSketchBoard(
+        input.workbookId,
+        getWorkbookName(input.fileName),
+        input.uploadedAt,
+      ),
     },
     proposal: buildProposal(
       input.workbookId,

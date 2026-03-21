@@ -49,13 +49,15 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
 button:disabled,
 input:disabled,
-textarea:disabled {
+textarea:disabled,
+select:disabled {
   cursor: not-allowed;
 }
 
@@ -477,6 +479,7 @@ h2 {
 .sheet-list,
 .risk-grid,
 .proposal-meta,
+.library-toolbar,
 .link-list,
 .workbook-list,
 .version-list,
@@ -494,6 +497,60 @@ h2 {
   background: var(--surface-tint);
   color: var(--green-strong);
   line-height: 1.5;
+}
+
+.library-toolbar {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 16px;
+}
+
+.library-toolbar label,
+.comment-filter-controls label {
+  display: grid;
+  gap: 6px;
+}
+
+.library-toolbar span,
+.comment-filter-controls span,
+.library-meta {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.library-toolbar input,
+.library-toolbar select,
+.comment-filter-controls input,
+.comment-filter-controls select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 11px;
+  background: #fff;
+  color: var(--text);
+}
+
+.library-meta {
+  margin: 10px 0 0;
+}
+
+.empty-state-card {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #ffffff, #f8fbf7);
+}
+
+.empty-state-card strong {
+  color: var(--green-strong);
+}
+
+.empty-state-card small {
+  color: var(--muted);
 }
 
 .risk-grid {
@@ -620,6 +677,31 @@ h2 {
   color: var(--muted);
 }
 
+.mention-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mention-chip,
+.mention-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef7ef;
+  border: 1px solid #cfe4d3;
+  color: var(--green-strong);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.mention-chip-active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+
 .comment-thread {
   display: grid;
   gap: 8px;
@@ -651,6 +733,9 @@ h2 {
   color: var(--text);
   line-height: 1.5;
   font-size: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .comment-entry small {
@@ -718,7 +803,57 @@ h2 {
 
 .comment-composer-row {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.comment-composer-row small {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.comment-filter-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #ffffff, #f7fbf7);
+}
+
+.comment-filter-head {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+
+.comment-filter-head div {
+  margin-right: auto;
+}
+
+.comment-filter-head span {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.comment-filter-head strong {
+  margin-top: 4px;
+}
+
+.comment-filter-head small {
+  color: var(--muted);
+}
+
+.comment-filter-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.8fr);
+  gap: 10px;
 }
 
 .mini-button.comment {
@@ -842,6 +977,10 @@ h2 {
 
 .review-form input:focus,
 .review-form textarea:focus,
+.library-toolbar input:focus,
+.library-toolbar select:focus,
+.comment-filter-controls input:focus,
+.comment-filter-controls select:focus,
 .upload-control input:focus,
 .workbook-item:focus,
 .tab:focus,
@@ -1015,6 +1154,97 @@ h2 {
   overflow: hidden;
 }
 
+.sketch-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 18px;
+}
+
+.sketch-canvas.persisted {
+  min-height: 420px;
+}
+
+.sketch-controls {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.sketch-controls label,
+.sketch-node-list label {
+  display: grid;
+  gap: 6px;
+}
+
+.sketch-controls span,
+.sketch-node-list span {
+  font-size: 0.74rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sketch-controls input,
+.sketch-controls textarea,
+.sketch-node-list input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  padding: 10px 11px;
+  width: 100%;
+}
+
+.sketch-node-card {
+  position: absolute;
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 2px solid #217346;
+  box-shadow: 0 8px 18px rgba(25, 47, 29, 0.08);
+}
+
+.sketch-node-card strong {
+  font-size: 0.95rem;
+}
+
+.sketch-node-card small,
+.sketch-node-card span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.sketch-link-chip {
+  display: inline-flex;
+  margin: 12px 0 0 12px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(33, 115, 70, 0.08);
+  color: var(--green-strong);
+  font-size: 0.74rem;
+}
+
+.sketch-node-list {
+  display: grid;
+  gap: 12px;
+}
+
+.sketch-node-list article {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfefb;
+}
+
+.sketch-node-list article strong {
+  font-size: 0.9rem;
+}
+
 .node {
   position: absolute;
   padding: 12px 16px;
@@ -1063,7 +1293,9 @@ h2 {
 
 @media (max-width: 960px) {
   .ribbon,
-  .formula-bar {
+  .formula-bar,
+  .library-toolbar,
+  .comment-filter-controls {
     grid-template-columns: 1fr;
   }
 
@@ -1084,7 +1316,8 @@ h2 {
   .grid-two,
   .proposal-grid,
   .proposal-layout,
-  .sketch-panel {
+  .sketch-panel,
+  .sketch-workspace {
     grid-template-columns: 1fr;
   }
 
@@ -1133,7 +1366,9 @@ h2 {
   }
 
   .action-row,
-  .item-action-row {
+  .item-action-row,
+  .comment-composer-row,
+  .comment-filter-head {
     flex-direction: column;
     align-items: stretch;
   }

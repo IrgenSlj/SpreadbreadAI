@@ -1,4 +1,9 @@
-import type { ApprovalDecision, WorkbookReviewSnapshot, WorkbookSummary } from "../../../packages/shared/src/index.js";
+import type {
+  ApprovalDecision,
+  WorkbookReviewSnapshot,
+  WorkbookSketchBoard,
+  WorkbookSummary,
+} from "../../../packages/shared/src/index.js";
 
 export interface StoredWorkbookRecord {
   id: string;
@@ -21,6 +26,10 @@ export type MutationFailureCode =
 
 export type MutationResult =
   | { ok: true; review: WorkbookReviewSnapshot }
+  | { ok: false; code: MutationFailureCode };
+
+export type SketchBoardMutationResult =
+  | { ok: true; sketchBoard: WorkbookSketchBoard }
   | { ok: false; code: MutationFailureCode };
 
 export interface StoreBackend {
@@ -50,7 +59,17 @@ export interface StoreBackend {
     author: string;
     body: string;
     parentCommentId?: string;
+    mentions?: string[];
   }): Promise<MutationResult>;
+  getStoredSketchBoard(workbookId: string): Promise<WorkbookSketchBoard | null>;
+  updateStoredSketchBoard(input: {
+    workbookId: string;
+    title: string;
+    updatedBy: string;
+    nodes: WorkbookSketchBoard["nodes"];
+    links: WorkbookSketchBoard["links"];
+    notes?: string;
+  }): Promise<SketchBoardMutationResult>;
   applyApprovedProposalItems(input: {
     workbookId: string;
     actor: string;

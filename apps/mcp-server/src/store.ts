@@ -3,11 +3,17 @@ import { getPostgresConnectionInfo, hasPostgresConfig } from "./postgres.js";
 import { createPostgresStoreBackend } from "./postgres-store.js";
 import type {
   MutationResult,
+  SketchBoardMutationResult,
   StoreBackend,
   StoredWorkbookRecord,
 } from "./store-backend.js";
 
-export type { MutationFailureCode, MutationResult, StoredWorkbookRecord } from "./store-backend.js";
+export type {
+  MutationFailureCode,
+  MutationResult,
+  SketchBoardMutationResult,
+  StoredWorkbookRecord,
+} from "./store-backend.js";
 
 const backend: StoreBackend = hasPostgresConfig()
   ? createPostgresStoreBackend()
@@ -51,6 +57,10 @@ export function getStoredWorkbookReview(workbookId: string) {
   return backend.getStoredWorkbookReview(workbookId);
 }
 
+export function getStoredSketchBoard(workbookId: string) {
+  return backend.getStoredSketchBoard(workbookId);
+}
+
 export function saveUploadedWorkbook(input: {
   fileName: string;
   contentType: string;
@@ -84,8 +94,20 @@ export function appendStoredProposalItemComment(input: {
   author: string;
   body: string;
   parentCommentId?: string;
+  mentions?: string[];
 }): Promise<MutationResult> {
   return backend.appendStoredProposalItemComment(input);
+}
+
+export function updateStoredSketchBoard(input: {
+  workbookId: string;
+  title: string;
+  updatedBy: string;
+  nodes: import("../../../packages/shared/src/index.js").WorkbookSketchBoard["nodes"];
+  links: import("../../../packages/shared/src/index.js").WorkbookSketchBoard["links"];
+  notes?: string;
+}): Promise<SketchBoardMutationResult> {
+  return backend.updateStoredSketchBoard(input);
 }
 
 export function applyApprovedProposalItems(input: {

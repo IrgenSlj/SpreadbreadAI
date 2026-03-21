@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
   type ApprovalDecision,
+  createSeededSketchBoard,
   demoReviewSnapshot,
   type ProposalDiffEntry,
   type ProposalItemComment,
+  type WorkbookSketchBoard,
   type WorkbookSummary,
   type WorkbookReviewSnapshot,
 } from "../../../packages/shared/src/index";
@@ -15,7 +17,8 @@ type MutationAction =
   | "upload"
   | "proposal-decision"
   | "proposal-item-decision"
-  | "apply";
+  | "apply"
+  | "sketch-save";
 
 type WorkbooksResponse = {
   workbooks: WorkbookSummary[];
@@ -29,6 +32,14 @@ type UploadResponse = {
   workbookId: string;
   review: WorkbookReviewSnapshot;
 };
+
+type SketchBoardResponse = {
+  sketchBoard: WorkbookSketchBoard;
+};
+
+type WorkbookOriginFilter = "all" | "demo" | "uploaded";
+type WorkbookSheetFilter = "all" | "single" | "multi";
+type CommentFilterMode = "all" | "with-comments" | "mine" | "mentions";
 
 type ItemCommentState = {
   submitting: boolean;
@@ -144,6 +155,35 @@ function snapshotToWorkbookSummary(snapshot: WorkbookReviewSnapshot): WorkbookSu
   };
 }
 
+function normalizeHandle(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function mentionHandleForReviewer(value: string) {
+  const normalized = normalizeHandle(value);
+  return normalized.length > 0 ? `@${normalized}` : "@reviewer";
+}
+
+function extractMentions(value: string) {
+  return Array.from(value.matchAll(/(^|\s)(@[a-z0-9._-]+)/gi)).map((match) =>
+    match[2].toLowerCase(),
+  );
+}
+
+function renderCommentBody(body: string) {
+  const segments = body.split(/(@[a-z0-9._-]+)/gi);
+
+  return segments.map((segment, index) =>
+    /^@[a-z0-9._-]+$/i.test(segment) ? (
+      <mark key={`${segment}-${index}`} className="mention-pill">
+        {segment}
+      </mark>
+    ) : (
+      <span key={`${segment}-${index}`}>{segment}</span>
+    ),
+  );
+}
+
 function findFormulaPreview(snapshot: WorkbookReviewSnapshot) {
   for (const sheet of snapshot.workbook.sheets) {
     for (const row of sheet.sampleRows) {
@@ -227,8 +267,20 @@ function App() {
   const [runtimeBackend, setRuntimeBackend] = useState<RuntimeBackendInfo>(
     createDerivedRuntimeInfo([createDemoWorkbookSummary()], demoReviewSnapshot),
   );
+  const [workbookSearchQuery, setWorkbookSearchQuery] = useState("");
+  const [workbookOriginFilter, setWorkbookOriginFilter] =
+    useState<WorkbookOriginFilter>("all");
+  const [workbookSheetFilter, setWorkbookSheetFilter] =
+    useState<WorkbookSheetFilter>("all");
+  const [commentSearchQuery, setCommentSearchQuery] = useState("");
+  const [commentFilterMode, setCommentFilterMode] =
+    useState<CommentFilterMode>("all");
   const [itemCommentDrafts, setItemCommentDrafts] = useState<Record<string, string>>({});
   const [itemCommentState, setItemCommentState] = useState<Record<string, ItemCommentState>>({});
+  const [sketchBoard, setSketchBoard] = useState<WorkbookSketchBoard>(
+    createSeededSketchBoard(demoReviewSnapshot, "system"),
+  );
+  const [sketchError, setSketchError] = useState<string | null>(null);
 
   const pendingRisks = useMemo(
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
@@ -272,6 +324,90 @@ function App() {
       : "Choose either the proposal shortcut or item-level review first. Once review starts, the other path locks.";
   const activeSheet = snapshot.workbook.sheets[0];
   const formulaPreview = findFormulaPreview(snapshot);
+  const reviewerHandle = mentionHandleForReviewer(reviewerName);
+  const filteredWorkbooks = useMemo(() => {
+    const query = workbookSearchQuery.trim().toLowerCase();
+
+    return workbooks.filter((workbook) => {
+      if (workbookOriginFilter === "demo" && workbook.id !== demoReviewSnapshot.workbook.id) {
+        return false;
+      }
+
+      if (workbookOriginFilter === "uploaded" && workbook.id === demoReviewSnapshot.workbook.id) {
+        return false;
+      }
+
+      if (workbookSheetFilter === "single" && workbook.sheetCount !== 1) {
+        return false;
+      }
+
+      if (workbookSheetFilter === "multi" && workbook.sheetCount < 2) {
+        return false;
+      }
+
+      if (!query) {
+        return true;
+      }
+
+      return [workbook.name, workbook.id, workbook.latestVersionId].some((field) =>
+        field.toLowerCase().includes(query),
+      );
+    });
+  }, [workbookOriginFilter, workbookSearchQuery, workbookSheetFilter, workbooks]);
+  const filteredProposalEntries = useMemo(() => {
+    const query = commentSearchQuery.trim().toLowerCase();
+    const reviewerNameNormalized = reviewerName.trim().toLowerCase();
+    const reviewerMention = reviewerHandle.toLowerCase();
+    const filtersActive = commentFilterMode !== "all" || query.length > 0;
+
+    return snapshot.proposal.diff
+      .map((entry) => {
+        const comments = entry.comments ?? [];
+        const visibleComments = comments.filter((comment) => {
+          const matchesQuery =
+            query.length === 0 ||
+            [comment.author, comment.body, entry.cell].some((field) =>
+              field.toLowerCase().includes(query),
+            );
+
+          if (!matchesQuery) {
+            return false;
+          }
+
+          switch (commentFilterMode) {
+            case "with-comments":
+              return true;
+            case "mine":
+              return comment.author.trim().toLowerCase() === reviewerNameNormalized;
+            case "mentions":
+              return extractMentions(comment.body).includes(reviewerMention);
+            default:
+              return true;
+          }
+        });
+
+        if (!filtersActive) {
+          return {
+            entry,
+            visibleComments: comments,
+          };
+        }
+
+        const shouldKeepEntry =
+          visibleComments.length > 0 ||
+          (commentFilterMode === "with-comments" && comments.length > 0 && query.length === 0);
+
+        return shouldKeepEntry
+          ? {
+              entry,
+              visibleComments,
+            }
+          : null;
+      })
+      .filter((item): item is { entry: ProposalDiffEntry; visibleComments: ProposalItemComment[] } =>
+        item !== null,
+      );
+  }, [commentFilterMode, commentSearchQuery, reviewerHandle, reviewerName, snapshot.proposal.diff]);
   const runtimeCounts = useMemo(
     () => ({
       workbookCount: workbooks.length,
@@ -286,6 +422,14 @@ function App() {
     ...runtimeBackend,
     ...runtimeCounts,
   };
+  const sketchNodeOptions = useMemo(
+    () =>
+      snapshot.workbook.sheets.map((sheet) => ({
+        id: `${snapshot.workbook.id}_sheet_${normalizeHandle(sheet.name)}`,
+        label: sheet.name,
+      })),
+    [snapshot.workbook.id, snapshot.workbook.sheets],
+  );
 
   function canReviewItem(entry: ProposalDiffEntry) {
     return canUseItemReview && entry.status === "pending";
@@ -329,6 +473,57 @@ function App() {
       reviewerName.trim().length > 0 &&
       !getItemCommentState(entry.id).submitting
     );
+  }
+
+  function updateSketchBoard(
+    updater: (current: WorkbookSketchBoard) => WorkbookSketchBoard,
+  ) {
+    setSketchBoard((current) => updater(current));
+  }
+
+  function addSketchNodeFromLabel(label: string, color: string) {
+    updateSketchBoard((current) => ({
+      ...current,
+      nodes: [
+        ...current.nodes,
+        {
+          id: `${snapshot.workbook.id}_node_${Date.now().toString(36)}`,
+          label,
+          x: 24 + (current.nodes.length % 3) * 198,
+          y: 30 + Math.floor(current.nodes.length / 3) * 112,
+          width: 170,
+          height: 78,
+          color,
+        },
+      ],
+      updatedBy: reviewerName,
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+
+  async function loadSketchBoard(
+    workbookId: string,
+    reviewSnapshot: WorkbookReviewSnapshot,
+  ) {
+    try {
+      setSketchError(null);
+      const response = await fetch(`/api/workbooks/${encodeURIComponent(workbookId)}/sketch`);
+
+      if (response.status === 404) {
+        setSketchBoard(createSeededSketchBoard(reviewSnapshot, "system"));
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to load sketch board (${response.status})`);
+      }
+
+      const data = (await response.json()) as SketchBoardResponse;
+      setSketchBoard(data.sketchBoard);
+    } catch (error) {
+      setSketchError(error instanceof Error ? error.message : "Failed to load sketch board");
+      setSketchBoard(createSeededSketchBoard(reviewSnapshot, "system"));
+    }
   }
 
   useEffect(() => {
@@ -415,6 +610,7 @@ function App() {
 
     const data = (await response.json()) as { review: WorkbookReviewSnapshot };
     setSnapshot(data.review);
+    await loadSketchBoard(workbookId, data.review);
   }
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -586,45 +782,31 @@ function App() {
       return;
     }
 
-    updateItemCommentState(diffId, {
-      submitting: true,
-      error: null,
-    });
+    updateItemCommentState(diffId, { submitting: true, error: null });
 
-    try {
-      const response = await fetch(
-        `/api/workbooks/${encodeURIComponent(
-          snapshot.workbook.id,
-        )}/proposal/items/${encodeURIComponent(diffId)}/comments`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            author: reviewerName,
-            body,
-          }),
-        },
-      );
+    const nextComment: ProposalItemComment = {
+      id: `${diffId}_comment_${Date.now().toString(36)}`,
+      author: reviewerName.trim(),
+      body,
+      createdAt: new Date().toISOString(),
+    };
 
-      if (!response.ok) {
-        throw new Error(`Comment save failed (${response.status})`);
-      }
-
-      const data = (await response.json()) as ReviewResponse;
-      setSnapshot(data.review);
-      setItemCommentDraft(diffId, "");
-      updateItemCommentState(diffId, {
-        submitting: false,
-        error: null,
-      });
-    } catch (error) {
-      updateItemCommentState(diffId, {
-        submitting: false,
-        error: error instanceof Error ? error.message : "Failed to save comment",
-      });
-    }
+    setSnapshot((current) => ({
+      ...current,
+      proposal: {
+        ...current.proposal,
+        diff: current.proposal.diff.map((entry) =>
+          entry.id === diffId
+            ? {
+                ...entry,
+                comments: [...(entry.comments ?? []), nextComment],
+              }
+            : entry,
+        ),
+      },
+    }));
+    setItemCommentDraft(diffId, "");
+    updateItemCommentState(diffId, { submitting: false, error: null });
   }
 
   async function handleApplyApprovedItems() {
@@ -661,6 +843,49 @@ function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to apply items";
       setErrorMessage(message);
+    } finally {
+      setIsLoading(false);
+      setActiveMutation(null);
+    }
+  }
+
+  async function handleSketchSave() {
+    if (mutationInFlight) {
+      return;
+    }
+
+    try {
+      setActiveMutation("sketch-save");
+      setIsLoading(true);
+      setSketchError(null);
+
+      const response = await fetch(
+        `/api/workbooks/${encodeURIComponent(snapshot.workbook.id)}/sketch`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title: sketchBoard.title,
+            updatedBy: reviewerName,
+            notes: sketchBoard.notes,
+            nodes: sketchBoard.nodes,
+            links: sketchBoard.links,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Sketch save failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as SketchBoardResponse;
+      setSketchBoard(data.sketchBoard);
+      await loadReview(snapshot.workbook.id);
+      setSection("sketch");
+    } catch (error) {
+      setSketchError(error instanceof Error ? error.message : "Failed to save sketch board");
     } finally {
       setIsLoading(false);
       setActiveMutation(null);
@@ -855,9 +1080,50 @@ function App() {
                   Uploaded workbooks are stored locally and exposed back through the
                   review API and MCP read tools.
                 </p>
+                <div className="library-toolbar">
+                  <label>
+                    <span>Search</span>
+                    <input
+                      onChange={(event) => setWorkbookSearchQuery(event.target.value)}
+                      placeholder="Search workbook, id, or version"
+                      type="search"
+                      value={workbookSearchQuery}
+                    />
+                  </label>
+                  <label>
+                    <span>Origin</span>
+                    <select
+                      onChange={(event) =>
+                        setWorkbookOriginFilter(event.target.value as WorkbookOriginFilter)
+                      }
+                      value={workbookOriginFilter}
+                    >
+                      <option value="all">All</option>
+                      <option value="demo">Demo</option>
+                      <option value="uploaded">Uploaded</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Sheets</span>
+                    <select
+                      onChange={(event) =>
+                        setWorkbookSheetFilter(event.target.value as WorkbookSheetFilter)
+                      }
+                      value={workbookSheetFilter}
+                    >
+                      <option value="all">Any</option>
+                      <option value="single">Single-sheet</option>
+                      <option value="multi">Multi-sheet</option>
+                    </select>
+                  </label>
+                </div>
+                <p className="library-meta">
+                  Showing {filteredWorkbooks.length} of {workbooks.length} workbooks
+                </p>
               </div>
               <div className="workbook-list">
-                {workbooks.map((workbook) => (
+                {filteredWorkbooks.length > 0 ? (
+                  filteredWorkbooks.map((workbook) => (
                     <button
                       key={workbook.id}
                       className={
@@ -873,7 +1139,14 @@ function App() {
                     <strong>{workbook.latestVersionId}</strong>
                     <small>{workbook.sheetCount} sheets</small>
                   </button>
-                ))}
+                  ))
+                ) : (
+                  <article className="empty-state-card">
+                    <span>No matching workbooks</span>
+                    <strong>Adjust the search or filters</strong>
+                    <small>The library filter is hiding all available workbook snapshots.</small>
+                  </article>
+                )}
               </div>
             </section>
 
@@ -1049,14 +1322,52 @@ function App() {
                   </p>
                 ) : null}
               </div>
+              <div className="comment-filter-panel">
+                <div className="comment-filter-head">
+                  <div>
+                    <span>Comment threads</span>
+                    <strong>Filter reviewer notes and mentions</strong>
+                  </div>
+                  <small>Your mention handle: {reviewerHandle}</small>
+                </div>
+                <div className="comment-filter-controls">
+                  <label>
+                    <span>Search comments</span>
+                    <input
+                      onChange={(event) => setCommentSearchQuery(event.target.value)}
+                      placeholder="Search author, text, or cell"
+                      type="search"
+                      value={commentSearchQuery}
+                    />
+                  </label>
+                  <label>
+                    <span>Thread view</span>
+                    <select
+                      onChange={(event) =>
+                        setCommentFilterMode(event.target.value as CommentFilterMode)
+                      }
+                      value={commentFilterMode}
+                    >
+                      <option value="all">All items</option>
+                      <option value="with-comments">With comments</option>
+                      <option value="mine">My comments</option>
+                      <option value="mentions">Mentions of me</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
             </div>
             <div className="diff-card">
-              {snapshot.proposal.diff.map((entry) => (
-                <article key={entry.id} className="diff-entry">
+              {filteredProposalEntries.length > 0 ? (
+                filteredProposalEntries.map(({ entry, visibleComments }) => (
+                  <article key={entry.id} className="diff-entry">
                   {(() => {
-                    const comments = entry.comments ?? [];
+                    const comments = visibleComments;
                     const commentState = getItemCommentState(entry.id);
                     const commentDraft = getItemCommentDraft(entry.id);
+                    const mentionCandidates = Array.from(
+                      new Set(comments.flatMap((comment) => extractMentions(comment.body))),
+                    );
 
                     return (
                       <>
@@ -1108,8 +1419,24 @@ function App() {
                         <div className="item-comments">
                           <div className="item-comments-head">
                             <span>Comments</span>
-                            <small>{comments.length} notes</small>
+                            <small>{comments.length} visible notes</small>
                           </div>
+                          {mentionCandidates.length > 0 ? (
+                            <div className="mention-row">
+                              {mentionCandidates.map((mention) => (
+                                <span
+                                  key={mention}
+                                  className={
+                                    mention === reviewerHandle.toLowerCase()
+                                      ? "mention-chip mention-chip-active"
+                                      : "mention-chip"
+                                  }
+                                >
+                                  {mention}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
                           {comments.length > 0 ? (
                             <div className="comment-thread">
                               {comments.map((comment: ProposalItemComment) => (
@@ -1117,7 +1444,7 @@ function App() {
                                   <div className="comment-entry-head">
                                     <strong>{comment.author}</strong>
                                   </div>
-                                  <p>{comment.body}</p>
+                                  <p>{renderCommentBody(comment.body)}</p>
                                   <small>{new Date(comment.createdAt).toLocaleString()}</small>
                                 </article>
                               ))}
@@ -1150,6 +1477,7 @@ function App() {
                               >
                                 {commentState.submitting ? "Saving..." : "Add comment"}
                               </button>
+                              <small>Use handles like {reviewerHandle}</small>
                             </div>
                           </div>
                           {commentState.error ? (
@@ -1159,8 +1487,15 @@ function App() {
                       </>
                     );
                   })()}
+                  </article>
+                ))
+              ) : (
+                <article className="empty-state-card">
+                  <span>No matching threads</span>
+                  <strong>Change the comment filters</strong>
+                  <small>No proposal item comments match the current search or mention view.</small>
                 </article>
-              ))}
+              )}
             </div>
           </section>
         )}
@@ -1188,11 +1523,11 @@ function App() {
           <section className="panel sketch-panel">
             <div>
               <p className="panel-kicker">Sketchpad</p>
-              <h2>Sketch workflows, link them to sheets, and let AI draft structure.</h2>
+              <h2>Persist a workbook planning board with linked review nodes.</h2>
               <p>
-                The canvas is the shared planning surface for humans and agents. In the
-                next phase it will attach nodes directly to workbook ranges and proposal
-                objects.
+                This board now saves through the backend per workbook. Use it to map
+                sheet flow, approval checkpoints, and operating notes while keeping the
+                spreadsheet review context visible.
               </p>
               <div className="link-list">
                 <article>
@@ -1204,13 +1539,160 @@ function App() {
                   <strong>{snapshot.proposal.id}</strong>
                 </article>
               </div>
+              <div className="sketch-controls">
+                <label>
+                  <span>Board title</span>
+                  <input
+                    onChange={(event) =>
+                      updateSketchBoard((current) => ({
+                        ...current,
+                        title: event.target.value,
+                      }))
+                    }
+                    type="text"
+                    value={sketchBoard.title}
+                  />
+                </label>
+                <label>
+                  <span>Board notes</span>
+                  <textarea
+                    onChange={(event) =>
+                      updateSketchBoard((current) => ({
+                        ...current,
+                        notes: event.target.value,
+                      }))
+                    }
+                    rows={4}
+                    value={sketchBoard.notes ?? ""}
+                  />
+                </label>
+                <div className="action-row">
+                  <button
+                    className="decision-button approve"
+                    onClick={() =>
+                      addSketchNodeFromLabel(
+                        snapshot.workbook.sheets[0]?.name ?? "Workbook Node",
+                        "#217346",
+                      )
+                    }
+                    type="button"
+                  >
+                    Add Sheet Node
+                  </button>
+                  <button
+                    className="decision-button apply"
+                    onClick={() => addSketchNodeFromLabel("Approval", "#6dbb75")}
+                    type="button"
+                  >
+                    Add Approval Node
+                  </button>
+                  <button
+                    className="decision-button apply"
+                    disabled={mutationInFlight}
+                    onClick={() => void handleSketchSave()}
+                    type="button"
+                  >
+                    Save Board
+                  </button>
+                </div>
+                {sketchError ? <p className="comment-error">{sketchError}</p> : null}
+                <p className="review-meta">
+                  Updated by {sketchBoard.updatedBy} at{" "}
+                  {new Date(sketchBoard.updatedAt).toLocaleString()}
+                </p>
+              </div>
             </div>
-            <div className="sketch-canvas" aria-label="Sketchpad placeholder">
-              <div className="node node-a">{snapshot.workbook.sheets[0]?.name ?? "Inputs"}</div>
-              <div className="node node-b">{snapshot.workbook.sheets[1]?.name ?? "Model"}</div>
-              <div className="node node-c">Approval</div>
-              <div className="connector connector-a" />
-              <div className="connector connector-b" />
+            <div className="sketch-workspace">
+              <div className="sketch-canvas persisted" aria-label="Workbook sketch board">
+                {sketchBoard.links.map((link) => (
+                  <div key={link.id} className="sketch-link-chip">
+                    {link.fromNodeId} to {link.toNodeId}
+                  </div>
+                ))}
+                {sketchBoard.nodes.map((node) => (
+                  <div
+                    key={node.id}
+                    className="sketch-node-card"
+                    style={{
+                      left: `${node.x}px`,
+                      top: `${node.y}px`,
+                      width: `${node.width}px`,
+                      minHeight: `${node.height}px`,
+                      borderColor: node.color ?? "#217346",
+                    }}
+                  >
+                    <strong>{node.label}</strong>
+                    <small>{node.linkKind ?? "free node"}</small>
+                    {node.linkTargetId ? <span>{node.linkTargetId}</span> : null}
+                  </div>
+                ))}
+              </div>
+              <div className="sketch-node-list">
+                {sketchBoard.nodes.map((node, index) => (
+                  <article key={node.id}>
+                    <strong>Node {index + 1}</strong>
+                    <label>
+                      <span>Label</span>
+                      <input
+                        onChange={(event) =>
+                          updateSketchBoard((current) => ({
+                            ...current,
+                            nodes: current.nodes.map((item) =>
+                              item.id === node.id
+                                ? {
+                                    ...item,
+                                    label: event.target.value,
+                                  }
+                                : item,
+                            ),
+                          }))
+                        }
+                        type="text"
+                        value={node.label}
+                      />
+                    </label>
+                    <label>
+                      <span>X / Y</span>
+                      <input
+                        onChange={(event) => {
+                          const value = Number.parseInt(event.target.value || "0", 10);
+                          updateSketchBoard((current) => ({
+                            ...current,
+                            nodes: current.nodes.map((item) =>
+                              item.id === node.id
+                                ? {
+                                    ...item,
+                                    x: Number.isNaN(value) ? item.x : value,
+                                  }
+                                : item,
+                            ),
+                          }));
+                        }}
+                        type="number"
+                        value={node.x}
+                      />
+                      <input
+                        onChange={(event) => {
+                          const value = Number.parseInt(event.target.value || "0", 10);
+                          updateSketchBoard((current) => ({
+                            ...current,
+                            nodes: current.nodes.map((item) =>
+                              item.id === node.id
+                                ? {
+                                    ...item,
+                                    y: Number.isNaN(value) ? item.y : value,
+                                  }
+                                : item,
+                            ),
+                          }));
+                        }}
+                        type="number"
+                        value={node.y}
+                      />
+                    </label>
+                  </article>
+                ))}
+              </div>
             </div>
           </section>
         )}
