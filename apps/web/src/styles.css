@@ -591,6 +591,146 @@ h2 {
   line-height: 1.45;
 }
 
+.item-comments {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #ffffff, #f7fbf7);
+}
+
+.item-comments-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.item-comments-head span {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--green);
+}
+
+.item-comments-head small {
+  color: var(--muted);
+}
+
+.comment-thread {
+  display: grid;
+  gap: 8px;
+}
+
+.comment-entry {
+  display: grid;
+  gap: 6px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.comment-entry-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.comment-entry-head strong {
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.comment-entry p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+  font-size: 0.9rem;
+}
+
+.comment-entry small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.comment-source {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #f4f7f4;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.source-local {
+  background: #edf6ef;
+  color: var(--green-strong);
+  border-color: #c7dbcb;
+}
+
+.source-backend {
+  background: #e8f4eb;
+  color: var(--green-strong);
+  border-color: #b8d7c1;
+}
+
+.source-seed {
+  background: #f6f8f4;
+  color: var(--muted);
+}
+
+.comment-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.comment-composer {
+  display: grid;
+  gap: 8px;
+}
+
+.comment-composer textarea {
+  min-height: 68px;
+  resize: vertical;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 11px;
+  background: #ffffff;
+  color: var(--text);
+}
+
+.comment-composer textarea:focus {
+  outline: 2px solid rgba(33, 115, 70, 0.24);
+  outline-offset: 2px;
+}
+
+.comment-composer-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mini-button.comment {
+  background: var(--green);
+}
+
+.comment-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.84rem;
+}
+
 .diff-header {
   display: flex;
   justify-content: space-between;

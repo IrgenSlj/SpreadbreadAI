@@ -3,6 +3,7 @@ import {
   type ApprovalDecision,
   demoReviewSnapshot,
   type ProposalDiffEntry,
+  type ProposalItemComment,
   type WorkbookSummary,
   type WorkbookReviewSnapshot,
 } from "../../../packages/shared/src/index";
@@ -27,6 +28,11 @@ type ReviewResponse = {
 type UploadResponse = {
   workbookId: string;
   review: WorkbookReviewSnapshot;
+};
+
+type ItemCommentState = {
+  submitting: boolean;
+  error: string | null;
 };
 
 type RuntimeBackendMode = "local" | "file-store" | "postgres" | "hybrid" | "unknown";
@@ -221,6 +227,8 @@ function App() {
   const [runtimeBackend, setRuntimeBackend] = useState<RuntimeBackendInfo>(
     createDerivedRuntimeInfo([createDemoWorkbookSummary()], demoReviewSnapshot),
   );
+  const [itemCommentDrafts, setItemCommentDrafts] = useState<Record<string, string>>({});
+  const [itemCommentState, setItemCommentState] = useState<Record<string, ItemCommentState>>({});
 
   const pendingRisks = useMemo(
     () => snapshot.workbook.risks.filter((risk) => risk.severity !== "low"),
@@ -281,6 +289,46 @@ function App() {
 
   function canReviewItem(entry: ProposalDiffEntry) {
     return canUseItemReview && entry.status === "pending";
+  }
+
+  function getItemCommentState(entryId: string): ItemCommentState {
+    return itemCommentState[entryId] ?? { submitting: false, error: null };
+  }
+
+  function getItemCommentDraft(entryId: string) {
+    return itemCommentDrafts[entryId] ?? "";
+  }
+
+  function setItemCommentDraft(entryId: string, draft: string) {
+    setItemCommentDrafts((current) => ({
+      ...current,
+      [entryId]: draft,
+    }));
+  }
+
+  function updateItemCommentState(
+    entryId: string,
+    nextState: Partial<ItemCommentState>,
+  ) {
+    setItemCommentState((current) => ({
+      ...current,
+      [entryId]: {
+        ...(current[entryId] ?? {
+          submitting: false,
+          error: null,
+        }),
+        ...nextState,
+      },
+    }));
+  }
+
+  function canCommentOnItem(entry: ProposalDiffEntry) {
+    return (
+      !proposalIsLocked &&
+      !mutationInFlight &&
+      reviewerName.trim().length > 0 &&
+      !getItemCommentState(entry.id).submitting
+    );
   }
 
   useEffect(() => {
@@ -527,6 +575,55 @@ function App() {
     } finally {
       setIsLoading(false);
       setActiveMutation(null);
+    }
+  }
+
+  async function handleProposalItemComment(diffId: string) {
+    const body = getItemCommentDraft(diffId).trim();
+    const commentState = getItemCommentState(diffId);
+
+    if (!body || commentState.submitting || proposalIsLocked || mutationInFlight) {
+      return;
+    }
+
+    updateItemCommentState(diffId, {
+      submitting: true,
+      error: null,
+    });
+
+    try {
+      const response = await fetch(
+        `/api/workbooks/${encodeURIComponent(
+          snapshot.workbook.id,
+        )}/proposal/items/${encodeURIComponent(diffId)}/comments`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            author: reviewerName,
+            body,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Comment save failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as ReviewResponse;
+      setSnapshot(data.review);
+      setItemCommentDraft(diffId, "");
+      updateItemCommentState(diffId, {
+        submitting: false,
+        error: null,
+      });
+    } catch (error) {
+      updateItemCommentState(diffId, {
+        submitting: false,
+        error: error instanceof Error ? error.message : "Failed to save comment",
+      });
     }
   }
 
@@ -956,51 +1053,112 @@ function App() {
             <div className="diff-card">
               {snapshot.proposal.diff.map((entry) => (
                 <article key={entry.id} className="diff-entry">
-                  <div className="diff-header">
-                    <span>{entry.cell}</span>
-                    <small>{entry.kind}</small>
-                  </div>
-                  <div className="item-status-row">
-                    <span className={`item-status status-${entry.status}`}>
-                      {itemStatusLabel(entry.status)}
-                    </span>
-                    <div className="item-action-row">
-                      <button
-                        className="mini-button approve"
-                        disabled={!canReviewItem(entry)}
-                        onClick={() => void handleProposalItemDecision(entry.id, "approve")}
-                        type="button"
-                      >
-                        Approve Item
-                      </button>
-                      <button
-                        className="mini-button reject"
-                        disabled={!canReviewItem(entry)}
-                        onClick={() => void handleProposalItemDecision(entry.id, "reject")}
-                        type="button"
-                      >
-                        Reject Item
-                      </button>
-                    </div>
-                  </div>
-                  {entry.before ? (
-                    <div className={`diff-row ${diffClassName(entry.kind)}`}>- {entry.before}</div>
-                  ) : null}
-                  {entry.after ? (
-                    <div className={`diff-row ${diffClassName(entry.kind)}`}>
-                      {entry.kind === "comment" ? entry.after : `+ ${entry.after}`}
-                    </div>
-                  ) : null}
-                  <div className="diff-row neutral">{entry.rationale}</div>
-                  {entry.reviewer ? (
-                    <div className="item-meta">
-                      {entry.reviewer}
-                      {entry.reviewedAt
-                        ? ` at ${new Date(entry.reviewedAt).toLocaleString()}`
-                        : ""}
-                      {entry.reviewComment ? `: ${entry.reviewComment}` : ""}
-                    </div>
-                  ) : null}
+                  {(() => {
+                    const comments = entry.comments ?? [];
+                    const commentState = getItemCommentState(entry.id);
+                    const commentDraft = getItemCommentDraft(entry.id);
+
+                    return (
+                      <>
+                        <div className="diff-header">
+                          <span>{entry.cell}</span>
+                          <small>{entry.kind}</small>
+                        </div>
+                        <div className="item-status-row">
+                          <span className={`item-status status-${entry.status}`}>
+                            {itemStatusLabel(entry.status)}
+                          </span>
+                          <div className="item-action-row">
+                            <button
+                              className="mini-button approve"
+                              disabled={!canReviewItem(entry)}
+                              onClick={() => void handleProposalItemDecision(entry.id, "approve")}
+                              type="button"
+                            >
+                              Approve Item
+                            </button>
+                            <button
+                              className="mini-button reject"
+                              disabled={!canReviewItem(entry)}
+                              onClick={() => void handleProposalItemDecision(entry.id, "reject")}
+                              type="button"
+                            >
+                              Reject Item
+                            </button>
+                          </div>
+                        </div>
+                        {entry.before ? (
+                          <div className={`diff-row ${diffClassName(entry.kind)}`}>- {entry.before}</div>
+                        ) : null}
+                        {entry.after ? (
+                          <div className={`diff-row ${diffClassName(entry.kind)}`}>
+                            {entry.kind === "comment" ? entry.after : `+ ${entry.after}`}
+                          </div>
+                        ) : null}
+                        <div className="diff-row neutral">{entry.rationale}</div>
+                        {entry.reviewer ? (
+                          <div className="item-meta">
+                            {entry.reviewer}
+                            {entry.reviewedAt
+                              ? ` at ${new Date(entry.reviewedAt).toLocaleString()}`
+                              : ""}
+                            {entry.reviewComment ? `: ${entry.reviewComment}` : ""}
+                          </div>
+                        ) : null}
+                        <div className="item-comments">
+                          <div className="item-comments-head">
+                            <span>Comments</span>
+                            <small>{comments.length} notes</small>
+                          </div>
+                          {comments.length > 0 ? (
+                            <div className="comment-thread">
+                              {comments.map((comment: ProposalItemComment) => (
+                                <article key={comment.id} className="comment-entry">
+                                  <div className="comment-entry-head">
+                                    <strong>{comment.author}</strong>
+                                  </div>
+                                  <p>{comment.body}</p>
+                                  <small>{new Date(comment.createdAt).toLocaleString()}</small>
+                                </article>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="comment-empty">
+                              No comments yet. Add a note for this review item.
+                            </p>
+                          )}
+                          <div className="comment-composer">
+                            <textarea
+                              aria-label={`Add comment for ${entry.cell}`}
+                              disabled={!canCommentOnItem(entry)}
+                              onChange={(event) =>
+                                setItemCommentDraft(entry.id, event.target.value)
+                              }
+                              placeholder="Add a short note for this item..."
+                              rows={2}
+                              value={commentDraft}
+                            />
+                            <div className="comment-composer-row">
+                              <button
+                                className="mini-button comment"
+                                disabled={
+                                  !canCommentOnItem(entry) ||
+                                  commentDraft.trim().length === 0
+                                }
+                                onClick={() => void handleProposalItemComment(entry.id)}
+                                type="button"
+                              >
+                                {commentState.submitting ? "Saving..." : "Add comment"}
+                              </button>
+                            </div>
+                          </div>
+                          {commentState.error ? (
+                            <p className="comment-error">{commentState.error}</p>
+                          ) : null}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </article>
               ))}
             </div>
