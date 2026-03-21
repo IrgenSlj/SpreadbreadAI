@@ -5,6 +5,7 @@ import {
   demoReviewSnapshot,
   type ProposalDiffEntry,
   type ProposalItemComment,
+  type WorkbookLibraryView,
   type WorkbookSketchBoard,
   type WorkbookSummary,
   type WorkbookReviewSnapshot,
@@ -37,18 +38,18 @@ type SketchBoardResponse = {
   sketchBoard: WorkbookSketchBoard;
 };
 
+type WorkbookTagsResponse = {
+  workbookId: string;
+  tags: string[];
+};
+
+type WorkbookLibraryViewsResponse = {
+  views: WorkbookLibraryView[];
+};
+
 type WorkbookOriginFilter = "all" | "demo" | "uploaded";
 type WorkbookSheetFilter = "all" | "single" | "multi";
 type CommentFilterMode = "all" | "with-comments" | "mine" | "mentions" | "replies";
-
-type SavedWorkbookView = {
-  id: string;
-  name: string;
-  query: string;
-  origin: WorkbookOriginFilter;
-  sheets: WorkbookSheetFilter;
-  tag: string;
-};
 
 type ReplyTarget = {
   commentId: string;
@@ -296,9 +297,8 @@ function App() {
   const [workbookSheetFilter, setWorkbookSheetFilter] =
     useState<WorkbookSheetFilter>("all");
   const [workbookTagFilter, setWorkbookTagFilter] = useState("all");
-  const [workbookTags, setWorkbookTags] = useState<Record<string, string[]>>({});
   const [workbookTagDraft, setWorkbookTagDraft] = useState("");
-  const [savedWorkbookViews, setSavedWorkbookViews] = useState<SavedWorkbookView[]>([]);
+  const [savedWorkbookViews, setSavedWorkbookViews] = useState<WorkbookLibraryView[]>([]);
   const [savedViewName, setSavedViewName] = useState("");
   const [commentSearchQuery, setCommentSearchQuery] = useState("");
   const [commentFilterMode, setCommentFilterMode] =
@@ -378,7 +378,7 @@ function App() {
 
       if (
         workbookTagFilter !== "all" &&
-        !(workbookTags[workbook.id] ?? []).includes(workbookTagFilter)
+        !workbook.tags.includes(workbookTagFilter)
       ) {
         return false;
       }
@@ -396,7 +396,6 @@ function App() {
     workbookSearchQuery,
     workbookSheetFilter,
     workbookTagFilter,
-    workbookTags,
     workbooks,
   ]);
   const filteredProposalEntries = useMemo(() => {
@@ -480,9 +479,43 @@ function App() {
   const availableTags = useMemo(
     () =>
       Array.from(
-        new Set(Object.values(workbookTags).flatMap((tags) => tags)),
+        new Set(workbooks.flatMap((workbook) => workbook.tags)),
       ).sort((left, right) => left.localeCompare(right)),
-    [workbookTags],
+    [workbooks],
+  );
+  const reviewNotifications = useMemo(
+    () =>
+      snapshot.proposal.diff.flatMap((entry) =>
+        (entry.comments ?? []).flatMap((comment) => {
+          const notifications: Array<{ id: string; label: string; detail: string }> = [];
+          const mentionsReviewer = (comment.mentions ?? []).includes(
+            reviewerHandle.replace(/^@/, ""),
+          );
+
+          if (mentionsReviewer) {
+            notifications.push({
+              id: `${comment.id}_mention`,
+              label: "Mention",
+              detail: `${comment.author} mentioned ${reviewerHandle} on ${entry.cell}.`,
+            });
+          }
+
+          if (comment.replyToCommentId && comment.author.trim() !== reviewerName.trim()) {
+            notifications.push({
+              id: `${comment.id}_reply`,
+              label: "Reply",
+              detail: `${comment.author} replied in the review thread for ${entry.cell}.`,
+            });
+          }
+
+          return notifications;
+        }),
+      ),
+    [reviewerHandle, reviewerName, snapshot.proposal.diff],
+  );
+  const sketchNodeMap = useMemo(
+    () => new Map(sketchBoard.nodes.map((node) => [node.id, node])),
+    [sketchBoard.nodes],
   );
 
   function getReplyTarget(entryId: string) {
@@ -589,67 +622,141 @@ function App() {
     setSketchBoard((current) => updater(current));
   }
 
-  function addTagToActiveWorkbook() {
+  async function addTagToActiveWorkbook() {
     const normalized = workbookTagDraft.trim().toLowerCase();
 
     if (!normalized) {
       return;
     }
 
-    setWorkbookTags((current) => ({
-      ...current,
-      [snapshot.workbook.id]: Array.from(
-        new Set([...(current[snapshot.workbook.id] ?? []), normalized]),
-      ),
-    }));
-    setWorkbookTagDraft("");
+    const nextTags = Array.from(new Set([...(snapshot.workbook.tags ?? []), normalized]));
+
+    try {
+      const response = await fetch(
+        `/api/workbooks/${encodeURIComponent(snapshot.workbook.id)}/tags`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            updatedBy: reviewerName,
+            tags: nextTags,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Tag update failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as { tags: string[] };
+      setWorkbooks((current) =>
+        current.map((workbook) =>
+          workbook.id === snapshot.workbook.id ? { ...workbook, tags: data.tags } : workbook,
+        ),
+      );
+      setSnapshot((current) => ({
+        ...current,
+        workbook: {
+          ...current.workbook,
+          tags: data.tags,
+        },
+      }));
+      setWorkbookTagDraft("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to update tags");
+    }
   }
 
-  function saveCurrentWorkbookView() {
+  async function saveCurrentWorkbookView() {
     const trimmedName = savedViewName.trim();
 
     if (!trimmedName) {
       return;
     }
 
-    const view: SavedWorkbookView = {
-      id: `view_${Date.now().toString(36)}`,
-      name: trimmedName,
-      query: workbookSearchQuery,
-      origin: workbookOriginFilter,
-      sheets: workbookSheetFilter,
-      tag: workbookTagFilter,
-    };
+    try {
+      const viewId = normalizeHandle(trimmedName) || `view_${Date.now().toString(36)}`;
+      const response = await fetch(`/api/library/views/${encodeURIComponent(viewId)}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: trimmedName,
+          updatedBy: reviewerName,
+          description: "Saved from the workbook library filters.",
+          searchQuery: workbookSearchQuery,
+          tags: workbookTagFilter === "all" ? [] : [workbookTagFilter],
+          sortBy: "lastReviewedAt",
+          sortDirection: "desc",
+          pinned: false,
+        }),
+      });
 
-    setSavedWorkbookViews((current) => [view, ...current.filter((item) => item.name !== view.name)]);
-    setSavedViewName("");
+      if (!response.ok) {
+        throw new Error(`Saved view update failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as { view: WorkbookLibraryView };
+      setSavedWorkbookViews((current) => [
+        data.view,
+        ...current.filter((item) => item.id !== data.view.id),
+      ]);
+      setSavedViewName("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to save workbook view");
+    }
   }
 
-  function applySavedWorkbookView(view: SavedWorkbookView) {
-    setWorkbookSearchQuery(view.query);
-    setWorkbookOriginFilter(view.origin);
-    setWorkbookSheetFilter(view.sheets);
-    setWorkbookTagFilter(view.tag);
+  function applySavedWorkbookView(view: WorkbookLibraryView) {
+    setWorkbookSearchQuery(view.searchQuery ?? "");
+    setWorkbookOriginFilter("all");
+    setWorkbookSheetFilter("all");
+    setWorkbookTagFilter(view.tags[0] ?? "all");
   }
 
   function deleteSavedWorkbookView(viewId: string) {
     setSavedWorkbookViews((current) => current.filter((view) => view.id !== viewId));
   }
 
-  function removeTagFromWorkbook(workbookId: string, tag: string) {
-    setWorkbookTags((current) => {
-      const nextTags = (current[workbookId] ?? []).filter((item) => item !== tag);
+  async function removeTagFromWorkbook(workbookId: string, tag: string) {
+    const workbook = workbooks.find((entry) => entry.id === workbookId);
+    const nextTags = (workbook?.tags ?? []).filter((item) => item !== tag);
 
-      if (nextTags.length === 0) {
-        const { [workbookId]: _removed, ...rest } = current;
-        return rest;
+    try {
+      const response = await fetch(`/api/workbooks/${encodeURIComponent(workbookId)}/tags`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          updatedBy: reviewerName,
+          tags: nextTags,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Tag removal failed (${response.status})`);
       }
 
-      return {
-        ...current,
-        [workbookId]: nextTags,
-      };
-    });
+      const data = (await response.json()) as { tags: string[] };
+      setWorkbooks((current) =>
+        current.map((entry) => (entry.id === workbookId ? { ...entry, tags: data.tags } : entry)),
+      );
+      if (snapshot.workbook.id === workbookId) {
+        setSnapshot((current) => ({
+          ...current,
+          workbook: {
+            ...current.workbook,
+            tags: data.tags,
+          },
+        }));
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to remove tag");
+    }
   }
 
   function startNodeDrag(
@@ -720,6 +827,17 @@ function App() {
     }
   }
 
+  async function loadLibraryViews() {
+    const response = await fetch("/api/library/views");
+
+    if (!response.ok) {
+      throw new Error(`Failed to load library views (${response.status})`);
+    }
+
+    const data = (await response.json()) as WorkbookLibraryViewsResponse;
+    setSavedWorkbookViews(data.views);
+  }
+
   useEffect(() => {
     void loadWorkbooks({ allowDemoFallback: true });
   }, []);
@@ -729,32 +847,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    try {
-      const storedTags = window.localStorage.getItem("spreadbreadai-workbook-tags");
-      const storedViews = window.localStorage.getItem("spreadbreadai-workbook-views");
-
-      if (storedTags) {
-        setWorkbookTags(JSON.parse(storedTags) as Record<string, string[]>);
-      }
-
-      if (storedViews) {
-        setSavedWorkbookViews(JSON.parse(storedViews) as SavedWorkbookView[]);
-      }
-    } catch {
-      // Ignore localStorage parse failures and fall back to empty UI state.
-    }
+    void loadLibraryViews().catch(() => undefined);
   }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem("spreadbreadai-workbook-tags", JSON.stringify(workbookTags));
-  }, [workbookTags]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      "spreadbreadai-workbook-views",
-      JSON.stringify(savedWorkbookViews),
-    );
-  }, [savedWorkbookViews]);
 
   useEffect(() => {
     if (!dragState) {
@@ -1446,16 +1540,9 @@ function App() {
                           >
                             <strong>{view.name}</strong>
                             <small>
-                              {view.query || "No query"} · {view.origin} · {view.sheets}
-                              {view.tag !== "all" ? ` · ${view.tag}` : ""}
+                              {view.searchQuery || "No query"} · {view.sortBy} · {view.sortDirection}
+                              {view.tags.length > 0 ? ` · ${view.tags.join(", ")}` : ""}
                             </small>
-                          </button>
-                          <button
-                            className="saved-view-delete"
-                            onClick={() => deleteSavedWorkbookView(view.id)}
-                            type="button"
-                          >
-                            Remove
                           </button>
                         </article>
                       ))}
@@ -1481,9 +1568,9 @@ function App() {
                         <strong>{workbook.latestVersionId}</strong>
                         <small>{workbook.sheetCount} sheets</small>
                       </button>
-                      {(workbookTags[workbook.id] ?? []).length > 0 ? (
+                      {workbook.tags.length > 0 ? (
                         <div className="tag-row">
-                          {(workbookTags[workbook.id] ?? []).map((tag) => (
+                          {workbook.tags.map((tag) => (
                             <button
                               key={`${workbook.id}-${tag}`}
                               className={
@@ -1498,7 +1585,7 @@ function App() {
                             </button>
                           ))}
                           {workbook.id === snapshot.workbook.id
-                            ? (workbookTags[workbook.id] ?? []).map((tag) => (
+                            ? workbook.tags.map((tag) => (
                                 <button
                                   key={`${workbook.id}-${tag}-remove`}
                                   className="tag-remove"
@@ -1722,6 +1809,16 @@ function App() {
                   </div>
                   <small>Your mention handle: {reviewerHandle}</small>
                 </div>
+                {reviewNotifications.length > 0 ? (
+                  <div className="notification-strip">
+                    {reviewNotifications.map((notification) => (
+                      <article key={notification.id} className="notification-card">
+                        <strong>{notification.label}</strong>
+                        <small>{notification.detail}</small>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="comment-filter-controls">
                   <label>
                     <span>Search comments</span>
@@ -2040,11 +2137,42 @@ function App() {
                 className="sketch-canvas persisted"
                 aria-label="Workbook sketch board"
               >
-                {sketchBoard.links.map((link) => (
-                  <div key={link.id} className="sketch-link-chip">
-                    {link.fromNodeId} to {link.toNodeId}
-                  </div>
-                ))}
+                <svg className="sketch-links" aria-hidden="true">
+                  {sketchBoard.links.map((link) => {
+                    const fromNode = sketchNodeMap.get(link.fromNodeId);
+                    const toNode = sketchNodeMap.get(link.toNodeId);
+
+                    if (!fromNode || !toNode) {
+                      return null;
+                    }
+
+                    const x1 = fromNode.x + fromNode.width / 2;
+                    const y1 = fromNode.y + fromNode.height / 2;
+                    const x2 = toNode.x + toNode.width / 2;
+                    const y2 = toNode.y + toNode.height / 2;
+
+                    return (
+                      <g key={link.id}>
+                        <line
+                          className="sketch-link-line"
+                          x1={x1}
+                          y1={y1}
+                          x2={x2}
+                          y2={y2}
+                        />
+                        {link.label ? (
+                          <text
+                            className="sketch-link-text"
+                            x={(x1 + x2) / 2}
+                            y={(y1 + y2) / 2 - 6}
+                          >
+                            {link.label}
+                          </text>
+                        ) : null}
+                      </g>
+                    );
+                  })}
+                </svg>
                 {sketchBoard.nodes.map((node) => (
                   <div
                     key={node.id}

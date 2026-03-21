@@ -958,6 +958,29 @@ h2 {
   background: linear-gradient(180deg, #ffffff, #f7fbf7);
 }
 
+.notification-strip {
+  display: grid;
+  gap: 8px;
+}
+
+.notification-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #cfe4d3;
+  background: #edf7ef;
+}
+
+.notification-card strong {
+  font-size: 0.84rem;
+  color: var(--green-strong);
+}
+
+.notification-card small {
+  color: var(--muted);
+}
+
 .comment-filter-head {
   display: flex;
   align-items: end;
@@ -1297,6 +1320,27 @@ h2 {
 
 .sketch-canvas.persisted {
   min-height: 420px;
+}
+
+.sketch-links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.sketch-link-line {
+  stroke: rgba(33, 115, 70, 0.45);
+  stroke-width: 2.5;
+}
+
+.sketch-link-text {
+  fill: var(--green-strong);
+  font-size: 12px;
+  text-anchor: middle;
+  font-family: var(--font-mono);
 }
 
 .sketch-controls {
