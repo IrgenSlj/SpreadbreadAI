@@ -78,6 +78,14 @@ function itemDecisionToStatus(decision: ApprovalDecision): ProposalItemStatus {
   return decision === "approve" ? "approved" : "rejected";
 }
 
+function normalizeProposalItemStatus(
+  status: ProposalItemStatus | null | undefined,
+): ProposalItemStatus {
+  return status === "approved" || status === "rejected" || status === "pending"
+    ? status
+    : "pending";
+}
+
 function mutationSuccess(review: WorkbookReviewSnapshot): MutationResult {
   return { ok: true, review };
 }
@@ -255,7 +263,7 @@ async function insertSnapshot(
         item.before ?? null,
         item.after ?? null,
         item.rationale,
-        item.status,
+        normalizeProposalItemStatus(item.status),
         item.reviewer ?? null,
         item.reviewedAt ?? null,
         item.reviewComment ?? null,
@@ -509,7 +517,7 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
     before: row.before_value ?? undefined,
     after: row.after_value ?? undefined,
     rationale: row.rationale,
-    status: row.status,
+    status: normalizeProposalItemStatus(row.status),
     reviewer: row.reviewer ?? undefined,
     reviewedAt: row.reviewed_at ?? undefined,
     reviewComment: row.review_comment ?? undefined,

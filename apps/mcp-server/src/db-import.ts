@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { WorkbookReviewSnapshot, WorkbookVersionSummary } from "../../../packages/shared/src/index.js";
 import { hasPostgresConfig } from "./postgres.js";
 import { importStoredWorkbookRecords } from "./postgres-store.js";
 import type { StoredWorkbookRecord } from "./store-backend.js";
@@ -33,6 +34,32 @@ async function readFileStorePayload(): Promise<FileStorePayload> {
   }
 }
 
+function normalizeSnapshot(snapshot: WorkbookReviewSnapshot): WorkbookReviewSnapshot {
+  const versions = Array.isArray(snapshot.workbook.versions) ? snapshot.workbook.versions : [];
+
+  if (versions.length > 0) {
+    return snapshot;
+  }
+
+  const inferredVersion: WorkbookVersionSummary = {
+    id: snapshot.workbook.latestVersionId,
+    createdAt: snapshot.workbook.lastReviewedAt || snapshot.workbook.createdAt,
+    createdBy: snapshot.proposal.appliedBy || snapshot.proposal.reviewer || "system",
+    note:
+      snapshot.proposal.appliedVersionId === snapshot.workbook.latestVersionId
+        ? "Recovered applied workbook version from legacy file-store snapshot"
+        : "Recovered initial workbook version from legacy file-store snapshot",
+  };
+
+  return {
+    ...snapshot,
+    workbook: {
+      ...snapshot.workbook,
+      versions: [inferredVersion],
+    },
+  };
+}
+
 async function main() {
   if (!hasPostgresConfig()) {
     throw new Error("DATABASE_URL is required to import file-store data into PostgreSQL");
@@ -45,7 +72,12 @@ async function main() {
     return;
   }
 
-  const result = await importStoredWorkbookRecords(payload.records);
+  const normalizedRecords = payload.records.map((record) => ({
+    ...record,
+    snapshot: normalizeSnapshot(record.snapshot),
+  }));
+
+  const result = await importStoredWorkbookRecords(normalizedRecords);
   console.log(
     JSON.stringify(
       {
