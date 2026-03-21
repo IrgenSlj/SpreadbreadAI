@@ -17,7 +17,9 @@ TypeScript MCP server scaffold for workbook automation.
 - `workbook.draft` for proposal creation
 - `workbook.apply` for approval-gated application
 
-The current implementation is intentionally minimal. It wires a real stdio MCP server and returns explicit placeholder responses so the next phase can replace them with workbook metadata, proposal storage, and the approval workflow.
+The current local prototype also exposes a small HTTP API for workbook upload, review lookup, proposal decisions, and apply actions.
+
+The current implementation is intentionally minimal. It wires a real stdio MCP server and a local HTTP API, but the workflow still needs stronger validation, idempotency, and persistence in PostgreSQL.
 
 ## Local HTTP API
 
@@ -27,5 +29,8 @@ The local server exposes:
 - `GET /api/workbooks`
 - `GET /api/workbooks/:id/review`
 - `POST /api/workbooks/upload`
+- `POST /api/workbooks/:id/proposal/decision`
+- `POST /api/workbooks/:id/proposal/items/:diffId/decision`
+- `POST /api/workbooks/:id/proposal/apply`
 
 Uploads are stored under `apps/mcp-server/.data/` and are ignored by git.

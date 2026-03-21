@@ -16,6 +16,28 @@ SpreadbreadAI addresses that by combining:
 - AI tool interoperability over MCP
 - a collaborative sketchpad linked to workbook entities
 
+## Current State
+
+The repository now contains a working local prototype with:
+
+- workbook upload and parsing for `.xlsx`, `.xls`, and `.csv`
+- workbook review snapshots with sheet summaries, risks, named ranges, and version history
+- proposal generation from parsed workbook findings
+- item-level review decisions and a workbook apply flow
+- a local HTTP API and a stdio MCP server scaffold
+
+The current prototype is intentionally narrow. It is useful for evaluation, but it still needs workflow hardening before it can support serious production use.
+
+## Immediate Priorities
+
+The next phase is about trust and correctness:
+
+- unify approval semantics so proposal status is derived from item state
+- make apply idempotent or one-shot
+- add strict request validation and clean API errors
+- move persistence from JSON files to PostgreSQL
+- replace the sketchpad placeholder with a real collaborative canvas
+
 ## MVP Focus
 
 The first wedge is **FP&A workbook review and reconciliation**.
@@ -81,4 +103,4 @@ docs/
 
 ## Status
 
-This repository is scaffolded for implementation. See the documents under `docs/` for product scope, architecture, and roadmap.
+This repository has a working prototype and a documented next-phase roadmap. See the documents under `docs/` for the current product scope, architecture, and implementation plan.

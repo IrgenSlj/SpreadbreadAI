@@ -47,6 +47,19 @@ An open-source spreadsheet operations platform that lets AI analyze and draft wo
 - custom on-sheet formula language in v1
 - broad multi-industry workflow coverage before validating the finance wedge
 
+## Current Product State
+
+The product already has a local prototype with:
+
+- workbook upload and parsing
+- workbook review snapshots
+- proposal generation from parsed workbook findings
+- item-level reviewer decisions
+- a basic apply flow that creates a new workbook version
+- a local HTTP API and MCP server scaffold
+
+The prototype is intentionally minimal and still needs workflow integrity hardening before it should be considered production-ready.
+
 ## MVP Success Metrics
 
 - reduce workbook review time by at least 50%
@@ -75,10 +88,16 @@ An open-source spreadsheet operations platform that lets AI analyze and draft wo
 - users expecting a full spreadsheet editor immediately
 - overbuilding generic AI features before proving the first wedge
 - weak trust if explanations and diffs are not precise
+- approval semantics drifting between whole-proposal and item-level state
+- apply actions being repeatable when they should be idempotent or one-shot
+- weak request validation and unclear API errors
+- local JSON persistence not scaling to concurrent reviewers
+- sketchpad becoming a placeholder instead of a real workflow surface
 
 ## MVP Exit Criteria
 
 - one end-to-end finance review workflow in production quality
-- durable workbook snapshot model
+- durable workbook and proposal persistence in PostgreSQL
 - audit and approval trail for all write actions
 - usable MCP interface for external agent clients
+- real sketchpad linked to workbook entities

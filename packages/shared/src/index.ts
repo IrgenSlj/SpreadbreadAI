@@ -96,6 +96,9 @@ export interface ProposalDetail extends ProposalSummary {
   reviewer?: string;
   reviewedAt?: string;
   reviewComment?: string;
+  appliedAt?: string;
+  appliedBy?: string;
+  appliedVersionId?: string;
 }
 
 export interface AuditEvent {

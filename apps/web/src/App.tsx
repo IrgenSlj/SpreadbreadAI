@@ -8,6 +8,26 @@ import {
 } from "../../../packages/shared/src/index";
 
 type Section = "workbook" | "proposal" | "audit" | "sketch";
+type MutationAction =
+  | "initial-load"
+  | "workbook-load"
+  | "upload"
+  | "proposal-decision"
+  | "proposal-item-decision"
+  | "apply";
+
+type WorkbooksResponse = {
+  workbooks: WorkbookSummary[];
+};
+
+type ReviewResponse = {
+  review: WorkbookReviewSnapshot;
+};
+
+type UploadResponse = {
+  workbookId: string;
+  review: WorkbookReviewSnapshot;
+};
 
 const sections: Array<{ id: Section; label: string; description: string }> = [
   {
@@ -58,11 +78,32 @@ function itemStatusLabel(status: ProposalDiffEntry["status"]) {
   }
 }
 
+function createDemoWorkbookSummary(): WorkbookSummary {
+  return {
+    id: demoReviewSnapshot.workbook.id,
+    name: demoReviewSnapshot.workbook.name,
+    latestVersionId: demoReviewSnapshot.workbook.latestVersionId,
+    sheetCount: demoReviewSnapshot.workbook.sheetCount,
+    createdAt: demoReviewSnapshot.workbook.createdAt,
+  };
+}
+
+function snapshotToWorkbookSummary(snapshot: WorkbookReviewSnapshot): WorkbookSummary {
+  return {
+    id: snapshot.workbook.id,
+    name: snapshot.workbook.name,
+    latestVersionId: snapshot.workbook.latestVersionId,
+    sheetCount: snapshot.workbook.sheetCount,
+    createdAt: snapshot.workbook.createdAt,
+  };
+}
+
 function App() {
   const [section, setSection] = useState<Section>("workbook");
   const [snapshot, setSnapshot] = useState<WorkbookReviewSnapshot>(demoReviewSnapshot);
   const [workbooks, setWorkbooks] = useState<WorkbookSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [activeMutation, setActiveMutation] = useState<MutationAction | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reviewerName, setReviewerName] = useState("Finance Manager");
   const [reviewComment, setReviewComment] = useState("");
@@ -83,13 +124,47 @@ function App() {
     () => snapshot.proposal.diff.filter((entry) => entry.status === "pending"),
     [snapshot],
   );
+  const reviewedItems = useMemo(
+    () => snapshot.proposal.diff.filter((entry) => entry.status !== "pending"),
+    [snapshot],
+  );
+  const mutationInFlight = activeMutation !== null;
+  const proposalHasItemDecisions = reviewedItems.length > 0;
+  const proposalIsLocked =
+    snapshot.proposal.status === "applied" ||
+    snapshot.proposal.status === "approved" ||
+    snapshot.proposal.status === "rejected";
+  const canUseProposalShortcut = !mutationInFlight && !proposalHasItemDecisions && snapshot.proposal.status === "pending_approval";
+  const canUseItemReview = !mutationInFlight && !proposalIsLocked;
+  const canApplyApprovedItems =
+    !mutationInFlight &&
+    !proposalIsLocked &&
+    pendingItems.length === 0 &&
+    approvedItems.length > 0;
+  const workflowStatusMessage = proposalIsLocked
+    ? snapshot.proposal.status === "applied"
+      ? "Applied proposals are locked. Start a new upload to continue editing."
+      : "This proposal is locked in the UI. Upload a new workbook to start a fresh review."
+    : proposalHasItemDecisions
+      ? "Item-level review has started. Whole-proposal approval is disabled so the workflow stays on one path."
+      : "Choose either the proposal shortcut or item-level review first. Once review starts, the other path locks.";
+
+  function canReviewItem(entry: ProposalDiffEntry) {
+    return canUseItemReview && entry.status === "pending";
+  }
 
   useEffect(() => {
-    void loadWorkbooks();
+    void loadWorkbooks({ allowDemoFallback: true });
   }, []);
 
-  async function loadWorkbooks(targetWorkbookId?: string) {
+  async function loadWorkbooks(options: {
+    targetWorkbookId?: string;
+    allowDemoFallback?: boolean;
+  } = {}) {
+    const { targetWorkbookId, allowDemoFallback = false } = options;
+
     try {
+      setActiveMutation("initial-load");
       setErrorMessage(null);
       const response = await fetch("/api/workbooks");
 
@@ -97,7 +172,7 @@ function App() {
         throw new Error(`Failed to load workbooks (${response.status})`);
       }
 
-      const data = (await response.json()) as { workbooks: WorkbookSummary[] };
+      const data = (await response.json()) as WorkbooksResponse;
       setWorkbooks(data.workbooks);
 
       const workbookId =
@@ -109,16 +184,13 @@ function App() {
         error instanceof Error ? error.message : "Failed to load workbook data";
 
       setErrorMessage(message);
-      setWorkbooks([
-        {
-          id: demoReviewSnapshot.workbook.id,
-          name: demoReviewSnapshot.workbook.name,
-          latestVersionId: demoReviewSnapshot.workbook.latestVersionId,
-          sheetCount: demoReviewSnapshot.workbook.sheetCount,
-          createdAt: demoReviewSnapshot.workbook.createdAt,
-        },
-      ]);
-      setSnapshot(demoReviewSnapshot);
+
+      if (allowDemoFallback) {
+        setWorkbooks([createDemoWorkbookSummary()]);
+        setSnapshot(demoReviewSnapshot);
+      }
+    } finally {
+      setActiveMutation(null);
     }
   }
 
@@ -140,7 +212,12 @@ function App() {
       return;
     }
 
+    if (mutationInFlight) {
+      return;
+    }
+
     try {
+      setActiveMutation("upload");
       setIsLoading(true);
       setErrorMessage(null);
 
@@ -157,25 +234,33 @@ function App() {
         throw new Error(`Upload failed (${response.status})`);
       }
 
-      const data = (await response.json()) as {
-        workbookId: string;
-        review: WorkbookReviewSnapshot;
-      };
+      const data = (await response.json()) as UploadResponse;
 
       setSnapshot(data.review);
-      await loadWorkbooks(data.workbookId);
+      setWorkbooks((current) => {
+        const summary = snapshotToWorkbookSummary(data.review);
+        const next = current.filter((workbook) => workbook.id !== summary.id);
+
+        return [summary, ...next];
+      });
       setSection("workbook");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Upload failed";
       setErrorMessage(message);
     } finally {
       setIsLoading(false);
+      setActiveMutation(null);
       event.target.value = "";
     }
   }
 
   async function handleWorkbookSelect(workbookId: string) {
+    if (mutationInFlight) {
+      return;
+    }
+
     try {
+      setActiveMutation("workbook-load");
       setErrorMessage(null);
       setIsLoading(true);
       await loadReview(workbookId);
@@ -186,11 +271,17 @@ function App() {
       setErrorMessage(message);
     } finally {
       setIsLoading(false);
+      setActiveMutation(null);
     }
   }
 
   async function handleProposalDecision(decision: ApprovalDecision) {
+    if (!canUseProposalShortcut) {
+      return;
+    }
+
     try {
+      setActiveMutation("proposal-decision");
       setIsLoading(true);
       setErrorMessage(null);
 
@@ -213,7 +304,7 @@ function App() {
         throw new Error(`Proposal decision failed (${response.status})`);
       }
 
-      const data = (await response.json()) as { review: WorkbookReviewSnapshot };
+      const data = (await response.json()) as ReviewResponse;
       setSnapshot(data.review);
       setSection("proposal");
     } catch (error) {
@@ -223,6 +314,7 @@ function App() {
       setErrorMessage(message);
     } finally {
       setIsLoading(false);
+      setActiveMutation(null);
     }
   }
 
@@ -230,7 +322,12 @@ function App() {
     diffId: string,
     decision: ApprovalDecision,
   ) {
+    if (!canUseItemReview) {
+      return;
+    }
+
     try {
+      setActiveMutation("proposal-item-decision");
       setIsLoading(true);
       setErrorMessage(null);
 
@@ -255,7 +352,7 @@ function App() {
         throw new Error(`Proposal item decision failed (${response.status})`);
       }
 
-      const data = (await response.json()) as { review: WorkbookReviewSnapshot };
+      const data = (await response.json()) as ReviewResponse;
       setSnapshot(data.review);
       setSection("proposal");
     } catch (error) {
@@ -265,11 +362,17 @@ function App() {
       setErrorMessage(message);
     } finally {
       setIsLoading(false);
+      setActiveMutation(null);
     }
   }
 
   async function handleApplyApprovedItems() {
+    if (!canApplyApprovedItems) {
+      return;
+    }
+
     try {
+      setActiveMutation("apply");
       setIsLoading(true);
       setErrorMessage(null);
 
@@ -291,7 +394,7 @@ function App() {
         throw new Error(`Apply failed (${response.status})`);
       }
 
-      const data = (await response.json()) as { review: WorkbookReviewSnapshot };
+      const data = (await response.json()) as ReviewResponse;
       setSnapshot(data.review);
       setSection("proposal");
     } catch (error) {
@@ -299,6 +402,7 @@ function App() {
       setErrorMessage(message);
     } finally {
       setIsLoading(false);
+      setActiveMutation(null);
     }
   }
 
@@ -358,7 +462,7 @@ function App() {
                 </p>
                 <label className="upload-control">
                   <span>Upload workbook</span>
-                  <input accept=".xlsx,.xls,.csv" onChange={handleUpload} type="file" />
+                  <input disabled={mutationInFlight} accept=".xlsx,.xls,.csv" onChange={handleUpload} type="file" />
                 </label>
                 {isLoading ? <p className="status-note">Working on your request...</p> : null}
                 {errorMessage ? <p className="status-note status-error">{errorMessage}</p> : null}
@@ -395,16 +499,17 @@ function App() {
               </div>
               <div className="workbook-list">
                 {workbooks.map((workbook) => (
-                  <button
-                    key={workbook.id}
-                    className={
-                      workbook.id === snapshot.workbook.id
-                        ? "workbook-item active"
-                        : "workbook-item"
-                    }
-                    onClick={() => void handleWorkbookSelect(workbook.id)}
-                    type="button"
-                  >
+                    <button
+                      key={workbook.id}
+                      className={
+                        workbook.id === snapshot.workbook.id
+                          ? "workbook-item active"
+                          : "workbook-item"
+                      }
+                      disabled={mutationInFlight}
+                      onClick={() => void handleWorkbookSelect(workbook.id)}
+                      type="button"
+                    >
                     <span>{workbook.name}</span>
                     <strong>{workbook.latestVersionId}</strong>
                     <small>{workbook.sheetCount} sheets</small>
@@ -529,6 +634,7 @@ function App() {
                   <strong>{rejectedItems.length}</strong>
                 </article>
               </div>
+              <p className="workflow-note">{workflowStatusMessage}</p>
               <div className="review-form">
                 <label>
                   <span>Reviewer</span>
@@ -549,6 +655,7 @@ function App() {
                 <div className="action-row">
                   <button
                     className="decision-button approve"
+                    disabled={!canUseProposalShortcut}
                     onClick={() => void handleProposalDecision("approve")}
                     type="button"
                   >
@@ -556,6 +663,7 @@ function App() {
                   </button>
                   <button
                     className="decision-button reject"
+                    disabled={!canUseProposalShortcut}
                     onClick={() => void handleProposalDecision("reject")}
                     type="button"
                   >
@@ -563,7 +671,7 @@ function App() {
                   </button>
                   <button
                     className="decision-button apply"
-                    disabled={approvedItems.length === 0 || snapshot.proposal.status === "applied"}
+                    disabled={!canApplyApprovedItems}
                     onClick={() => void handleApplyApprovedItems()}
                     type="button"
                   >
@@ -597,6 +705,7 @@ function App() {
                     <div className="item-action-row">
                       <button
                         className="mini-button approve"
+                        disabled={!canReviewItem(entry)}
                         onClick={() => void handleProposalItemDecision(entry.id, "approve")}
                         type="button"
                       >
@@ -604,6 +713,7 @@ function App() {
                       </button>
                       <button
                         className="mini-button reject"
+                        disabled={!canReviewItem(entry)}
                         onClick={() => void handleProposalItemDecision(entry.id, "reject")}
                         type="button"
                       >

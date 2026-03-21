@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type ApprovalDecision,
@@ -25,9 +25,23 @@ interface WorkbookStoreFile {
   records: StoredWorkbookRecord[];
 }
 
+export type MutationFailureCode =
+  | "already_applied"
+  | "item_not_found"
+  | "locked"
+  | "not_found"
+  | "nothing_to_apply"
+  | "review_path_locked";
+
+export type MutationResult =
+  | { ok: true; review: WorkbookReviewSnapshot }
+  | { ok: false; code: MutationFailureCode };
+
 const dataRoot = path.resolve(process.cwd(), ".data");
 const uploadsDir = path.join(dataRoot, "uploads");
 const storeFilePath = path.join(dataRoot, "workbooks.json");
+let storeMutationChain = Promise.resolve();
+let demoSnapshotState = structuredClone(demoReviewSnapshot);
 
 function sanitizeFileName(fileName: string) {
   const trimmed = fileName.trim();
@@ -79,6 +93,15 @@ async function writeStore(store: WorkbookStoreFile) {
   await writeFile(storeFilePath, JSON.stringify(store, null, 2));
 }
 
+async function runSerializedMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const next = storeMutationChain.then(operation, operation);
+  storeMutationChain = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
 function deriveProposalStatus(diff: ProposalDiffEntry[]): ProposalDetail["status"] {
   if (diff.length === 0) {
     return "draft";
@@ -107,6 +130,26 @@ function itemDecisionToStatus(decision: ApprovalDecision): ProposalItemStatus {
   return decision === "approve" ? "approved" : "rejected";
 }
 
+function hasReviewedItems(diff: ProposalDiffEntry[]) {
+  return diff.some((entry) => entry.status !== "pending");
+}
+
+function applyDecisionToAllItems(
+  diff: ProposalDiffEntry[],
+  decision: ApprovalDecision,
+  reviewer: string,
+  reviewedAt: string,
+  comment?: string,
+) {
+  return diff.map((entry) => ({
+    ...entry,
+    status: itemDecisionToStatus(decision),
+    reviewer,
+    reviewedAt,
+    reviewComment: comment,
+  }));
+}
+
 function nextVersionId(currentVersionId: string): string {
   const match = currentVersionId.match(/^(.*?_v)(\d+)$/);
 
@@ -120,6 +163,10 @@ function nextVersionId(currentVersionId: string): string {
 }
 
 function appendApplyResult(snapshot: WorkbookReviewSnapshot, actor: string, note?: string) {
+  if (snapshot.proposal.status === "applied") {
+    return null;
+  }
+
   const reviewedAt = new Date().toISOString();
   const approvedItems = snapshot.proposal.diff.filter((entry) => entry.status === "approved");
 
@@ -150,6 +197,9 @@ function appendApplyResult(snapshot: WorkbookReviewSnapshot, actor: string, note
     proposal: {
       ...snapshot.proposal,
       status: "applied" as const,
+      appliedAt: reviewedAt,
+      appliedBy: actor,
+      appliedVersionId: versionId,
       reviewedAt,
       reviewer: actor,
       reviewComment: note?.trim() || snapshot.proposal.reviewComment,
@@ -180,6 +230,14 @@ function appendApplyResult(snapshot: WorkbookReviewSnapshot, actor: string, note
   };
 }
 
+function mutationSuccess(review: WorkbookReviewSnapshot): MutationResult {
+  return { ok: true, review };
+}
+
+function mutationFailure(code: MutationFailureCode): MutationResult {
+  return { ok: false, code };
+}
+
 export async function listStoredWorkbooks(): Promise<WorkbookSummary[]> {
   const store = await readStore();
   const persisted = store.records.map((record) => ({
@@ -192,11 +250,11 @@ export async function listStoredWorkbooks(): Promise<WorkbookSummary[]> {
 
   return [
     {
-      id: demoReviewSnapshot.workbook.id,
-      name: demoReviewSnapshot.workbook.name,
-      latestVersionId: demoReviewSnapshot.workbook.latestVersionId,
-      sheetCount: demoReviewSnapshot.workbook.sheetCount,
-      createdAt: demoReviewSnapshot.workbook.createdAt,
+      id: demoSnapshotState.workbook.id,
+      name: demoSnapshotState.workbook.name,
+      latestVersionId: demoSnapshotState.workbook.latestVersionId,
+      sheetCount: demoSnapshotState.workbook.sheetCount,
+      createdAt: demoSnapshotState.workbook.createdAt,
     },
     ...persisted,
   ];
@@ -205,8 +263,8 @@ export async function listStoredWorkbooks(): Promise<WorkbookSummary[]> {
 export async function getStoredWorkbookReview(
   workbookId: string,
 ): Promise<WorkbookReviewSnapshot | null> {
-  if (workbookId === demoReviewSnapshot.workbook.id) {
-    return demoReviewSnapshot;
+  if (workbookId === demoSnapshotState.workbook.id) {
+    return demoSnapshotState;
   }
 
   const store = await readStore();
@@ -220,37 +278,44 @@ export async function saveUploadedWorkbook(input: {
   contentType: string;
   bytes: Uint8Array;
 }): Promise<StoredWorkbookRecord> {
-  await ensureStore();
+  return runSerializedMutation(async () => {
+    await ensureStore();
 
-  const storedAt = new Date().toISOString();
-  const recordId = createRecordId(input.fileName);
-  const sanitizedFileName = sanitizeFileName(input.fileName);
-  const uploadPath = path.join(uploadsDir, `${recordId}-${sanitizedFileName}`);
+    const storedAt = new Date().toISOString();
+    const recordId = createRecordId(input.fileName);
+    const sanitizedFileName = sanitizeFileName(input.fileName);
+    const uploadPath = path.join(uploadsDir, `${recordId}-${sanitizedFileName}`);
 
-  await writeFile(uploadPath, input.bytes);
+    await writeFile(uploadPath, input.bytes);
 
-  const snapshot = parseWorkbookReviewSnapshot({
-    workbookId: recordId,
-    fileName: input.fileName,
-    uploadedAt: storedAt,
-    bytes: input.bytes,
+    try {
+      const snapshot = parseWorkbookReviewSnapshot({
+        workbookId: recordId,
+        fileName: input.fileName,
+        uploadedAt: storedAt,
+        bytes: input.bytes,
+      });
+
+      const record: StoredWorkbookRecord = {
+        id: recordId,
+        fileName: input.fileName,
+        contentType: input.contentType || "application/octet-stream",
+        fileSize: input.bytes.byteLength,
+        storedAt,
+        uploadPath,
+        snapshot,
+      };
+
+      const store = await readStore();
+      store.records.unshift(record);
+      await writeStore(store);
+
+      return record;
+    } catch (error) {
+      await unlink(uploadPath).catch(() => undefined);
+      throw error;
+    }
   });
-
-  const record: StoredWorkbookRecord = {
-    id: recordId,
-    fileName: input.fileName,
-    contentType: input.contentType || "application/octet-stream",
-    fileSize: input.bytes.byteLength,
-    storedAt,
-    uploadPath,
-    snapshot,
-  };
-
-  const store = await readStore();
-  store.records.unshift(record);
-  await writeStore(store);
-
-  return record;
 }
 
 export async function updateStoredProposalDecision(input: {
@@ -258,23 +323,39 @@ export async function updateStoredProposalDecision(input: {
   decision: ApprovalDecision;
   reviewer: string;
   comment?: string;
-}): Promise<WorkbookReviewSnapshot | null> {
-  if (input.workbookId === demoReviewSnapshot.workbook.id) {
-    const reviewedAt = new Date().toISOString();
+}): Promise<MutationResult> {
+  if (input.workbookId === demoSnapshotState.workbook.id) {
+    if (demoSnapshotState.proposal.status === "applied") {
+      return mutationFailure("locked");
+    }
 
-    return {
-      ...demoReviewSnapshot,
+    if (hasReviewedItems(demoSnapshotState.proposal.diff)) {
+      return mutationFailure("review_path_locked");
+    }
+
+    const reviewedAt = new Date().toISOString();
+    const nextDiff = applyDecisionToAllItems(
+      demoSnapshotState.proposal.diff,
+      input.decision,
+      input.reviewer,
+      reviewedAt,
+      input.comment,
+    );
+
+    demoSnapshotState = {
+      ...demoSnapshotState,
       proposal: {
-        ...demoReviewSnapshot.proposal,
-        status: input.decision === "approve" ? "approved" : "rejected",
+        ...demoSnapshotState.proposal,
+        diff: nextDiff,
+        status: deriveProposalStatus(nextDiff),
         reviewer: input.reviewer,
         reviewedAt,
         reviewComment: input.comment,
       },
       auditEvents: [
-        ...demoReviewSnapshot.auditEvents,
+        ...demoSnapshotState.auditEvents,
         {
-          id: `audit_${demoReviewSnapshot.auditEvents.length + 1}`,
+          id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
           workbookId: input.workbookId,
           actor: input.reviewer,
           action:
@@ -288,45 +369,66 @@ export async function updateStoredProposalDecision(input: {
         },
       ],
     };
+
+    return mutationSuccess(demoSnapshotState);
   }
 
-  const store = await readStore();
-  const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+  return runSerializedMutation(async () => {
+    const store = await readStore();
+    const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
 
-  if (!record) {
-    return null;
-  }
+    if (!record) {
+      return mutationFailure("not_found");
+    }
 
-  const reviewedAt = new Date().toISOString();
-  record.snapshot = {
-    ...record.snapshot,
-    proposal: {
-      ...record.snapshot.proposal,
-      status: input.decision === "approve" ? "approved" : "rejected",
-      reviewer: input.reviewer,
+    if (record.snapshot.proposal.status === "applied") {
+      return mutationFailure("locked");
+    }
+
+    if (hasReviewedItems(record.snapshot.proposal.diff)) {
+      return mutationFailure("review_path_locked");
+    }
+
+    const reviewedAt = new Date().toISOString();
+    const nextDiff = applyDecisionToAllItems(
+      record.snapshot.proposal.diff,
+      input.decision,
+      input.reviewer,
       reviewedAt,
-      reviewComment: input.comment,
-    },
-    auditEvents: [
-      ...record.snapshot.auditEvents,
-      {
-        id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
-        workbookId: input.workbookId,
-        actor: input.reviewer,
-        action:
-          input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
-        detail:
-          input.comment?.trim() ||
-          (input.decision === "approve"
-            ? "Proposal approved in the review prototype."
-            : "Proposal rejected in the review prototype."),
-        createdAt: reviewedAt,
-      },
-    ],
-  };
+      input.comment,
+    );
 
-  await writeStore(store);
-  return record.snapshot;
+    record.snapshot = {
+      ...record.snapshot,
+      proposal: {
+        ...record.snapshot.proposal,
+        diff: nextDiff,
+        status: deriveProposalStatus(nextDiff),
+        reviewer: input.reviewer,
+        reviewedAt,
+        reviewComment: input.comment,
+      },
+      auditEvents: [
+        ...record.snapshot.auditEvents,
+        {
+          id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
+          workbookId: input.workbookId,
+          actor: input.reviewer,
+          action:
+            input.decision === "approve" ? "proposal.approved" : "proposal.rejected",
+          detail:
+            input.comment?.trim() ||
+            (input.decision === "approve"
+              ? "Proposal approved in the review prototype."
+              : "Proposal rejected in the review prototype."),
+          createdAt: reviewedAt,
+        },
+      ],
+    };
+
+    await writeStore(store);
+    return mutationSuccess(record.snapshot);
+  });
 }
 
 export async function updateStoredProposalItemDecision(input: {
@@ -335,37 +437,50 @@ export async function updateStoredProposalItemDecision(input: {
   decision: ApprovalDecision;
   reviewer: string;
   comment?: string;
-}): Promise<WorkbookReviewSnapshot | null> {
+}): Promise<MutationResult> {
   const reviewedAt = new Date().toISOString();
 
-  if (input.workbookId === demoReviewSnapshot.workbook.id) {
-    const nextDiff = demoReviewSnapshot.proposal.diff.map((entry) =>
-      entry.id === input.diffId
-        ? {
-            ...entry,
-            status: itemDecisionToStatus(input.decision),
-            reviewer: input.reviewer,
+  if (input.workbookId === demoSnapshotState.workbook.id) {
+    if (demoSnapshotState.proposal.status === "applied") {
+      return mutationFailure("locked");
+    }
+
+    if (demoSnapshotState.proposal.status !== "pending_approval") {
+      return mutationFailure("locked");
+    }
+
+    const hasMatch = demoSnapshotState.proposal.diff.some((entry) => entry.id === input.diffId);
+
+    if (!hasMatch) {
+      return mutationFailure("item_not_found");
+    }
+
+    const nextDiff = demoSnapshotState.proposal.diff.map((entry) =>
+        entry.id === input.diffId
+          ? {
+              ...entry,
+              status: itemDecisionToStatus(input.decision),
+              reviewer: input.reviewer,
             reviewedAt,
             reviewComment: input.comment,
           }
         : entry,
     );
-    const nextStatus = deriveProposalStatus(nextDiff);
 
-    return {
-      ...demoReviewSnapshot,
+    demoSnapshotState = {
+      ...demoSnapshotState,
       proposal: {
-        ...demoReviewSnapshot.proposal,
+        ...demoSnapshotState.proposal,
         diff: nextDiff,
-        status: nextStatus,
+        status: deriveProposalStatus(nextDiff),
         reviewer: input.reviewer,
         reviewedAt,
         reviewComment: input.comment,
       },
       auditEvents: [
-        ...demoReviewSnapshot.auditEvents,
+        ...demoSnapshotState.auditEvents,
         {
-          id: `audit_${demoReviewSnapshot.auditEvents.length + 1}`,
+          id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
           workbookId: input.workbookId,
           actor: input.reviewer,
           action:
@@ -379,83 +494,123 @@ export async function updateStoredProposalItemDecision(input: {
         },
       ],
     };
+
+    return mutationSuccess(demoSnapshotState);
   }
 
-  const store = await readStore();
-  const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+  return runSerializedMutation(async () => {
+    const store = await readStore();
+    const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
 
-  if (!record) {
-    return null;
-  }
+    if (!record) {
+      return mutationFailure("not_found");
+    }
 
-  const nextDiff = record.snapshot.proposal.diff.map((entry) =>
-    entry.id === input.diffId
-      ? {
-          ...entry,
-          status: itemDecisionToStatus(input.decision),
-          reviewer: input.reviewer,
-          reviewedAt,
-          reviewComment: input.comment,
-        }
-      : entry,
-  );
-  const nextStatus = deriveProposalStatus(nextDiff);
+    if (record.snapshot.proposal.status === "applied") {
+      return mutationFailure("locked");
+    }
 
-  record.snapshot = {
-    ...record.snapshot,
-    proposal: {
-      ...record.snapshot.proposal,
-      diff: nextDiff,
-      status: nextStatus,
-      reviewer: input.reviewer,
-      reviewedAt,
-      reviewComment: input.comment,
-    },
-    auditEvents: [
-      ...record.snapshot.auditEvents,
-      {
-        id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
-        workbookId: input.workbookId,
-        actor: input.reviewer,
-        action:
-          input.decision === "approve"
-            ? "proposal.item.approved"
-            : "proposal.item.rejected",
-        detail:
-          input.comment?.trim() ||
-          `${input.decision === "approve" ? "Approved" : "Rejected"} proposal item ${input.diffId}.`,
-        createdAt: reviewedAt,
+    if (record.snapshot.proposal.status !== "pending_approval") {
+      return mutationFailure("locked");
+    }
+
+    const hasMatch = record.snapshot.proposal.diff.some((entry) => entry.id === input.diffId);
+
+    if (!hasMatch) {
+      return mutationFailure("item_not_found");
+    }
+
+    const existing = record.snapshot.proposal.diff.find((entry) => entry.id === input.diffId);
+
+    if (existing && existing.status !== "pending") {
+      return mutationFailure("locked");
+    }
+
+    const nextDiff = record.snapshot.proposal.diff.map((entry) =>
+      entry.id === input.diffId
+        ? {
+            ...entry,
+            status: itemDecisionToStatus(input.decision),
+            reviewer: input.reviewer,
+            reviewedAt,
+            reviewComment: input.comment,
+          }
+        : entry,
+    );
+
+    record.snapshot = {
+      ...record.snapshot,
+      proposal: {
+        ...record.snapshot.proposal,
+        diff: nextDiff,
+        status: deriveProposalStatus(nextDiff),
+        reviewer: input.reviewer,
+        reviewedAt,
+        reviewComment: input.comment,
       },
-    ],
-  };
+      auditEvents: [
+        ...record.snapshot.auditEvents,
+        {
+          id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
+          workbookId: input.workbookId,
+          actor: input.reviewer,
+          action:
+            input.decision === "approve"
+              ? "proposal.item.approved"
+              : "proposal.item.rejected",
+          detail:
+            input.comment?.trim() ||
+            `${input.decision === "approve" ? "Approved" : "Rejected"} proposal item ${input.diffId}.`,
+          createdAt: reviewedAt,
+        },
+      ],
+    };
 
-  await writeStore(store);
-  return record.snapshot;
+    await writeStore(store);
+    return mutationSuccess(record.snapshot);
+  });
 }
 
 export async function applyApprovedProposalItems(input: {
   workbookId: string;
   actor: string;
   note?: string;
-}): Promise<WorkbookReviewSnapshot | null> {
-  if (input.workbookId === demoReviewSnapshot.workbook.id) {
-    return appendApplyResult(demoReviewSnapshot, input.actor, input.note);
+}): Promise<MutationResult> {
+  if (input.workbookId === demoSnapshotState.workbook.id) {
+    const nextSnapshot = appendApplyResult(demoSnapshotState, input.actor, input.note);
+
+    if (!nextSnapshot) {
+      return mutationFailure(
+        demoSnapshotState.proposal.status === "applied"
+          ? "already_applied"
+          : "nothing_to_apply",
+      );
+    }
+
+    demoSnapshotState = nextSnapshot;
+    return mutationSuccess(demoSnapshotState);
   }
 
-  const store = await readStore();
-  const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+  return runSerializedMutation(async () => {
+    const store = await readStore();
+    const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
 
-  if (!record) {
-    return null;
-  }
+    if (!record) {
+      return mutationFailure("not_found");
+    }
 
-  const nextSnapshot = appendApplyResult(record.snapshot, input.actor, input.note);
+    const nextSnapshot = appendApplyResult(record.snapshot, input.actor, input.note);
 
-  if (!nextSnapshot) {
-    return null;
-  }
+    if (!nextSnapshot) {
+      return mutationFailure(
+        record.snapshot.proposal.status === "applied"
+          ? "already_applied"
+          : "nothing_to_apply",
+      );
+    }
 
-  record.snapshot = nextSnapshot;
-  await writeStore(store);
-  return record.snapshot;
+    record.snapshot = nextSnapshot;
+    await writeStore(store);
+    return mutationSuccess(record.snapshot);
+  });
 }

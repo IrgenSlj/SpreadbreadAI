@@ -42,6 +42,12 @@ textarea {
   font: inherit;
 }
 
+button:disabled,
+input:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+}
+
 strong,
 small {
   display: block;
@@ -186,6 +192,11 @@ h2 {
   border-color: rgba(154, 79, 43, 0.3);
 }
 
+.tab:disabled {
+  opacity: 0.55;
+  transform: none;
+}
+
 .tab.active {
   background: linear-gradient(180deg, rgba(255, 250, 242, 0.96), rgba(246, 234, 221, 0.96));
   border-color: rgba(154, 79, 43, 0.34);
@@ -228,6 +239,16 @@ h2 {
 .timeline {
   display: grid;
   gap: 12px;
+}
+
+.workflow-note {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(49, 92, 99, 0.22);
+  background: rgba(49, 92, 99, 0.08);
+  color: var(--accent-2);
+  line-height: 1.55;
 }
 
 .risk-grid {
@@ -292,6 +313,11 @@ h2 {
   color: #fff;
   cursor: pointer;
   font-size: 0.82rem;
+}
+
+.mini-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .mini-button.approve {
@@ -370,6 +396,10 @@ h2 {
   width: 100%;
 }
 
+.upload-control input:disabled {
+  opacity: 0.55;
+}
+
 .status-note {
   margin: 14px 0 0;
   color: var(--accent-2);
@@ -434,10 +464,8 @@ h2 {
   background: var(--accent-2);
 }
 
-.decision-button:disabled,
-.mini-button:disabled {
+.decision-button:disabled {
   opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .review-meta {
@@ -465,6 +493,12 @@ h2 {
   padding: 16px;
   color: var(--text);
   cursor: pointer;
+}
+
+.workbook-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .workbook-item.active {

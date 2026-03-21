@@ -23,7 +23,10 @@ Core interaction model:
 2. platform parses workbook structure
 3. AI or system creates a review snapshot and draft proposal
 4. user reviews risks, diffs, and audit trail
-5. future apply/write paths must remain approval-gated
+5. user approves or rejects proposal items
+6. approved items can be applied into a new workbook version
+
+The current implementation is a local prototype, not a production service. It already supports upload, parsing, proposal generation, item-level review, and a first integrity-hardening pass on approval/apply behavior.
 
 ## Repository Layout
 
@@ -48,8 +51,9 @@ Core interaction model:
 - viewing proposal summary and diff
 - viewing audit trail
 - switching between persisted workbook snapshots
+- applying approved proposal items
 
-The sketchpad section is still only a placeholder UI.
+The sketchpad section is still only a placeholder UI and should be replaced with a real collaborative canvas.
 
 ### Backend
 
@@ -61,6 +65,8 @@ The sketchpad section is still only a placeholder UI.
 - upload endpoint storing raw workbook bytes
 - workbook parsing via open-source `xlsx`
 - generated review snapshots from parsed workbook metadata
+- item-level proposal decisions
+- apply flow that creates a new workbook version
 
 Current HTTP endpoints:
 
@@ -68,6 +74,9 @@ Current HTTP endpoints:
 - `GET /api/workbooks`
 - `GET /api/workbooks/:id/review`
 - `POST /api/workbooks/upload`
+- `POST /api/workbooks/:id/proposal/decision`
+- `POST /api/workbooks/:id/proposal/items/:diffId/decision`
+- `POST /api/workbooks/:id/proposal/apply`
 
 ### MCP
 
@@ -80,8 +89,8 @@ Current MCP tools:
 Important:
 
 - `workbook.read` is real enough to inspect stored review snapshots
-- `workbook.draft` and `workbook.apply` are still placeholder paths
-- approval and write enforcement still need full implementation
+- `workbook.draft` and `workbook.apply` are still prototype paths
+- approval and write enforcement still need full integrity hardening
 
 ## Key Files
 
@@ -113,6 +122,9 @@ Important:
 - persistence is still local JSON + raw file storage, not a database
 - workbook parsing is structural and heuristic, not a full formula graph engine
 - proposal generation is still seeded from parsed metadata, not model-driven
+- persistence still uses mutable snapshots rather than first-class relational records
+- approval semantics are now partially hardened, but the platform still needs a canonical proposal/item/apply state machine
+- request validation is improved, but still not backed by a full domain schema layer across all surfaces
 - sketchpad is not implemented yet
 - there is no real auth, tenancy, or RBAC yet
 
@@ -135,16 +147,13 @@ From repo root:
 
 Near-term priority order:
 
-1. enrich parsed workbook intelligence:
-   named ranges, sample values, sheet previews, formula/error summaries
-2. persist to a real database:
-   PostgreSQL for workbooks, proposals, approvals, audits
-3. implement real proposal objects:
-   reviewable proposal creation from workbook findings
-4. add approval workflow:
-   approve/reject state transitions and audit events
-5. implement sketchpad:
+1. persist workbook, proposal, item, version, and audit records in PostgreSQL
+2. finish the canonical approval/apply state machine and enforce it through one relational model
+3. enrich parsed workbook intelligence:
+   named ranges, sample values, sheet previews, formula/error summaries, dependency graphs
+4. implement a real collaborative sketchpad:
    Excalidraw integration linked to workbook entities
+5. expose a fuller MCP contract for workbook, proposal, and sketch operations
 
 ## Current Git State Expectation
 
