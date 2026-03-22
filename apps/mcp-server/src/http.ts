@@ -99,6 +99,8 @@ const workbookAccessAssignmentSchema = z.object({
   reviewerProfileId: z.string().trim().min(1).optional(),
   reviewerHandle: z.string().trim().min(1),
   assignmentRole: z.enum(["owner", "approver", "reviewer", "editor"]),
+  sheetScopes: z.array(z.string().trim().min(1).max(120)).max(32).optional(),
+  rangeScopes: z.array(z.string().trim().min(1).max(120)).max(64).optional(),
 });
 
 const workbookAccessSchema = z.object({
@@ -317,6 +319,8 @@ function sendWorkbookAccessResult(
         reviewerHandle?: string;
         reviewerDisplayName?: string;
         assignmentRole?: string;
+        sheetScopes?: string[];
+        rangeScopes?: string[];
         assignedAt?: string;
         assignedBy?: string;
       }>;
@@ -337,6 +341,8 @@ function sendWorkbookAccessResult(
               : "comment",
         assignedAt: assignment.assignedAt,
         assignedBy: assignment.assignedBy,
+        sheetScopes: assignment.sheetScopes ?? [],
+        rangeScopes: assignment.rangeScopes ?? [],
         source: "api",
       })),
       effectiveAccessLevel:

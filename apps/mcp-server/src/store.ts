@@ -119,6 +119,8 @@ export function updateStoredWorkbookAccess(input: {
     reviewerProfileId?: string;
     reviewerHandle: string;
     assignmentRole: import("../../../packages/shared/src/index.js").WorkbookAccessRole;
+    sheetScopes?: string[];
+    rangeScopes?: string[];
   }>;
 }): Promise<WorkbookAccessMutationResult> {
   return backend.updateStoredWorkbookAccess(input);

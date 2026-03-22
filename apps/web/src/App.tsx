@@ -162,11 +162,29 @@ type ReviewerAuthorizationAction =
 
 type WorkbookAccessLevel = "none" | "view" | "comment" | "edit" | "manage";
 
+type WorkbookAccessScopeKind = "sheet" | "range";
+
+type WorkbookAccessContext = {
+  sheetName?: string;
+  reference?: string;
+  label?: string;
+};
+
+type WorkbookAccessScope = {
+  kind: WorkbookAccessScopeKind;
+  sheetName?: string;
+  reference?: string;
+  level: WorkbookAccessLevel;
+  source: "api" | "derived";
+};
+
 type WorkbookAccessAssignment = {
   reviewerId: string;
   reviewerName: string;
   reviewerHandle: string;
   level: WorkbookAccessLevel;
+  assignmentRole?: string;
+  scopes: WorkbookAccessScope[];
   assignedBy?: string;
   assignedAt?: string;
   source: "api" | "derived";
@@ -633,18 +651,395 @@ function workbookAccessLevelLabel(level: WorkbookAccessLevel) {
   }
 }
 
+function workbookAccessRoleForLevel(level: WorkbookAccessLevel) {
+  switch (level) {
+    case "manage":
+      return "approver";
+    case "edit":
+      return "reviewer";
+    case "comment":
+      return "editor";
+    default:
+      return "editor";
+  }
+}
+
+function workbookAccessLevelFromRole(value: unknown) {
+  const token = String(value ?? "").trim().toLowerCase();
+
+  if (token === "owner" || token === "approver") {
+    return "manage" as WorkbookAccessLevel;
+  }
+
+  if (token === "reviewer") {
+    return "edit" as WorkbookAccessLevel;
+  }
+
+  if (token === "editor") {
+    return "comment" as WorkbookAccessLevel;
+  }
+
+  return "none" as WorkbookAccessLevel;
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function parseWorkbookCellContext(cell: string): WorkbookAccessContext | null {
+  const trimmed = cell.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const bangIndex = trimmed.indexOf("!");
+
+  if (bangIndex < 0) {
+    return {
+      reference: trimmed,
+      label: trimmed,
+    };
+  }
+
+  const rawSheetName = trimmed.slice(0, bangIndex).replace(/^'/, "").replace(/'$/, "");
+  const reference = trimmed.slice(bangIndex + 1).trim();
+
+  return {
+    sheetName: rawSheetName || undefined,
+    reference: reference || undefined,
+    label: reference ? `${rawSheetName || "Workbook"}!${reference}` : rawSheetName || trimmed,
+  };
+}
+
+function normalizeWorkbookAccessScopeKind(
+  value: unknown,
+  fallbackReference?: string,
+): WorkbookAccessScopeKind {
+  const token = String(value ?? "").trim().toLowerCase();
+  const reference = String(fallbackReference ?? "").trim();
+
+  if (
+    token.includes("range") ||
+    token.includes("cell") ||
+    token.includes("ref") ||
+    token.includes("area")
+  ) {
+    return "range";
+  }
+
+  if (reference.length > 0) {
+    return "range";
+  }
+
+  return "sheet";
+}
+
+function normalizeWorkbookAccessScope(
+  item: unknown,
+  fallbackLevel: WorkbookAccessLevel,
+  source: "api" | "derived",
+): WorkbookAccessScope | null {
+  if (typeof item === "string") {
+    const trimmed = item.trim();
+    const parsed = parseWorkbookCellContext(trimmed);
+
+    if (!parsed || trimmed.length === 0) {
+      return null;
+    }
+
+    if (trimmed.includes("!") && parsed.sheetName && parsed.reference) {
+      return {
+        kind: normalizeWorkbookAccessScopeKind(undefined, parsed.reference),
+        sheetName: parsed.sheetName,
+        reference: parsed.reference,
+        level: fallbackLevel,
+        source,
+      };
+    }
+
+    return {
+      kind: "sheet",
+      sheetName: parsed.sheetName ?? trimmed,
+      level: fallbackLevel,
+      source,
+    };
+  }
+
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const record = item as WorkbookAccessApiScope & Record<string, unknown>;
+  const sheetName = firstString(
+    record.sheetName,
+    record.sheet,
+    record.name,
+    record.targetSheet,
+    record.targetSheetName,
+    record.scopeSheet,
+  );
+  const reference = firstString(
+    record.reference,
+    record.range,
+    record.rangeRef,
+    record.cell,
+    record.anchor,
+    record.targetRange,
+  );
+  const parsedReference = reference ? parseWorkbookCellContext(reference) : null;
+  const kind = normalizeWorkbookAccessScopeKind(
+    record.kind ?? record.type ?? record.scopeKind ?? record.scopeType,
+    reference,
+  );
+  const normalizedSheetName = sheetName || parsedReference?.sheetName;
+  const normalizedReference = reference || parsedReference?.reference;
+  const level = normalizeWorkbookAccessLevel(record.level ?? record.accessLevel ?? fallbackLevel);
+
+  if (!normalizedSheetName && !normalizedReference) {
+    return null;
+  }
+
+  return {
+    kind,
+    sheetName: normalizedSheetName,
+    reference: normalizedReference,
+    level: level === "none" ? fallbackLevel : level,
+    source,
+  };
+}
+
+function normalizeWorkbookAccessScopes(
+  source: "api" | "derived",
+  fallbackLevel: WorkbookAccessLevel,
+  ...values: unknown[]
+) {
+  const collected: unknown[] = [];
+
+  function pushValue(value: unknown) {
+    if (!value) {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach(pushValue);
+      return;
+    }
+
+    if (typeof value === "string") {
+      collected.push(value);
+      return;
+    }
+
+    if (typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (
+        "kind" in record ||
+        "type" in record ||
+        "scopeKind" in record ||
+        "scopeType" in record ||
+        "sheetName" in record ||
+        "sheet" in record ||
+        "reference" in record ||
+        "range" in record ||
+        "rangeRef" in record ||
+        "cell" in record ||
+        "anchor" in record
+      ) {
+        collected.push(value);
+        return;
+      }
+
+      pushValue(record.scopes);
+      pushValue(record.scopeRules);
+      pushValue(record.sheetScopes);
+      pushValue(record.rangeScopes);
+      pushValue(record.scope);
+      pushValue(record.workbookScope);
+      pushValue(record.accessScopes);
+    }
+  }
+
+  values.forEach(pushValue);
+
+  return collected
+    .map((item) => normalizeWorkbookAccessScope(item, fallbackLevel, source))
+    .filter((scope): scope is WorkbookAccessScope => scope !== null);
+}
+
+function workbookAccessContextLabel(context?: WorkbookAccessContext | null) {
+  if (!context) {
+    return "this workbook";
+  }
+
+  if (context.label) {
+    return context.label;
+  }
+
+  if (context.sheetName && context.reference) {
+    return `${context.sheetName}!${context.reference}`;
+  }
+
+  if (context.sheetName) {
+    return context.sheetName;
+  }
+
+  return context.reference ?? "this workbook area";
+}
+
+function scopeMatchesContext(scope: WorkbookAccessScope, context: WorkbookAccessContext) {
+  if (scope.kind === "sheet") {
+    if (!scope.sheetName || !context.sheetName) {
+      return false;
+    }
+
+    return normalizeHandle(scope.sheetName) === normalizeHandle(context.sheetName);
+  }
+
+  if (!scope.sheetName || !context.sheetName) {
+    return false;
+  }
+
+  if (normalizeHandle(scope.sheetName) !== normalizeHandle(context.sheetName)) {
+    return false;
+  }
+
+  if (!scope.reference) {
+    return true;
+  }
+
+  if (!context.reference) {
+    return false;
+  }
+
+  const scopeReference = scope.reference.trim().replace(/\$/g, "").toLowerCase();
+  const contextReference = context.reference.trim().replace(/\$/g, "").toLowerCase();
+
+  return (
+    scopeReference === contextReference ||
+    contextReference.startsWith(`${scopeReference}:`) ||
+    scopeReference.startsWith(`${contextReference}:`)
+  );
+}
+
+function describeWorkbookAccessScope(scope: WorkbookAccessScope) {
+  const location =
+    scope.kind === "sheet"
+      ? scope.sheetName ?? "Unnamed sheet"
+      : `${scope.sheetName ?? "Workbook"}!${scope.reference ?? "range"}`;
+
+  return `${scope.kind === "sheet" ? "Sheet" : "Range"}: ${location} · ${workbookAccessLevelLabel(scope.level)}`;
+}
+
+function summarizeWorkbookAccessScopes(scopes: WorkbookAccessScope[]) {
+  if (scopes.length === 0) {
+    return "Workbook-wide access applies to every sheet and range.";
+  }
+
+  const sheetScopes = scopes.filter((scope) => scope.kind === "sheet").length;
+  const rangeScopes = scopes.length - sheetScopes;
+
+  return `${sheetScopes} sheet scope${sheetScopes === 1 ? "" : "s"} and ${rangeScopes} range scope${rangeScopes === 1 ? "" : "s"} define the workbook access boundary.`;
+}
+
+function getWorkbookAccessLevelForContext(
+  assignment: WorkbookAccessAssignment | null,
+  context?: WorkbookAccessContext | null,
+) {
+  if (!assignment) {
+    return "none" as WorkbookAccessLevel;
+  }
+
+  if (!context || assignment.scopes.length === 0) {
+    return assignment.level;
+  }
+
+  const matchingScopes = assignment.scopes.filter((scope) => scopeMatchesContext(scope, context));
+
+  if (matchingScopes.length === 0) {
+    return "none";
+  }
+
+  return assignment.level;
+}
+
+function findFirstOutOfScopeEntry(
+  assignment: WorkbookAccessAssignment | null,
+  entries: ProposalDiffEntry[],
+  fallbackSheetName?: string,
+) {
+  if (!assignment || assignment.scopes.length === 0) {
+    return null;
+  }
+
+  return (
+    entries.find((entry) => {
+      const context = parseWorkbookCellContext(entry.cell);
+      const normalizedContext =
+        context && !context.sheetName && fallbackSheetName
+          ? {
+              ...context,
+              sheetName: fallbackSheetName,
+              label: context.reference ? `${fallbackSheetName}!${context.reference}` : fallbackSheetName,
+            }
+          : context;
+
+      return (
+        getWorkbookAccessLevelForContext(assignment, normalizedContext) === "none"
+      );
+    }) ?? null
+  );
+}
+
 type WorkbookAccessApiAssignment = {
   reviewerId?: unknown;
+  reviewerProfileId?: unknown;
   reviewerName?: unknown;
   reviewerHandle?: unknown;
   reviewer?: unknown;
   handle?: unknown;
   name?: unknown;
   role?: unknown;
+  assignmentRole?: unknown;
   level?: unknown;
   accessLevel?: unknown;
   assignedBy?: unknown;
   assignedAt?: unknown;
+  source?: unknown;
+  scopes?: unknown;
+  scope?: unknown;
+  scopeRules?: unknown;
+  sheetScopes?: unknown;
+  rangeScopes?: unknown;
+  workbookScope?: unknown;
+  accessScopes?: unknown;
+};
+
+type WorkbookAccessApiScope = {
+  kind?: unknown;
+  type?: unknown;
+  scopeKind?: unknown;
+  scopeType?: unknown;
+  sheetName?: unknown;
+  sheet?: unknown;
+  name?: unknown;
+  targetSheet?: unknown;
+  targetSheetName?: unknown;
+  scopeSheet?: unknown;
+  reference?: unknown;
+  range?: unknown;
+  rangeRef?: unknown;
+  cell?: unknown;
+  anchor?: unknown;
+  targetRange?: unknown;
+  level?: unknown;
+  accessLevel?: unknown;
   source?: unknown;
 };
 
@@ -697,15 +1092,38 @@ function normalizeWorkbookAccessAssignments(value: unknown): WorkbookAccessAssig
             ? assignment.handle.trim()
             : mentionHandleForReviewer(reviewerName);
       const reviewerId =
-        typeof assignment.reviewerId === "string" && assignment.reviewerId.trim().length > 0
-          ? assignment.reviewerId.trim()
+        typeof assignment.reviewerProfileId === "string" &&
+        assignment.reviewerProfileId.trim().length > 0
+          ? assignment.reviewerProfileId.trim()
+          : typeof assignment.reviewerId === "string" && assignment.reviewerId.trim().length > 0
+            ? assignment.reviewerId.trim()
           : normalizeHandle(reviewerHandle) || normalizeHandle(reviewerName) || `reviewer_${index + 1}`;
+      const accessLevel = normalizeWorkbookAccessLevel(
+        assignment.level ??
+          assignment.accessLevel ??
+          workbookAccessLevelFromRole(assignment.assignmentRole),
+      );
 
       return {
         reviewerId,
         reviewerName,
         reviewerHandle,
-        level: normalizeWorkbookAccessLevel(assignment.level ?? assignment.accessLevel),
+        level: accessLevel,
+        assignmentRole:
+          typeof assignment.assignmentRole === "string" && assignment.assignmentRole.trim().length > 0
+            ? assignment.assignmentRole.trim()
+            : undefined,
+        scopes: normalizeWorkbookAccessScopes(
+          assignment.source === "api" ? "api" : "derived",
+          accessLevel === "none" ? "view" : accessLevel,
+          assignment.scopes,
+          assignment.scopeRules,
+          assignment.sheetScopes,
+          assignment.rangeScopes,
+          assignment.scope,
+          assignment.workbookScope,
+          assignment.accessScopes,
+        ),
         assignedBy:
           typeof assignment.assignedBy === "string" && assignment.assignedBy.trim().length > 0
             ? assignment.assignedBy.trim()
@@ -733,6 +1151,8 @@ function createDerivedWorkbookAccessAssignments(
       reviewerName: owner,
       reviewerHandle: mentionHandleForReviewer(owner),
       level: "manage",
+      assignmentRole: "owner",
+      scopes: [],
       source: "derived",
     });
   }
@@ -1079,6 +1499,15 @@ function App() {
   );
   const [workbookAccessDraftLevel, setWorkbookAccessDraftLevel] =
     useState<WorkbookAccessLevel>("view");
+  const [workbookAccessDraftScopes, setWorkbookAccessDraftScopes] = useState<
+    WorkbookAccessScope[]
+  >([]);
+  const [workbookAccessDraftScopeKind, setWorkbookAccessDraftScopeKind] =
+    useState<WorkbookAccessScopeKind>("sheet");
+  const [workbookAccessDraftScopeSheetName, setWorkbookAccessDraftScopeSheetName] = useState("");
+  const [workbookAccessDraftScopeReference, setWorkbookAccessDraftScopeReference] = useState("");
+  const [workbookAccessDraftScopeLevel, setWorkbookAccessDraftScopeLevel] =
+    useState<WorkbookAccessLevel>("view");
   const [reviewComment, setReviewComment] = useState("");
   const [runtimeBackend, setRuntimeBackend] = useState<RuntimeBackendInfo>(
     createDerivedRuntimeInfo([createDemoWorkbookSummary()], demoReviewSnapshot),
@@ -1149,18 +1578,31 @@ function App() {
   );
   const effectiveWorkbookAccessLevel = currentWorkbookAssignment?.level ?? "none";
   const workbookAccessSummary = currentWorkbookAssignment
-    ? `${activeReviewer.displayName} is assigned as ${workbookAccessLevelLabel(effectiveWorkbookAccessLevel)} on this workbook.`
+    ? `${activeReviewer.displayName} is assigned as ${workbookAccessLevelLabel(effectiveWorkbookAccessLevel)} on this workbook${currentWorkbookAssignment.scopes.length > 0 ? ` with ${currentWorkbookAssignment.scopes.length} sheet/range scope${currentWorkbookAssignment.scopes.length === 1 ? "" : "s"}` : ""}.`
     : `No workbook assignment found for ${activeReviewer.displayName}; workbook-scoped actions stay read-only.`;
-  const workbookAccessReason = (requiredLevel: WorkbookAccessLevel) => {
-    if (workbookAccessLevelRank(effectiveWorkbookAccessLevel) >= workbookAccessLevelRank(requiredLevel)) {
+  const workbookAccessReason = (
+    requiredLevel: WorkbookAccessLevel,
+    context?: WorkbookAccessContext | null,
+  ) => {
+    const effectiveLevel = getWorkbookAccessLevelForContext(currentWorkbookAssignment, context);
+
+    if (workbookAccessLevelRank(effectiveLevel) >= workbookAccessLevelRank(requiredLevel)) {
       return null;
     }
 
-    if (effectiveWorkbookAccessLevel === "none") {
+    if (!currentWorkbookAssignment) {
       return `You are not assigned to ${snapshot.workbook.name}. Workbook access is read-only until an assignment is added.`;
     }
 
-    return `Your workbook access is ${workbookAccessLevelLabel(effectiveWorkbookAccessLevel)}; ${workbookAccessLevelLabel(requiredLevel)} access is required for this action.`;
+    if (context && currentWorkbookAssignment.scopes.length > 0) {
+      const matchingScopes = currentWorkbookAssignment.scopes.filter((scope) => scopeMatchesContext(scope, context));
+
+      if (matchingScopes.length === 0) {
+        return `You are assigned to ${snapshot.workbook.name}, but not to ${workbookAccessContextLabel(context)}. This action is blocked by sheet/range scope.`;
+      }
+    }
+
+    return `Your workbook access is ${workbookAccessLevelLabel(effectiveLevel)}; ${workbookAccessLevelLabel(requiredLevel)} access is required for this action.`;
   };
   const canEditCurrentWorkbook =
     workbookAccessLevelRank(effectiveWorkbookAccessLevel) >= workbookAccessLevelRank("edit");
@@ -1173,6 +1615,18 @@ function App() {
     action: ReviewerAuthorizationAction,
     entry?: ProposalDiffEntry,
   ) {
+    const workbookContext = entry ? parseWorkbookCellContext(entry.cell) : null;
+    const workbookContextWithFallback =
+      workbookContext && !workbookContext.sheetName && snapshot.workbook.sheets[0]
+        ? {
+            ...workbookContext,
+            sheetName: snapshot.workbook.sheets[0].name,
+            label: workbookContext.reference
+              ? `${snapshot.workbook.sheets[0].name}!${workbookContext.reference}`
+              : snapshot.workbook.sheets[0].name,
+          }
+        : workbookContext;
+
     if (
       action === "proposalDecision" ||
       action === "proposalItemDecision" ||
@@ -1184,7 +1638,10 @@ function App() {
     ) {
       const requiredLevel =
         action === "itemComment" ? "comment" : "edit";
-      const workbookReason = workbookAccessReason(requiredLevel as WorkbookAccessLevel);
+      const workbookReason = workbookAccessReason(
+        requiredLevel as WorkbookAccessLevel,
+        action === "proposalItemDecision" || action === "itemComment" ? workbookContextWithFallback : null,
+      );
 
       if (workbookReason) {
         return workbookReason;
@@ -1233,6 +1690,16 @@ function App() {
 
     switch (action) {
       case "proposalDecision":
+        if (currentWorkbookAssignment?.scopes.length) {
+          const blockedEntry = findFirstOutOfScopeEntry(
+            currentWorkbookAssignment,
+            snapshot.proposal.diff,
+            snapshot.workbook.sheets[0]?.name,
+          );
+          if (blockedEntry) {
+            return `Whole-proposal approval is blocked because ${blockedEntry.cell} is outside your sheet/range scope.`;
+          }
+        }
         if (proposalHasItemDecisions) {
           return "Item-level review has started, so whole-proposal approval is locked.";
         }
@@ -1249,6 +1716,16 @@ function App() {
         }
         return null;
       case "proposalApply":
+        if (currentWorkbookAssignment?.scopes.length) {
+          const blockedEntry = findFirstOutOfScopeEntry(
+            currentWorkbookAssignment,
+            approvedItems,
+            snapshot.workbook.sheets[0]?.name,
+          );
+          if (blockedEntry) {
+            return `Apply is blocked because approved item ${blockedEntry.cell} is outside your sheet/range scope.`;
+          }
+        }
         if (proposalIsLocked) {
           return "Applied proposals are locked. Start a new upload to continue editing.";
         }
@@ -1628,7 +2105,11 @@ function App() {
   }
 
   function canReviewItem(entry: ProposalDiffEntry) {
-    return canUseItemReview && entry.status === "pending";
+    return (
+      canUseItemReview &&
+      entry.status === "pending" &&
+      getAuthorizationReason("proposalItemDecision", entry) === null
+    );
   }
 
   function getItemCommentState(entryId: string): ItemCommentState {
@@ -1663,8 +2144,10 @@ function App() {
   }
 
   function canCommentOnItem(entry: ProposalDiffEntry) {
+    const scopeReason = getAuthorizationReason("itemComment", entry);
+
     return (
-      !proposalIsLocked &&
+      scopeReason === null &&
       !mutationInFlight &&
       reviewerAuthorization.canCommentOnItems &&
       canCommentCurrentWorkbook &&
@@ -2076,12 +2559,27 @@ function App() {
     const payload = {
       workbookId,
       assignments: assignments.map((assignment) => ({
-        reviewerId: assignment.reviewerId,
-        reviewerName: assignment.reviewerName,
+        reviewerProfileId: assignment.reviewerId,
         reviewerHandle: assignment.reviewerHandle,
-        level: assignment.level,
-        assignedBy: reviewerName,
-        assignedAt: new Date().toISOString(),
+        assignmentRole:
+          assignment.level === "manage" && assignment.assignmentRole === "owner"
+            ? "owner"
+            : workbookAccessRoleForLevel(assignment.level),
+        scopes: assignment.scopes.map((scope) => ({
+          kind: scope.kind,
+          sheetName: scope.sheetName,
+          range: scope.reference,
+        })),
+        sheetScopes: assignment.scopes
+          .filter((scope) => scope.kind === "sheet")
+          .map((scope) => scope.sheetName)
+          .filter((scope): scope is string => Boolean(scope)),
+        rangeScopes: assignment.scopes
+          .filter((scope) => scope.kind === "range")
+          .map((scope) =>
+            scope.sheetName && scope.reference ? `${scope.sheetName}!${scope.reference}` : "",
+          )
+          .filter((scope): scope is string => scope.length > 0),
       })),
     };
 
@@ -2154,6 +2652,13 @@ function App() {
         reviewerName: selectedReviewer.displayName,
         reviewerHandle: selectedReviewer.handle,
         level: workbookAccessDraftLevel,
+        assignmentRole:
+          workbookAccessDraftLevel === "manage" &&
+          workbookAccessAssignments.find((assignment) => assignment.reviewerId === selectedReviewer.id)
+            ?.assignmentRole === "owner"
+            ? "owner"
+            : workbookAccessRoleForLevel(workbookAccessDraftLevel),
+        scopes: workbookAccessDraftScopes,
         assignedBy: reviewerName,
         assignedAt: new Date().toISOString(),
         source: "derived",
@@ -2172,6 +2677,50 @@ function App() {
     } finally {
       setWorkbookAccessSaving(false);
     }
+  }
+
+  function addWorkbookAccessDraftScope() {
+    const sheetName = workbookAccessDraftScopeSheetName.trim();
+    const reference = workbookAccessDraftScopeReference.trim();
+
+    if (!sheetName) {
+      setWorkbookAccessError("Enter a sheet name before adding a scope.");
+      return;
+    }
+
+    if (workbookAccessDraftScopeKind === "range" && !reference) {
+      setWorkbookAccessError("Enter a range reference before adding a range scope.");
+      return;
+    }
+
+    const nextScope = {
+      kind: workbookAccessDraftScopeKind,
+      sheetName,
+      reference: workbookAccessDraftScopeKind === "range" ? reference : undefined,
+      level: workbookAccessDraftScopeLevel,
+      source: "derived",
+    } satisfies WorkbookAccessScope;
+
+    setWorkbookAccessDraftScopes((current) => {
+      const nextScopes = [...current];
+      const duplicate = nextScopes.some(
+        (scope) =>
+          scope.kind === nextScope.kind &&
+          normalizeHandle(scope.sheetName ?? "") === normalizeHandle(nextScope.sheetName ?? "") &&
+          normalizeHandle(scope.reference ?? "") === normalizeHandle(nextScope.reference ?? ""),
+      );
+
+      if (!duplicate) {
+        nextScopes.push(nextScope);
+      }
+
+      return nextScopes;
+    });
+    setWorkbookAccessError(null);
+  }
+
+  function removeWorkbookAccessDraftScope(index: number) {
+    setWorkbookAccessDraftScopes((current) => current.filter((_, scopeIndex) => scopeIndex !== index));
   }
 
   async function handleWorkbookAccessRevoke(reviewerId: string) {
@@ -2196,6 +2745,26 @@ function App() {
       setWorkbookAccessSaving(false);
     }
   }
+
+  useEffect(() => {
+    const selectedAssignment = workbookAccessAssignments.find(
+      (assignment) => assignment.reviewerId === workbookAccessDraftReviewerId,
+    );
+    const firstScope = selectedAssignment?.scopes?.[0] ?? null;
+
+    setWorkbookAccessDraftLevel(selectedAssignment?.level ?? "view");
+    setWorkbookAccessDraftScopes(selectedAssignment?.scopes ?? []);
+    setWorkbookAccessDraftScopeKind(firstScope?.kind ?? "sheet");
+    setWorkbookAccessDraftScopeSheetName(
+      firstScope?.sheetName ?? snapshot.workbook.sheets[0]?.name ?? "",
+    );
+    setWorkbookAccessDraftScopeReference(firstScope?.reference ?? "");
+    setWorkbookAccessDraftScopeLevel(firstScope?.level ?? "view");
+  }, [
+    snapshot.workbook.sheets,
+    workbookAccessAssignments,
+    workbookAccessDraftReviewerId,
+  ]);
 
   useEffect(() => {
     void loadWorkbooks({ allowDemoFallback: true });
@@ -2607,7 +3176,10 @@ function App() {
     diffId: string,
     decision: ApprovalDecision,
   ) {
-    if (!canUseItemReview) {
+    const entry = snapshot.proposal.diff.find((item) => item.id === diffId);
+    const reason = entry ? getAuthorizationReason("proposalItemDecision", entry) : "This review item is unavailable.";
+
+    if (!entry || reason !== null) {
       return;
     }
 
@@ -2655,8 +3227,10 @@ function App() {
     const body = getItemCommentDraft(diffId).trim();
     const commentState = getItemCommentState(diffId);
     const replyTarget = getReplyTarget(diffId);
+    const entry = snapshot.proposal.diff.find((item) => item.id === diffId);
+    const reason = entry ? getAuthorizationReason("itemComment", entry) : "This review item is unavailable.";
 
-    if (!body || commentState.submitting || proposalIsLocked || mutationInFlight) {
+    if (!body || commentState.submitting || mutationInFlight || reason !== null) {
       return;
     }
 
@@ -3196,6 +3770,9 @@ function App() {
                 <p className="panel-kicker">Workbook Access</p>
                 <h2>Assignments decide whether this workbook is editable or read-only.</h2>
                 <p>{workbookAccessSummary}</p>
+                <p className="authorization-note">
+                  {summarizeWorkbookAccessScopes(currentWorkbookAssignment?.scopes ?? [])}
+                </p>
                 <div className="assignment-list">
                   {workbookAccessAssignments.length > 0 ? (
                     workbookAccessAssignments.map((assignment) => (
@@ -3209,6 +3786,17 @@ function App() {
                             ? ` · ${new Date(assignment.assignedAt).toLocaleString()}`
                             : ""}
                         </small>
+                        {assignment.scopes.length > 0 ? (
+                          <div className="scope-chip-row">
+                            {assignment.scopes.map((scope, index) => (
+                              <span key={`${assignment.reviewerId}-${index}`} className="scope-chip">
+                                {describeWorkbookAccessScope(scope)}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <small>Workbook-wide access</small>
+                        )}
                       </article>
                     ))
                   ) : (
@@ -3242,6 +3830,11 @@ function App() {
                   </span>
                   <span className="authorization-chip">
                     {canCommentCurrentWorkbook ? "Comments allowed" : "Comments blocked"}
+                  </span>
+                  <span className="authorization-chip">
+                    {currentWorkbookAssignment?.scopes.length
+                      ? `${currentWorkbookAssignment.scopes.length} scoped areas`
+                      : "Workbook-wide"}
                   </span>
                   <span className="authorization-chip">
                     {reviewerAuthorization.canManageWorkbookAssignments
@@ -3299,6 +3892,123 @@ function App() {
                       <option value="manage">Manage</option>
                     </select>
                   </label>
+                  <div className="scope-management">
+                    <div className="scope-management-head">
+                      <span>Sheet / range scopes</span>
+                      <small>{workbookAccessDraftScopes.length} staged</small>
+                    </div>
+                    <div className="scope-management-grid">
+                      <label>
+                        <span>Scope type</span>
+                        <select
+                          disabled={workbookAccessSaving}
+                          onChange={(event) =>
+                            setWorkbookAccessDraftScopeKind(
+                              event.target.value === "range" ? "range" : "sheet",
+                            )
+                          }
+                          value={workbookAccessDraftScopeKind}
+                        >
+                          <option value="sheet">Sheet</option>
+                          <option value="range">Range</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Sheet name</span>
+                        <input
+                          disabled={workbookAccessSaving}
+                          list="workbook-scope-sheets"
+                          onChange={(event) =>
+                            setWorkbookAccessDraftScopeSheetName(event.target.value)
+                          }
+                          placeholder="Budget 2026"
+                          type="text"
+                          value={workbookAccessDraftScopeSheetName}
+                        />
+                      </label>
+                      <label>
+                        <span>Range reference</span>
+                        <input
+                          disabled={workbookAccessSaving || workbookAccessDraftScopeKind === "sheet"}
+                          onChange={(event) =>
+                            setWorkbookAccessDraftScopeReference(event.target.value)
+                          }
+                          placeholder="B2:D20"
+                          type="text"
+                          value={workbookAccessDraftScopeReference}
+                        />
+                      </label>
+                      <label>
+                        <span>Scope access</span>
+                        <select
+                          disabled={workbookAccessSaving}
+                          onChange={(event) =>
+                            setWorkbookAccessDraftScopeLevel(
+                              normalizeWorkbookAccessLevel(event.target.value),
+                            )
+                          }
+                          value={workbookAccessDraftScopeLevel}
+                        >
+                          <option value="view">View</option>
+                          <option value="comment">Comment</option>
+                          <option value="edit">Edit</option>
+                          <option value="manage">Manage</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="action-row">
+                      <button
+                        className="decision-button approve"
+                        disabled={workbookAccessSaving}
+                        onClick={() => addWorkbookAccessDraftScope()}
+                        type="button"
+                      >
+                        Add scope
+                      </button>
+                      <button
+                        className="decision-button reject"
+                        disabled={workbookAccessSaving || workbookAccessDraftScopes.length === 0}
+                        onClick={() => setWorkbookAccessDraftScopes([])}
+                        type="button"
+                      >
+                        Clear scopes
+                      </button>
+                    </div>
+                    <div className="scope-list">
+                      {workbookAccessDraftScopes.length > 0 ? (
+                        workbookAccessDraftScopes.map((scope, index) => (
+                          <article
+                            key={`${scope.kind}-${scope.sheetName ?? "sheet"}-${scope.reference ?? "all"}-${index}`}
+                          >
+                            <span>{scope.kind === "sheet" ? "Sheet scope" : "Range scope"}</span>
+                            <strong>
+                              {scope.kind === "sheet"
+                                ? scope.sheetName ?? "Unnamed sheet"
+                                : `${scope.sheetName ?? "Workbook"}!${scope.reference ?? "range"}`}
+                            </strong>
+                            <small>
+                              {workbookAccessLevelLabel(scope.level)}
+                              <button
+                                disabled={workbookAccessSaving}
+                                onClick={() => removeWorkbookAccessDraftScope(index)}
+                                type="button"
+                              >
+                                Remove
+                              </button>
+                            </small>
+                          </article>
+                        ))
+                      ) : (
+                        <article>
+                          <span>No scopes</span>
+                          <strong>Workbook-wide access</strong>
+                          <small>
+                            Leave scopes empty to apply this assignment to the whole workbook.
+                          </small>
+                        </article>
+                      )}
+                    </div>
+                  </div>
                   <div className="action-row">
                     <button
                       className="decision-button approve"
@@ -3325,9 +4035,15 @@ function App() {
                 </div>
                 {workbookAccessError ? <p className="comment-error">{workbookAccessError}</p> : null}
                 <p className="authorization-note">
-                  Assignment changes are scoped to this workbook and fall back to a local update
-                  if the backend endpoint is not available yet.
+                  Assignment changes are scoped to this workbook. Sheet and range scopes are
+                  optional and fall back to a local update if the backend endpoint is not
+                  available yet.
                 </p>
+                <datalist id="workbook-scope-sheets">
+                  {snapshot.workbook.sheets.map((sheet) => (
+                    <option key={sheet.name} value={sheet.name} />
+                  ))}
+                </datalist>
               </section>
             ) : (
               <section className="panel">
@@ -3748,6 +4464,9 @@ function App() {
                             </button>
                           </div>
                         </div>
+                        {itemDecisionReason ? (
+                          <p className="authorization-note">{itemDecisionReason}</p>
+                        ) : null}
                         {entry.before ? (
                           <div className={`diff-row ${diffClassName(entry.kind)}`}>- {entry.before}</div>
                         ) : null}

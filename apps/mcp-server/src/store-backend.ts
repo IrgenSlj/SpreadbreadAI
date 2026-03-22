@@ -93,6 +93,8 @@ export interface StoreBackend {
       reviewerProfileId?: string;
       reviewerHandle: string;
       assignmentRole: WorkbookAccessRole;
+      sheetScopes?: string[];
+      rangeScopes?: string[];
     }>;
   }): Promise<WorkbookAccessMutationResult>;
   updateStoredProposalDecision(input: {

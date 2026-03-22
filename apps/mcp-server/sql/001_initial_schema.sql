@@ -22,10 +22,22 @@ create table if not exists workbook_access_assignments (
   reviewer_handle text not null,
   reviewer_display_name text not null,
   assignment_role text not null,
+  scopes_json jsonb not null default '[]'::jsonb,
+  sheet_scopes_json jsonb not null default '[]'::jsonb,
+  range_scopes_json jsonb not null default '[]'::jsonb,
   assigned_at timestamptz not null,
   assigned_by text not null,
   primary key (workbook_id, reviewer_profile_id)
 );
+
+alter table if exists workbook_access_assignments
+  add column if not exists scopes_json jsonb not null default '[]'::jsonb;
+
+alter table if exists workbook_access_assignments
+  add column if not exists sheet_scopes_json jsonb not null default '[]'::jsonb;
+
+alter table if exists workbook_access_assignments
+  add column if not exists range_scopes_json jsonb not null default '[]'::jsonb;
 
 create index if not exists workbook_access_assignments_workbook_id_idx
   on workbook_access_assignments (workbook_id, assigned_at asc, reviewer_profile_id asc);
@@ -194,6 +206,9 @@ create table if not exists workbook_access_assignments (
   reviewer_handle text not null,
   reviewer_display_name text not null,
   assignment_role text not null,
+  scopes_json jsonb not null default '[]'::jsonb,
+  sheet_scopes_json jsonb not null default '[]'::jsonb,
+  range_scopes_json jsonb not null default '[]'::jsonb,
   assigned_at timestamptz not null,
   assigned_by text not null,
   primary key (workbook_id, reviewer_profile_id)

@@ -2,9 +2,15 @@ import type {
   ReviewerProfile,
   ReviewerRole,
   ReviewerSession,
+  WorkbookAccessAssignment,
   WorkbookAccessState,
   WorkbookAccessRole,
 } from "../../../packages/shared/src/index.js";
+import {
+  normalizeWorkbookAccessScopes,
+  type WorkbookAccessTarget,
+  workbookAccessAssignmentAllowsTarget,
+} from "./workbook-access-scope.js";
 
 export type ReviewerPermission =
   | "comment"
@@ -62,6 +68,51 @@ function workbookAccessValue(role: WorkbookAccessRole | undefined) {
   return role && role in workbookAccessRank ? role : undefined;
 }
 
+function assignmentAllowsLocation(
+  assignment: WorkbookAccessAssignment,
+  target?: WorkbookAccessTarget | null,
+) {
+  const scopes = normalizeWorkbookAccessScopes({
+    scopes: assignment.scopes,
+    sheetScopes: assignment.sheetScopes,
+    rangeScopes: assignment.rangeScopes,
+  });
+
+  if (!target) {
+    return scopes.length === 0;
+  }
+
+  if (scopes.length === 0) {
+    return true;
+  }
+
+  return workbookAccessAssignmentAllowsTarget(
+    {
+      scopes,
+    },
+    target,
+  );
+}
+
+function matchingAssignments(
+  profile: ReviewerProfile,
+  workbookAccess?: WorkbookAccessState,
+) {
+  return (
+    workbookAccess?.assignments.filter((entry) =>
+      [entry.reviewerProfileId, entry.reviewerHandle, entry.reviewerDisplayName]
+        .filter(Boolean)
+        .map(normalizeToken)
+        .some((candidate) =>
+          [profile.id, profile.handle, profile.displayName, profile.email ?? ""]
+            .filter(Boolean)
+            .map(normalizeToken)
+            .includes(candidate),
+        ),
+    ) ?? []
+  );
+}
+
 export function reviewerHasPermission(
   profile: ReviewerProfile,
   permission: ReviewerPermission,
@@ -95,25 +146,26 @@ export function reviewerAssignmentRole(
   profile: ReviewerProfile,
   workbookAccess?: WorkbookAccessState,
 ): WorkbookAccessRole | undefined {
-  const assignment = workbookAccess?.assignments.find((entry) =>
-    [entry.reviewerProfileId, entry.reviewerHandle, entry.reviewerDisplayName]
-      .filter(Boolean)
-      .map(normalizeToken)
-      .some((candidate) =>
-        [profile.id, profile.handle, profile.displayName, profile.email ?? ""]
-          .filter(Boolean)
-          .map(normalizeToken)
-          .includes(candidate),
-      ),
-  );
+  const assignment = matchingAssignments(profile, workbookAccess)[0];
 
   return workbookAccessValue(assignment?.assignmentRole);
+}
+
+function matchingAssignment(
+  profile: ReviewerProfile,
+  workbookAccess?: WorkbookAccessState,
+  target?: WorkbookAccessTarget | null,
+) {
+  return matchingAssignments(profile, workbookAccess).find((entry) =>
+    assignmentAllowsLocation(entry, target),
+  );
 }
 
 export function reviewerHasWorkbookAccess(
   profile: ReviewerProfile,
   permission: ReviewerPermission,
   workbookAccess?: WorkbookAccessState,
+  target?: WorkbookAccessTarget | null,
 ) {
   const minimumAccess = minimumWorkbookAccessByPermission[permission];
 
@@ -121,12 +173,49 @@ export function reviewerHasWorkbookAccess(
     return true;
   }
 
-  const currentAccess = reviewerAssignmentRole(profile, workbookAccess);
+  const currentAccess = workbookAccessValue(
+    matchingAssignment(profile, workbookAccess, target)?.assignmentRole,
+  );
   if (!currentAccess) {
     return false;
   }
 
   return workbookAccessRank[currentAccess] >= workbookAccessRank[minimumAccess];
+}
+
+export function reviewerHasWorkbookTargetsAccess(
+  profile: ReviewerProfile,
+  permission: ReviewerPermission,
+  workbookAccess?: WorkbookAccessState,
+  targets?: Array<WorkbookAccessTarget | null | undefined>,
+) {
+  const minimumAccess = minimumWorkbookAccessByPermission[permission];
+
+  if (!minimumAccess) {
+    return true;
+  }
+
+  const normalizedTargets = (targets ?? []).filter(
+    (target): target is WorkbookAccessTarget => Boolean(target),
+  );
+  const assignments = matchingAssignments(profile, workbookAccess);
+
+  return assignments.some((assignment) => {
+    const currentAccess = workbookAccessValue(assignment.assignmentRole);
+    if (!currentAccess) {
+      return false;
+    }
+
+    if (workbookAccessRank[currentAccess] < workbookAccessRank[minimumAccess]) {
+      return false;
+    }
+
+    if (normalizedTargets.length === 0) {
+      return assignmentAllowsLocation(assignment, null);
+    }
+
+    return normalizedTargets.every((target) => assignmentAllowsLocation(assignment, target));
+  });
 }
 
 export function authorizeReviewerAction(
@@ -158,6 +247,7 @@ export function authorizeWorkbookAction(
   permission: ReviewerPermission,
   workbookAccess?: WorkbookAccessState,
   actor?: string,
+  target?: WorkbookAccessTarget | null,
 ):
   | { ok: true; reviewer: ReviewerProfile; assignmentRole?: WorkbookAccessRole }
   | { ok: false; code: "forbidden" } {
@@ -166,13 +256,49 @@ export function authorizeWorkbookAction(
     return base;
   }
 
-  if (!reviewerHasWorkbookAccess(base.reviewer, permission, workbookAccess)) {
+  if (!reviewerHasWorkbookAccess(base.reviewer, permission, workbookAccess, target)) {
     return { ok: false, code: "forbidden" };
   }
 
   return {
     ok: true,
     reviewer: base.reviewer,
-    assignmentRole: reviewerAssignmentRole(base.reviewer, workbookAccess),
+    assignmentRole: workbookAccessValue(
+      matchingAssignment(base.reviewer, workbookAccess, target)?.assignmentRole,
+    ),
+  };
+}
+
+export function authorizeWorkbookTargetsAction(
+  session: ReviewerSession | null,
+  permission: ReviewerPermission,
+  workbookAccess?: WorkbookAccessState,
+  actor?: string,
+  targets?: Array<WorkbookAccessTarget | null | undefined>,
+):
+  | { ok: true; reviewer: ReviewerProfile; assignmentRole?: WorkbookAccessRole }
+  | { ok: false; code: "forbidden" } {
+  const base = authorizeReviewerAction(session, permission, actor);
+  if (!base.ok) {
+    return base;
+  }
+
+  if (!reviewerHasWorkbookTargetsAccess(base.reviewer, permission, workbookAccess, targets)) {
+    return { ok: false, code: "forbidden" };
+  }
+
+  const normalizedTargets = (targets ?? []).filter(
+    (target): target is WorkbookAccessTarget => Boolean(target),
+  );
+  const assignment = matchingAssignments(base.reviewer, workbookAccess).find((entry) =>
+    normalizedTargets.length === 0
+      ? assignmentAllowsLocation(entry, null)
+      : normalizedTargets.every((target) => assignmentAllowsLocation(entry, target)),
+  );
+
+  return {
+    ok: true,
+    reviewer: base.reviewer,
+    assignmentRole: workbookAccessValue(assignment?.assignmentRole),
   };
 }

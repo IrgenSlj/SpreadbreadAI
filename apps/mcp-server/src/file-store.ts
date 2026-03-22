@@ -20,8 +20,18 @@ import {
   type WorkbookSketchBoard,
   type WorkbookSummary,
 } from "../../../packages/shared/src/index.js";
-import { authorizeReviewerAction, authorizeWorkbookAction } from "./authorization.js";
+import {
+  authorizeReviewerAction,
+  authorizeWorkbookAction,
+  authorizeWorkbookTargetsAction,
+} from "./authorization.js";
 import { parseWorkbookReviewSnapshot } from "./parser.js";
+import {
+  normalizeWorkbookAccessScopes,
+  serializeWorkbookAccessScopes,
+  workbookAccessTargetFromCell,
+  type WorkbookAccessTarget,
+} from "./workbook-access-scope.js";
 import type {
   LibraryViewDeletionResult,
   LibraryViewMutationResult,
@@ -536,6 +546,13 @@ function normalizeWorkbookAccessAssignments(
       reviewerHandle: reviewer.handle,
       reviewerDisplayName: reviewer.displayName,
       assignmentRole,
+      ...serializeWorkbookAccessScopes(
+        normalizeWorkbookAccessScopes({
+          scopes: candidate.scopes,
+          sheetScopes: candidate.sheetScopes,
+          rangeScopes: candidate.rangeScopes,
+        }),
+      ),
       assignedAt:
         typeof candidate.assignedAt === "string" && candidate.assignedAt
           ? candidate.assignedAt
@@ -663,6 +680,7 @@ async function authorizeReviewerMutation(
   permission: Parameters<typeof authorizeReviewerAction>[1],
   workbookAccess?: WorkbookAccessState,
   actor?: string,
+  target?: WorkbookAccessTarget | null,
 ) {
   const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
   const session =
@@ -670,7 +688,7 @@ async function authorizeReviewerMutation(
     defaultReviewerSession(reviewers);
 
   return workbookAccess
-    ? authorizeWorkbookAction(session, permission, workbookAccess, actor)
+    ? authorizeWorkbookAction(session, permission, workbookAccess, actor, target)
     : authorizeReviewerAction(session, permission, actor);
 }
 
@@ -679,9 +697,16 @@ async function authorizeWorkbookMutation(
   workbookId: string,
   permission: Parameters<typeof authorizeReviewerAction>[1],
   actor?: string,
+  target?: WorkbookAccessTarget | null,
 ) {
   const workbookAccess = readWorkbookAccessFromStore(store, workbookId);
-  return authorizeReviewerMutation(store, permission, workbookAccess ?? undefined, actor);
+  return authorizeReviewerMutation(
+    store,
+    permission,
+    workbookAccess ?? undefined,
+    actor,
+    target,
+  );
 }
 
 function buildCommentNotifications(input: {
@@ -1332,18 +1357,22 @@ export function createFileStoreBackend(): StoreBackend {
       comment?: string;
     }): Promise<MutationResult> {
       const store = await readStore();
-      const auth = await authorizeWorkbookMutation(
-        store,
-        input.workbookId,
-        "proposal_review",
-        input.reviewer,
-      );
-      if (!auth.ok) {
-        return { ok: false, code: "forbidden" };
-      }
-
-      const reviewer = auth.reviewer.displayName;
       if (input.workbookId === demoSnapshotState.workbook.id) {
+        const auth = await authorizeWorkbookTargetsAction(
+          normalizeReviewerSession(
+            store.currentReviewerSession,
+            normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers),
+          ) ?? defaultReviewerSession(normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers)),
+          "proposal_review",
+          readWorkbookAccessFromStore(store, input.workbookId) ?? undefined,
+          input.reviewer,
+          demoSnapshotState.proposal.diff.map((entry) => workbookAccessTargetFromCell(entry.cell)),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const reviewer = auth.reviewer.displayName;
         if (demoSnapshotState.proposal.status === "applied") {
           return mutationFailure("locked");
         }
@@ -1411,6 +1440,23 @@ export function createFileStoreBackend(): StoreBackend {
         if (!record) {
           return mutationFailure("not_found");
         }
+
+        const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+        const session =
+          normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+          defaultReviewerSession(reviewers);
+        const auth = await authorizeWorkbookTargetsAction(
+          session,
+          "proposal_review",
+          readWorkbookAccessFromStore(store, input.workbookId) ?? undefined,
+          input.reviewer,
+          record.snapshot.proposal.diff.map((entry) => workbookAccessTargetFromCell(entry.cell)),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const reviewer = auth.reviewer.displayName;
 
         if (record.snapshot.proposal.status === "applied") {
           return mutationFailure("locked");
@@ -1483,17 +1529,6 @@ export function createFileStoreBackend(): StoreBackend {
       comment?: string;
     }): Promise<MutationResult> {
       const store = await readStore();
-      const auth = await authorizeWorkbookMutation(
-        store,
-        input.workbookId,
-        "item_review",
-        input.reviewer,
-      );
-      if (!auth.ok) {
-        return { ok: false, code: "forbidden" };
-      }
-
-      const reviewer = auth.reviewer.displayName;
       const reviewedAt = new Date().toISOString();
 
       if (input.workbookId === demoSnapshotState.workbook.id) {
@@ -1510,6 +1545,20 @@ export function createFileStoreBackend(): StoreBackend {
         if (!hasMatch) {
           return mutationFailure("item_not_found");
         }
+
+        const existing = demoSnapshotState.proposal.diff.find((entry) => entry.id === input.diffId);
+        const auth = await authorizeWorkbookMutation(
+          store,
+          input.workbookId,
+          "item_review",
+          input.reviewer,
+          workbookAccessTargetFromCell(existing?.cell),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const reviewer = auth.reviewer.displayName;
 
         const nextDiff = demoSnapshotState.proposal.diff.map((entry) =>
           entry.id === input.diffId
@@ -1593,6 +1642,18 @@ export function createFileStoreBackend(): StoreBackend {
         }
 
         const existing = record.snapshot.proposal.diff.find((entry) => entry.id === input.diffId);
+        const auth = await authorizeWorkbookMutation(
+          store,
+          input.workbookId,
+          "item_review",
+          input.reviewer,
+          workbookAccessTargetFromCell(existing?.cell),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const reviewer = auth.reviewer.displayName;
 
         if (existing && existing.status !== "pending") {
           return mutationFailure("locked");
@@ -1670,12 +1731,6 @@ export function createFileStoreBackend(): StoreBackend {
       mentions?: string[];
     }): Promise<MutationResult> {
       const store = await readStore();
-      const auth = await authorizeWorkbookMutation(store, input.workbookId, "comment", input.author);
-      if (!auth.ok) {
-        return { ok: false, code: "forbidden" };
-      }
-
-      const author = auth.reviewer.displayName;
       const createdAt = new Date().toISOString();
 
       if (input.workbookId === demoSnapshotState.workbook.id) {
@@ -1689,6 +1744,19 @@ export function createFileStoreBackend(): StoreBackend {
             appended.error === "item_not_found" ? "item_not_found" : "comment_not_found",
           );
         }
+
+        const auth = await authorizeWorkbookMutation(
+          store,
+          input.workbookId,
+          "comment",
+          input.author,
+          workbookAccessTargetFromCell(appended.proposalCell),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const author = auth.reviewer.displayName;
 
         demoSnapshotState = {
           ...demoSnapshotState,
@@ -1743,6 +1811,19 @@ export function createFileStoreBackend(): StoreBackend {
             appended.error === "item_not_found" ? "item_not_found" : "comment_not_found",
           );
         }
+
+        const auth = await authorizeWorkbookMutation(
+          store,
+          input.workbookId,
+          "comment",
+          input.author,
+          workbookAccessTargetFromCell(appended.proposalCell),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const author = auth.reviewer.displayName;
 
         record.snapshot = {
           ...record.snapshot,
@@ -2191,13 +2272,24 @@ export function createFileStoreBackend(): StoreBackend {
       note?: string;
     }): Promise<MutationResult> {
       const store = await readStore();
-      const auth = await authorizeWorkbookMutation(store, input.workbookId, "apply", input.actor);
-      if (!auth.ok) {
-        return { ok: false, code: "forbidden" };
-      }
-
-      const actor = auth.reviewer.displayName;
       if (input.workbookId === demoSnapshotState.workbook.id) {
+        const auth = await authorizeWorkbookTargetsAction(
+          normalizeReviewerSession(
+            store.currentReviewerSession,
+            normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers),
+          ) ?? defaultReviewerSession(normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers)),
+          "apply",
+          readWorkbookAccessFromStore(store, input.workbookId) ?? undefined,
+          input.actor,
+          demoSnapshotState.proposal.diff
+            .filter((entry) => entry.status === "approved")
+            .map((entry) => workbookAccessTargetFromCell(entry.cell)),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const actor = auth.reviewer.displayName;
         const nextSnapshot = appendApplyResult(demoSnapshotState, actor, input.note);
 
         if (!nextSnapshot) {
@@ -2231,6 +2323,25 @@ export function createFileStoreBackend(): StoreBackend {
         if (!record) {
           return mutationFailure("not_found");
         }
+
+        const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+        const session =
+          normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+          defaultReviewerSession(reviewers);
+        const auth = await authorizeWorkbookTargetsAction(
+          session,
+          "apply",
+          readWorkbookAccessFromStore(store, input.workbookId) ?? undefined,
+          input.actor,
+          record.snapshot.proposal.diff
+            .filter((entry) => entry.status === "approved")
+            .map((entry) => workbookAccessTargetFromCell(entry.cell)),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const actor = auth.reviewer.displayName;
 
         const nextSnapshot = appendApplyResult(record.snapshot, actor, input.note);
 

@@ -1386,6 +1386,105 @@ h2 {
   line-height: 1.45;
 }
 
+.scope-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #cfdcce;
+  background: #f4faf4;
+  color: var(--green-strong);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.scope-management {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f9fcf9, #f3f8f2);
+}
+
+.scope-management-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.scope-management-head span {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--green);
+}
+
+.scope-management-head small {
+  color: var(--muted);
+}
+
+.scope-management-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.scope-management-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.scope-management-grid label span {
+  font-size: 0.74rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.scope-list {
+  display: grid;
+  gap: 10px;
+}
+
+.scope-list article {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.scope-list article strong {
+  margin-top: 4px;
+}
+
+.scope-list article small {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.scope-list article button {
+  border: 1px solid #c8ddc7;
+  background: #edf8ef;
+  border-radius: 999px;
+  color: var(--green-strong);
+  padding: 4px 10px;
+}
+
 .sheet-list article,
 .named-range-list article,
 .proposal-meta article,
@@ -1841,6 +1940,10 @@ h2 {
     margin-left: 0;
     padding-left: 0;
   }
+
+  .scope-management-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1886,6 +1989,11 @@ h2 {
 
   .authorization-panel-head small {
     text-align: left;
+  }
+
+  .scope-list article small {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .decision-button,

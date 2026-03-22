@@ -17,6 +17,19 @@ export type ProposalItemStatus = "pending" | "approved" | "rejected";
 export type ReviewerRole = "Approver" | "Reviewer" | "Analyst";
 export type WorkbookAccessRole = "owner" | "approver" | "reviewer" | "editor";
 
+export interface WorkbookAccessSheetScope {
+  kind: "sheet";
+  sheetName: string;
+}
+
+export interface WorkbookAccessRangeScope {
+  kind: "range";
+  sheetName: string;
+  range: string;
+}
+
+export type WorkbookAccessScope = WorkbookAccessSheetScope | WorkbookAccessRangeScope;
+
 export type RiskSeverity = "low" | "medium" | "high";
 export type DiffKind = "remove" | "add" | "update" | "comment";
 
@@ -80,6 +93,9 @@ export interface WorkbookAccessAssignment {
   reviewerHandle: string;
   reviewerDisplayName: string;
   assignmentRole: WorkbookAccessRole;
+  scopes?: WorkbookAccessScope[];
+  sheetScopes?: string[];
+  rangeScopes?: string[];
   assignedAt: string;
   assignedBy: string;
 }

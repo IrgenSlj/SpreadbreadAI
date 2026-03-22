@@ -24,9 +24,18 @@ import type {
   WorkbookSummary,
   WorkbookVersionSummary,
 } from "../../../packages/shared/src/index.js";
-import { authorizeReviewerAction, authorizeWorkbookAction } from "./authorization.js";
+import {
+  authorizeReviewerAction,
+  authorizeWorkbookAction,
+  authorizeWorkbookTargetsAction,
+} from "./authorization.js";
 import { parseWorkbookReviewSnapshot } from "./parser.js";
 import { withTransaction } from "./postgres.js";
+import {
+  normalizeWorkbookAccessScopes,
+  serializeWorkbookAccessScopes,
+  workbookAccessTargetFromCell,
+} from "./workbook-access-scope.js";
 import type {
   LibraryViewDeletionResult,
   MutationFailureCode,
@@ -356,6 +365,13 @@ function normalizeWorkbookAccessAssignments(
       reviewerHandle: reviewer.handle,
       reviewerDisplayName: reviewer.displayName,
       assignmentRole,
+      ...serializeWorkbookAccessScopes(
+        normalizeWorkbookAccessScopes({
+          scopes: candidate.scopes,
+          sheetScopes: candidate.sheetScopes,
+          rangeScopes: candidate.rangeScopes,
+        }),
+      ),
       assignedAt:
         typeof candidate.assignedAt === "string" && candidate.assignedAt
           ? candidate.assignedAt
@@ -489,10 +505,13 @@ async function loadWorkbookAccessState(
     reviewer_handle: string;
     reviewer_display_name: string;
     assignment_role: string;
+    scopes_json: unknown;
+    sheet_scopes_json: unknown;
+    range_scopes_json: unknown;
     assigned_at: string;
     assigned_by: string;
   }>(
-    `select reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, assigned_at, assigned_by
+    `select reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, scopes_json, sheet_scopes_json, range_scopes_json, assigned_at, assigned_by
      from workbook_access_assignments
      where workbook_id = $1
      order by assigned_at asc, reviewer_profile_id asc`,
@@ -505,6 +524,9 @@ async function loadWorkbookAccessState(
       reviewerHandle: row.reviewer_handle,
       reviewerDisplayName: row.reviewer_display_name,
       assignmentRole: normalizeWorkbookAccessRole(row.assignment_role) ?? "editor",
+      scopes: row.scopes_json,
+      sheetScopes: row.sheet_scopes_json,
+      rangeScopes: row.range_scopes_json,
       assignedAt: row.assigned_at,
       assignedBy: row.assigned_by,
     })),
@@ -521,11 +543,12 @@ async function authorizeWorkbookMutation(
   workbookId: string,
   permission: Parameters<typeof authorizeReviewerAction>[1],
   actor?: string,
+  target?: Parameters<typeof authorizeWorkbookAction>[4],
 ) {
   const reviewers = await ensureReviewerProfiles(client);
   const session = await ensureCurrentReviewerSession(client, reviewers);
   const access = await loadWorkbookAccessState(client, workbookId, session);
-  return authorizeWorkbookAction(session, permission, access ?? undefined, actor);
+  return authorizeWorkbookAction(session, permission, access ?? undefined, actor, target);
 }
 
 function buildCommentNotifications(input: {
@@ -931,14 +954,17 @@ async function insertSnapshot(
     for (const assignment of workbook.access.assignments) {
       await client.query(
         `insert into workbook_access_assignments
-         (workbook_id, reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, assigned_at, assigned_by)
-         values ($1, $2, $3, $4, $5, $6, $7)`,
+         (workbook_id, reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, scopes_json, sheet_scopes_json, range_scopes_json, assigned_at, assigned_by)
+         values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10)`,
         [
           workbook.id,
           assignment.reviewerProfileId,
           assignment.reviewerHandle,
           assignment.reviewerDisplayName,
           assignment.assignmentRole,
+          JSON.stringify(assignment.scopes ?? []),
+          JSON.stringify(assignment.sheetScopes ?? []),
+          JSON.stringify(assignment.rangeScopes ?? []),
           assignment.assignedAt,
           assignment.assignedBy,
         ],
@@ -1298,10 +1324,13 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
         reviewer_handle: string;
         reviewer_display_name: string;
         assignment_role: string;
+        scopes_json: unknown;
+        sheet_scopes_json: unknown;
+        range_scopes_json: unknown;
         assigned_at: string;
         assigned_by: string;
       }>(
-        `select reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, assigned_at, assigned_by
+        `select reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, scopes_json, sheet_scopes_json, range_scopes_json, assigned_at, assigned_by
          from workbook_access_assignments
          where workbook_id = $1
          order by assigned_at asc, reviewer_profile_id asc`,
@@ -1382,6 +1411,9 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
           reviewerHandle: row.reviewer_handle,
           reviewerDisplayName: row.reviewer_display_name,
           assignmentRole: normalizeWorkbookAccessRole(row.assignment_role) ?? "editor",
+          scopes: row.scopes_json,
+          sheetScopes: row.sheet_scopes_json,
+          rangeScopes: row.range_scopes_json,
           assignedAt: row.assigned_at,
           assignedBy: row.assigned_by,
         })),
@@ -1735,14 +1767,17 @@ export function createPostgresStoreBackend(): StoreBackend {
         for (const assignment of assignments) {
           await client.query(
             `insert into workbook_access_assignments
-             (workbook_id, reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, assigned_at, assigned_by)
-             values ($1, $2, $3, $4, $5, $6, $7)`,
+             (workbook_id, reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, scopes_json, sheet_scopes_json, range_scopes_json, assigned_at, assigned_by)
+             values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10)`,
             [
               input.workbookId,
               assignment.reviewerProfileId,
               assignment.reviewerHandle,
               assignment.reviewerDisplayName,
               assignment.assignmentRole,
+              JSON.stringify(assignment.scopes ?? []),
+              JSON.stringify(assignment.sheetScopes ?? []),
+              JSON.stringify(assignment.rangeScopes ?? []),
               assignment.assignedAt,
               assignment.assignedBy,
             ],
@@ -1764,21 +1799,26 @@ export function createPostgresStoreBackend(): StoreBackend {
 
     async updateStoredProposalDecision(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeWorkbookMutation(
-          client,
-          input.workbookId,
+        const current = await loadSnapshot(client, input.workbookId);
+        if (!current) {
+          return mutationFailure("not_found");
+        }
+
+        const reviewers = await ensureReviewerProfiles(client);
+        const session = await ensureCurrentReviewerSession(client, reviewers);
+        const access = await loadWorkbookAccessState(client, input.workbookId, session);
+        const auth = authorizeWorkbookTargetsAction(
+          session,
           "proposal_review",
+          access ?? undefined,
           input.reviewer,
+          current.proposal.diff.map((entry) => workbookAccessTargetFromCell(entry.cell)),
         );
         if (!auth.ok) {
           return { ok: false, code: "forbidden" };
         }
 
         const reviewer = auth.reviewer.displayName;
-        const current = await loadSnapshot(client, input.workbookId);
-        if (!current) {
-          return mutationFailure("not_found");
-        }
 
         if (current.proposal.status === "applied") {
           return mutationFailure("locked");
@@ -1837,17 +1877,6 @@ export function createPostgresStoreBackend(): StoreBackend {
 
     async updateStoredProposalItemDecision(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeWorkbookMutation(
-          client,
-          input.workbookId,
-          "item_review",
-          input.reviewer,
-        );
-        if (!auth.ok) {
-          return { ok: false, code: "forbidden" };
-        }
-
-        const reviewer = auth.reviewer.displayName;
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
           return mutationFailure("not_found");
@@ -1861,6 +1890,18 @@ export function createPostgresStoreBackend(): StoreBackend {
         if (!existing) {
           return mutationFailure("item_not_found");
         }
+        const auth = await authorizeWorkbookMutation(
+          client,
+          input.workbookId,
+          "item_review",
+          input.reviewer,
+          workbookAccessTargetFromCell(existing.cell),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const reviewer = auth.reviewer.displayName;
         if (existing.status !== "pending") {
           return mutationFailure("locked");
         }
@@ -1929,17 +1970,6 @@ export function createPostgresStoreBackend(): StoreBackend {
       mentions?: string[];
     }): Promise<MutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeWorkbookMutation(
-          client,
-          input.workbookId,
-          "comment",
-          input.author,
-        );
-        if (!auth.ok) {
-          return { ok: false, code: "forbidden" };
-        }
-
-        const author = auth.reviewer.displayName;
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
           return mutationFailure("not_found");
@@ -1962,6 +1992,19 @@ export function createPostgresStoreBackend(): StoreBackend {
         if (replyToCommentId && !repliedToComment) {
           return mutationFailure("comment_not_found");
         }
+
+        const auth = await authorizeWorkbookMutation(
+          client,
+          input.workbookId,
+          "comment",
+          input.author,
+          workbookAccessTargetFromCell(existing.cell),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const author = auth.reviewer.displayName;
 
         const createdAt = new Date().toISOString();
         const comment = {
@@ -2387,17 +2430,6 @@ export function createPostgresStoreBackend(): StoreBackend {
 
     async applyApprovedProposalItems(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeWorkbookMutation(
-          client,
-          input.workbookId,
-          "apply",
-          input.actor,
-        );
-        if (!auth.ok) {
-          return { ok: false, code: "forbidden" };
-        }
-
-        const actor = auth.reviewer.displayName;
         const current = await loadSnapshot(client, input.workbookId);
         if (!current) {
           return mutationFailure("not_found");
@@ -2411,6 +2443,22 @@ export function createPostgresStoreBackend(): StoreBackend {
         if (approvedItems.length === 0) {
           return mutationFailure("nothing_to_apply");
         }
+
+        const reviewers = await ensureReviewerProfiles(client);
+        const session = await ensureCurrentReviewerSession(client, reviewers);
+        const access = await loadWorkbookAccessState(client, input.workbookId, session);
+        const auth = authorizeWorkbookTargetsAction(
+          session,
+          "apply",
+          access ?? undefined,
+          input.actor,
+          approvedItems.map((entry) => workbookAccessTargetFromCell(entry.cell)),
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const actor = auth.reviewer.displayName;
 
         const reviewedAt = new Date().toISOString();
         const nextVersion: WorkbookVersionSummary = {
