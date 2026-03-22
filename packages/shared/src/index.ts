@@ -15,6 +15,7 @@ export type ProposalStatus =
 export type ApprovalDecision = "approve" | "reject";
 export type ProposalItemStatus = "pending" | "approved" | "rejected";
 export type ReviewerRole = "Approver" | "Reviewer" | "Analyst";
+export type WorkbookAccessRole = "owner" | "approver" | "reviewer" | "editor";
 
 export type RiskSeverity = "low" | "medium" | "high";
 export type DiffKind = "remove" | "add" | "update" | "comment";
@@ -72,6 +73,22 @@ export interface ReviewerNotificationFeed {
   reviewer: string;
   unreadCount: number;
   notifications: ReviewerNotification[];
+}
+
+export interface WorkbookAccessAssignment {
+  reviewerProfileId: EntityId;
+  reviewerHandle: string;
+  reviewerDisplayName: string;
+  assignmentRole: WorkbookAccessRole;
+  assignedAt: string;
+  assignedBy: string;
+}
+
+export interface WorkbookAccessState {
+  assignments: WorkbookAccessAssignment[];
+  currentReviewerAssignmentRole?: WorkbookAccessRole;
+  currentReviewerCanManage?: boolean;
+  currentReviewerCanWrite?: boolean;
 }
 
 export interface WorkbookSketchNode {
@@ -135,6 +152,7 @@ export interface WorkbookSummary {
   sheetCount: number;
   createdAt: string;
   tags: string[];
+  access?: WorkbookAccessState;
 }
 
 export interface WorkbookVersionSummary {
@@ -153,6 +171,7 @@ export interface WorkbookDetail extends WorkbookSummary {
   namedRanges: WorkbookNamedRange[];
   versions: WorkbookVersionSummary[];
   sketchBoard?: WorkbookSketchBoard;
+  access?: WorkbookAccessState;
 }
 
 export type WorkbookLibraryViewSortKey =
@@ -251,6 +270,21 @@ const demoWorkbook: WorkbookDetail = {
   sheetCount: 4,
   createdAt: "2026-03-17T08:20:00.000Z",
   tags: ["finance", "forecast", "q2"],
+  access: {
+    assignments: [
+      {
+        reviewerProfileId: "finance_manager",
+        reviewerHandle: "finance_manager",
+        reviewerDisplayName: "Finance Manager",
+        assignmentRole: "owner",
+        assignedAt: "2026-03-19T07:10:00.000Z",
+        assignedBy: "system",
+      },
+    ],
+    currentReviewerAssignmentRole: "owner",
+    currentReviewerCanManage: true,
+    currentReviewerCanWrite: true,
+  },
   owner: "FP&A",
   status: "needs_review",
   lastReviewedAt: "2026-03-19T07:10:00.000Z",

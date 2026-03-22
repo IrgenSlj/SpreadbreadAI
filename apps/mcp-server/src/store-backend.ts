@@ -4,6 +4,8 @@ import type {
   ReviewerNotificationFeed,
   ReviewerProfile,
   ReviewerSession,
+  WorkbookAccessRole,
+  WorkbookAccessState,
   WorkbookLibraryView,
   WorkbookReviewSnapshot,
   WorkbookSketchBoard,
@@ -18,6 +20,7 @@ export interface StoredWorkbookRecord {
   storedAt: string;
   uploadPath: string;
   snapshot: WorkbookReviewSnapshot;
+  access?: WorkbookAccessState;
 }
 
 export type MutationFailureCode =
@@ -58,6 +61,10 @@ export type ReviewerSessionMutationResult =
   | { ok: true; session: ReviewerSession }
   | { ok: false; code: MutationFailureCode };
 
+export type WorkbookAccessMutationResult =
+  | { ok: true; access: WorkbookAccessState }
+  | { ok: false; code: MutationFailureCode | "forbidden" };
+
 export interface StoreBackend {
   listReviewerProfiles(): Promise<ReviewerProfile[]>;
   getReviewerSession(): Promise<ReviewerSession | null>;
@@ -67,6 +74,7 @@ export interface StoreBackend {
   }): Promise<ReviewerSessionMutationResult>;
   listStoredWorkbooks(): Promise<WorkbookSummary[]>;
   getStoredWorkbookReview(workbookId: string): Promise<WorkbookReviewSnapshot | null>;
+  getStoredWorkbookAccess(workbookId: string): Promise<WorkbookAccessState | null>;
   getStoredWorkbookTags(workbookId: string): Promise<string[] | null>;
   saveUploadedWorkbook(input: {
     fileName: string;
@@ -78,6 +86,15 @@ export interface StoreBackend {
     tags: string[];
     updatedBy: string;
   }): Promise<TagsMutationResult>;
+  updateStoredWorkbookAccess(input: {
+    workbookId: string;
+    updatedBy: string;
+    assignments: Array<{
+      reviewerProfileId?: string;
+      reviewerHandle: string;
+      assignmentRole: WorkbookAccessRole;
+    }>;
+  }): Promise<WorkbookAccessMutationResult>;
   updateStoredProposalDecision(input: {
     workbookId: string;
     decision: ApprovalDecision;

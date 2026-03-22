@@ -2,6 +2,8 @@ import type {
   ReviewerProfile,
   ReviewerRole,
   ReviewerSession,
+  WorkbookAccessState,
+  WorkbookAccessRole,
 } from "../../../packages/shared/src/index.js";
 
 export type ReviewerPermission =
@@ -11,7 +13,8 @@ export type ReviewerPermission =
   | "apply"
   | "sketch_write"
   | "tag_write"
-  | "library_view_write";
+  | "library_view_write"
+  | "workbook_access_write";
 
 const roleRank: Record<ReviewerRole, number> = {
   Analyst: 0,
@@ -27,6 +30,24 @@ const minimumRoleByPermission: Record<ReviewerPermission, ReviewerRole> = {
   sketch_write: "Analyst",
   tag_write: "Approver",
   library_view_write: "Approver",
+  workbook_access_write: "Approver",
+};
+
+const workbookAccessRank: Record<WorkbookAccessRole, number> = {
+  editor: 0,
+  reviewer: 1,
+  approver: 2,
+  owner: 3,
+};
+
+const minimumWorkbookAccessByPermission: Partial<Record<ReviewerPermission, WorkbookAccessRole>> = {
+  comment: "editor",
+  item_review: "reviewer",
+  proposal_review: "approver",
+  apply: "approver",
+  sketch_write: "editor",
+  tag_write: "approver",
+  workbook_access_write: "approver",
 };
 
 function normalizeToken(value: string) {
@@ -35,6 +56,10 @@ function normalizeToken(value: string) {
 
 function roleValue(role: ReviewerProfile["role"]) {
   return role && role in roleRank ? role : undefined;
+}
+
+function workbookAccessValue(role: WorkbookAccessRole | undefined) {
+  return role && role in workbookAccessRank ? role : undefined;
 }
 
 export function reviewerHasPermission(
@@ -66,6 +91,44 @@ export function reviewerMatchesActor(profile: ReviewerProfile, actor?: string) {
     .some((candidate) => candidate === normalizedActor);
 }
 
+export function reviewerAssignmentRole(
+  profile: ReviewerProfile,
+  workbookAccess?: WorkbookAccessState,
+): WorkbookAccessRole | undefined {
+  const assignment = workbookAccess?.assignments.find((entry) =>
+    [entry.reviewerProfileId, entry.reviewerHandle, entry.reviewerDisplayName]
+      .filter(Boolean)
+      .map(normalizeToken)
+      .some((candidate) =>
+        [profile.id, profile.handle, profile.displayName, profile.email ?? ""]
+          .filter(Boolean)
+          .map(normalizeToken)
+          .includes(candidate),
+      ),
+  );
+
+  return workbookAccessValue(assignment?.assignmentRole);
+}
+
+export function reviewerHasWorkbookAccess(
+  profile: ReviewerProfile,
+  permission: ReviewerPermission,
+  workbookAccess?: WorkbookAccessState,
+) {
+  const minimumAccess = minimumWorkbookAccessByPermission[permission];
+
+  if (!minimumAccess) {
+    return true;
+  }
+
+  const currentAccess = reviewerAssignmentRole(profile, workbookAccess);
+  if (!currentAccess) {
+    return false;
+  }
+
+  return workbookAccessRank[currentAccess] >= workbookAccessRank[minimumAccess];
+}
+
 export function authorizeReviewerAction(
   session: ReviewerSession | null,
   permission: ReviewerPermission,
@@ -88,4 +151,28 @@ export function authorizeReviewerAction(
   }
 
   return { ok: true, reviewer };
+}
+
+export function authorizeWorkbookAction(
+  session: ReviewerSession | null,
+  permission: ReviewerPermission,
+  workbookAccess?: WorkbookAccessState,
+  actor?: string,
+):
+  | { ok: true; reviewer: ReviewerProfile; assignmentRole?: WorkbookAccessRole }
+  | { ok: false; code: "forbidden" } {
+  const base = authorizeReviewerAction(session, permission, actor);
+  if (!base.ok) {
+    return base;
+  }
+
+  if (!reviewerHasWorkbookAccess(base.reviewer, permission, workbookAccess)) {
+    return { ok: false, code: "forbidden" };
+  }
+
+  return {
+    ok: true,
+    reviewer: base.reviewer,
+    assignmentRole: reviewerAssignmentRole(base.reviewer, workbookAccess),
+  };
 }

@@ -1363,6 +1363,29 @@ h2 {
   line-height: 1.45;
 }
 
+.assignment-list,
+.access-management-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.assignment-list article {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.assignment-list article strong {
+  margin-top: 4px;
+}
+
+.assignment-list small {
+  margin-top: 6px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .sheet-list article,
 .named-range-list article,
 .proposal-meta article,

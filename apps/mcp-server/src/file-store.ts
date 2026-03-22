@@ -7,6 +7,9 @@ import {
   type ReviewerProfile,
   type ReviewerRole,
   type ReviewerSession,
+  type WorkbookAccessAssignment,
+  type WorkbookAccessRole,
+  type WorkbookAccessState,
   type WorkbookLibraryView,
   demoReviewSnapshot,
   type ProposalDetail,
@@ -17,7 +20,7 @@ import {
   type WorkbookSketchBoard,
   type WorkbookSummary,
 } from "../../../packages/shared/src/index.js";
-import { authorizeReviewerAction } from "./authorization.js";
+import { authorizeReviewerAction, authorizeWorkbookAction } from "./authorization.js";
 import { parseWorkbookReviewSnapshot } from "./parser.js";
 import type {
   LibraryViewDeletionResult,
@@ -311,6 +314,31 @@ function normalizeReviewerRole(role?: string): ReviewerRole | undefined {
   return undefined;
 }
 
+function workbookAccessRoleForReviewerRole(role?: ReviewerRole): WorkbookAccessRole {
+  switch (role) {
+    case "Approver":
+      return "approver";
+    case "Reviewer":
+      return "reviewer";
+    case "Analyst":
+    default:
+      return "editor";
+  }
+}
+
+function normalizeWorkbookAccessRole(value?: string): WorkbookAccessRole | undefined {
+  if (
+    value === "owner" ||
+    value === "approver" ||
+    value === "reviewer" ||
+    value === "editor"
+  ) {
+    return value;
+  }
+
+  return undefined;
+}
+
 function createReviewerProfile(input: {
   id?: string;
   handle: string;
@@ -457,9 +485,183 @@ function defaultReviewerSession(profiles: ReviewerProfile[] = defaultReviewerPro
   };
 }
 
+function normalizeWorkbookAccessAssignments(
+  value: unknown,
+  profiles: ReviewerProfile[],
+  fallbackAssignedBy: string,
+  fallbackAssignedAt: string,
+): WorkbookAccessAssignment[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return profiles.map((profile) => ({
+      reviewerProfileId: profile.id,
+      reviewerHandle: profile.handle,
+      reviewerDisplayName: profile.displayName,
+      assignmentRole: workbookAccessRoleForReviewerRole(profile.role),
+      assignedAt: fallbackAssignedAt,
+      assignedBy: fallbackAssignedBy,
+    }));
+  }
+
+  const assignments: WorkbookAccessAssignment[] = [];
+  const seen = new Set<string>();
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const candidate = item as Record<string, unknown>;
+    const reviewerIdentifier =
+      typeof candidate.reviewerProfileId === "string"
+        ? normalizeReviewer(candidate.reviewerProfileId)
+        : typeof candidate.reviewerHandle === "string"
+          ? normalizeReviewer(candidate.reviewerHandle)
+          : "";
+    const reviewer =
+      profiles.find((profile) => profile.id === reviewerIdentifier) ??
+      profiles.find((profile) => profile.handle === reviewerIdentifier);
+
+    if (!reviewer || seen.has(reviewer.id)) {
+      continue;
+    }
+
+    const assignmentRole =
+      normalizeWorkbookAccessRole(
+        typeof candidate.assignmentRole === "string" ? candidate.assignmentRole : undefined,
+      ) ?? workbookAccessRoleForReviewerRole(reviewer.role);
+
+    seen.add(reviewer.id);
+    assignments.push({
+      reviewerProfileId: reviewer.id,
+      reviewerHandle: reviewer.handle,
+      reviewerDisplayName: reviewer.displayName,
+      assignmentRole,
+      assignedAt:
+        typeof candidate.assignedAt === "string" && candidate.assignedAt
+          ? candidate.assignedAt
+          : fallbackAssignedAt,
+      assignedBy:
+        typeof candidate.assignedBy === "string" && candidate.assignedBy
+          ? candidate.assignedBy
+          : fallbackAssignedBy,
+    });
+  }
+
+  return assignments.length > 0
+    ? assignments
+    : profiles.map((profile) => ({
+        reviewerProfileId: profile.id,
+        reviewerHandle: profile.handle,
+        reviewerDisplayName: profile.displayName,
+        assignmentRole: workbookAccessRoleForReviewerRole(profile.role),
+        assignedAt: fallbackAssignedAt,
+        assignedBy: fallbackAssignedBy,
+      }));
+}
+
+function createWorkbookAccessState(
+  assignments: WorkbookAccessAssignment[],
+  session: ReviewerSession | null,
+): WorkbookAccessState {
+  const currentAssignment = assignments.find(
+    (assignment) =>
+      assignment.reviewerProfileId === session?.currentProfile?.id ||
+      assignment.reviewerHandle === session?.currentProfile?.handle,
+  );
+
+  return {
+    assignments,
+    currentReviewerAssignmentRole: currentAssignment?.assignmentRole,
+    currentReviewerCanManage:
+      currentAssignment?.assignmentRole === "owner" ||
+      currentAssignment?.assignmentRole === "approver",
+    currentReviewerCanWrite: Boolean(currentAssignment),
+  };
+}
+
+function createOwnerWorkbookAccessState(
+  reviewer: ReviewerProfile,
+  assignedAt: string,
+): WorkbookAccessState {
+  return createWorkbookAccessState(
+    [
+      {
+        reviewerProfileId: reviewer.id,
+        reviewerHandle: reviewer.handle,
+        reviewerDisplayName: reviewer.displayName,
+        assignmentRole: "owner",
+        assignedAt,
+        assignedBy: reviewer.displayName,
+      },
+    ],
+    {
+      reviewerProfileId: reviewer.id,
+      signedInAt: assignedAt,
+      updatedAt: assignedAt,
+      currentProfile: reviewer,
+    },
+  );
+}
+
+function readWorkbookAccessFromStore(
+  store: WorkbookStoreFile,
+  workbookId: string,
+): WorkbookAccessState | null {
+  const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+  const session =
+    normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+    defaultReviewerSession(reviewers);
+
+  const source =
+    workbookId === demoSnapshotState.workbook.id
+      ? demoSnapshotState.workbook.access ?? null
+      : store.records.find((record) => record.snapshot.workbook.id === workbookId)?.snapshot.workbook
+          .access ?? null;
+
+  if (!source) {
+    return null;
+  }
+
+  return createWorkbookAccessState(
+    normalizeWorkbookAccessAssignments(
+      source.assignments,
+      reviewers,
+      source.assignments[0]?.assignedBy ?? session.currentProfile?.displayName ?? "system",
+      source.assignments[0]?.assignedAt ?? new Date().toISOString(),
+    ),
+    session,
+  );
+}
+
+function withWorkbookAccess(
+  snapshot: WorkbookReviewSnapshot,
+  profiles: ReviewerProfile[],
+  session: ReviewerSession | null,
+): WorkbookReviewSnapshot {
+  const assignments = normalizeWorkbookAccessAssignments(
+    snapshot.workbook.access?.assignments,
+    profiles,
+    snapshot.workbook.owner || "system",
+    snapshot.workbook.createdAt,
+  );
+
+  const access = assignments.length > 0
+    ? createWorkbookAccessState(assignments, session)
+    : undefined;
+
+  return {
+    ...snapshot,
+    workbook: {
+      ...snapshot.workbook,
+      access,
+    },
+  };
+}
+
 async function authorizeReviewerMutation(
   store: WorkbookStoreFile,
   permission: Parameters<typeof authorizeReviewerAction>[1],
+  workbookAccess?: WorkbookAccessState,
   actor?: string,
 ) {
   const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
@@ -467,7 +669,19 @@ async function authorizeReviewerMutation(
     normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
     defaultReviewerSession(reviewers);
 
-  return authorizeReviewerAction(session, permission, actor);
+  return workbookAccess
+    ? authorizeWorkbookAction(session, permission, workbookAccess, actor)
+    : authorizeReviewerAction(session, permission, actor);
+}
+
+async function authorizeWorkbookMutation(
+  store: WorkbookStoreFile,
+  workbookId: string,
+  permission: Parameters<typeof authorizeReviewerAction>[1],
+  actor?: string,
+) {
+  const workbookAccess = readWorkbookAccessFromStore(store, workbookId);
+  return authorizeReviewerMutation(store, permission, workbookAccess ?? undefined, actor);
 }
 
 function buildCommentNotifications(input: {
@@ -790,13 +1004,13 @@ export function createFileStoreBackend(): StoreBackend {
 
     async listStoredWorkbooks(): Promise<WorkbookSummary[]> {
       const store = await readStore();
+      const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+      const session =
+        normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+        defaultReviewerSession(reviewers);
       const persisted = store.records.map((record) => ({
-        id: record.snapshot.workbook.id,
-        name: record.snapshot.workbook.name,
-        latestVersionId: record.snapshot.workbook.latestVersionId,
-        sheetCount: record.snapshot.workbook.sheetCount,
-        createdAt: record.snapshot.workbook.createdAt,
-        tags: record.snapshot.workbook.tags,
+        ...record.snapshot.workbook,
+        access: withWorkbookAccess(record.snapshot, reviewers, session).workbook.access,
       }));
 
       return [
@@ -807,20 +1021,41 @@ export function createFileStoreBackend(): StoreBackend {
           sheetCount: demoSnapshotState.workbook.sheetCount,
           createdAt: demoSnapshotState.workbook.createdAt,
           tags: demoSnapshotState.workbook.tags,
+          access: withWorkbookAccess(demoSnapshotState, reviewers, session).workbook.access,
         },
         ...persisted,
       ];
     },
 
     async getStoredWorkbookReview(workbookId: string): Promise<WorkbookReviewSnapshot | null> {
+      const store = await readStore();
+      const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+      const session =
+        normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+        defaultReviewerSession(reviewers);
+
       if (workbookId === demoSnapshotState.workbook.id) {
-        return demoSnapshotState;
+        return withWorkbookAccess(demoSnapshotState, reviewers, session);
       }
 
-      const store = await readStore();
       const match = store.records.find((record) => record.snapshot.workbook.id === workbookId);
 
-      return match?.snapshot ?? null;
+      return match ? withWorkbookAccess(match.snapshot, reviewers, session) : null;
+    },
+
+    async getStoredWorkbookAccess(workbookId: string): Promise<WorkbookAccessState | null> {
+      const store = await readStore();
+      const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+      const session =
+        normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+        defaultReviewerSession(reviewers);
+
+      if (workbookId === demoSnapshotState.workbook.id) {
+        return withWorkbookAccess(demoSnapshotState, reviewers, session).workbook.access ?? null;
+      }
+
+      const match = store.records.find((record) => record.snapshot.workbook.id === workbookId);
+      return match ? withWorkbookAccess(match.snapshot, reviewers, session).workbook.access ?? null : null;
     },
 
     async getStoredWorkbookTags(workbookId: string): Promise<string[] | null> {
@@ -881,7 +1116,11 @@ export function createFileStoreBackend(): StoreBackend {
       updatedBy: string;
     }): Promise<TagsMutationResult> {
       const store = await readStore();
-      const auth = await authorizeReviewerMutation(store, "tag_write", input.updatedBy);
+      const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+      const session =
+        normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+        defaultReviewerSession(reviewers);
+      const auth = await authorizeWorkbookMutation(store, input.workbookId, "tag_write", input.updatedBy);
       if (!auth.ok) {
         return { ok: false, code: "forbidden" };
       }
@@ -945,6 +1184,87 @@ export function createFileStoreBackend(): StoreBackend {
       });
     },
 
+    async updateStoredWorkbookAccess(input) {
+      const store = await readStore();
+      const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+      const session =
+        normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+        defaultReviewerSession(reviewers);
+      const auth = await authorizeWorkbookMutation(
+        store,
+        input.workbookId,
+        "workbook_access_write",
+        input.updatedBy,
+      );
+
+      if (!auth.ok) {
+        return { ok: false, code: "forbidden" } as const;
+      }
+
+      const updatedBy = auth.reviewer.displayName;
+      const updatedAt = new Date().toISOString();
+      const assignments = normalizeWorkbookAccessAssignments(
+        input.assignments,
+        reviewers,
+        updatedBy,
+        updatedAt,
+      );
+
+      if (input.workbookId === demoSnapshotState.workbook.id) {
+        demoSnapshotState = {
+          ...demoSnapshotState,
+          workbook: {
+            ...demoSnapshotState.workbook,
+            access: createWorkbookAccessState(assignments, session),
+          },
+          auditEvents: [
+            ...demoSnapshotState.auditEvents,
+            {
+              id: `audit_${demoSnapshotState.auditEvents.length + 1}`,
+              workbookId: input.workbookId,
+              actor: updatedBy,
+              action: "workbook.access.updated",
+              detail: `Workbook access assignments updated to ${assignments.length} reviewers.`,
+              createdAt: updatedAt,
+            },
+          ],
+        };
+
+        return { ok: true, access: demoSnapshotState.workbook.access ?? createWorkbookAccessState(assignments, session) };
+      }
+
+      return runSerializedMutation(async () => {
+        const store = await readStore();
+        const record = store.records.find((entry) => entry.snapshot.workbook.id === input.workbookId);
+
+        if (!record) {
+          return { ok: false, code: "not_found" } as const;
+        }
+
+        record.snapshot = {
+          ...record.snapshot,
+          workbook: {
+            ...record.snapshot.workbook,
+            access: createWorkbookAccessState(assignments, session),
+          },
+          auditEvents: [
+            ...record.snapshot.auditEvents,
+            {
+              id: `${input.workbookId}_audit_${record.snapshot.auditEvents.length + 1}`,
+              workbookId: input.workbookId,
+              actor: updatedBy,
+              action: "workbook.access.updated",
+              detail: `Workbook access assignments updated to ${assignments.length} reviewers.`,
+              createdAt: updatedAt,
+            },
+          ],
+        };
+
+        await writeStore(store);
+        return { ok: true, access: record.snapshot.workbook.access ?? createWorkbookAccessState(assignments, session) };
+      });
+    },
+
     async saveUploadedWorkbook(input: {
       fileName: string;
       contentType: string;
@@ -961,12 +1281,28 @@ export function createFileStoreBackend(): StoreBackend {
         await writeFile(uploadPath, input.bytes);
 
         try {
-          const snapshot = parseWorkbookReviewSnapshot({
+          const store = await readStore();
+          const reviewers = normalizeReviewerProfiles(store.reviewerProfiles ?? store.reviewers);
+          const session =
+            normalizeReviewerSession(store.currentReviewerSession, reviewers) ??
+            defaultReviewerSession(reviewers);
+          const baseSnapshot = parseWorkbookReviewSnapshot({
             workbookId: recordId,
             fileName: input.fileName,
             uploadedAt: storedAt,
             bytes: input.bytes,
           });
+          const access = createOwnerWorkbookAccessState(
+            session.currentProfile ?? reviewers[0] ?? defaultReviewerProfiles[0],
+            storedAt,
+          );
+          const snapshot = {
+            ...withWorkbookAccess(baseSnapshot, reviewers, session),
+            workbook: {
+              ...withWorkbookAccess(baseSnapshot, reviewers, session).workbook,
+              access,
+            },
+          };
 
           const record: StoredWorkbookRecord = {
             id: recordId,
@@ -978,7 +1314,6 @@ export function createFileStoreBackend(): StoreBackend {
             snapshot,
           };
 
-          const store = await readStore();
           store.records.unshift(record);
           await writeStore(store);
 
@@ -997,7 +1332,12 @@ export function createFileStoreBackend(): StoreBackend {
       comment?: string;
     }): Promise<MutationResult> {
       const store = await readStore();
-      const auth = await authorizeReviewerMutation(store, "proposal_review", input.reviewer);
+      const auth = await authorizeWorkbookMutation(
+        store,
+        input.workbookId,
+        "proposal_review",
+        input.reviewer,
+      );
       if (!auth.ok) {
         return { ok: false, code: "forbidden" };
       }
@@ -1143,7 +1483,12 @@ export function createFileStoreBackend(): StoreBackend {
       comment?: string;
     }): Promise<MutationResult> {
       const store = await readStore();
-      const auth = await authorizeReviewerMutation(store, "item_review", input.reviewer);
+      const auth = await authorizeWorkbookMutation(
+        store,
+        input.workbookId,
+        "item_review",
+        input.reviewer,
+      );
       if (!auth.ok) {
         return { ok: false, code: "forbidden" };
       }
@@ -1325,7 +1670,7 @@ export function createFileStoreBackend(): StoreBackend {
       mentions?: string[];
     }): Promise<MutationResult> {
       const store = await readStore();
-      const auth = await authorizeReviewerMutation(store, "comment", input.author);
+      const auth = await authorizeWorkbookMutation(store, input.workbookId, "comment", input.author);
       if (!auth.ok) {
         return { ok: false, code: "forbidden" };
       }
@@ -1445,7 +1790,12 @@ export function createFileStoreBackend(): StoreBackend {
       notes?: string;
     }): Promise<SketchBoardMutationResult> {
       const store = await readStore();
-      const auth = await authorizeReviewerMutation(store, "sketch_write", input.updatedBy);
+      const auth = await authorizeWorkbookMutation(
+        store,
+        input.workbookId,
+        "sketch_write",
+        input.updatedBy,
+      );
       if (!auth.ok) {
         return { ok: false, code: "forbidden" };
       }
@@ -1553,6 +1903,7 @@ export function createFileStoreBackend(): StoreBackend {
       const auth = await authorizeReviewerMutation(
         store,
         "library_view_write",
+        undefined,
         input.updatedBy,
       );
       if (!auth.ok) {
@@ -1607,6 +1958,7 @@ export function createFileStoreBackend(): StoreBackend {
       const auth = await authorizeReviewerMutation(
         store,
         "library_view_write",
+        undefined,
         input.archivedBy,
       );
       if (!auth.ok) {
@@ -1839,7 +2191,7 @@ export function createFileStoreBackend(): StoreBackend {
       note?: string;
     }): Promise<MutationResult> {
       const store = await readStore();
-      const auth = await authorizeReviewerMutation(store, "apply", input.actor);
+      const auth = await authorizeWorkbookMutation(store, input.workbookId, "apply", input.actor);
       if (!auth.ok) {
         return { ok: false, code: "forbidden" };
       }

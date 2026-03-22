@@ -63,6 +63,7 @@ type ReviewerPermissionKey =
   | "proposal.comment"
   | "sketch.edit"
   | "workbook.tags.write"
+  | "workbook.access.manage"
   | "library.views.write"
   | "notifications.read";
 
@@ -154,9 +155,22 @@ type ReviewerAuthorizationAction =
   | "proposalApply"
   | "itemComment"
   | "sketchEdit"
+  | "workbookAccessManage"
   | "workbookTags"
   | "libraryViews"
   | "notificationRead";
+
+type WorkbookAccessLevel = "none" | "view" | "comment" | "edit" | "manage";
+
+type WorkbookAccessAssignment = {
+  reviewerId: string;
+  reviewerName: string;
+  reviewerHandle: string;
+  level: WorkbookAccessLevel;
+  assignedBy?: string;
+  assignedAt?: string;
+  source: "api" | "derived";
+};
 
 type RuntimeBackendMode = "local" | "file-store" | "postgres" | "hybrid" | "unknown";
 
@@ -287,6 +301,8 @@ function permissionLabel(permission: ReviewerPermissionKey) {
       return "Sketch editing";
     case "workbook.tags.write":
       return "Workbook tags";
+    case "workbook.access.manage":
+      return "Workbook access";
     case "library.views.write":
       return "Saved views";
     case "notifications.read":
@@ -313,6 +329,10 @@ function normalizePermissionKey(value: string): ReviewerPermissionKey | null {
 
   if (token.includes("tag")) {
     return "workbook.tags.write";
+  }
+
+  if (token.includes("assign") || token.includes("access") || token.includes("permission")) {
+    return "workbook.access.manage";
   }
 
   if (
@@ -383,6 +403,7 @@ function defaultPermissionsForRole(role?: string) {
         "proposal.comment",
         "sketch.edit",
         "workbook.tags.write",
+        "workbook.access.manage",
         "library.views.write",
         "notifications.read",
       ] satisfies ReviewerPermissionKey[];
@@ -508,6 +529,7 @@ function resolveReviewerAuthorization(
   const canCommentOnItems = permissions.includes("proposal.comment");
   const canEditSketch = permissions.includes("sketch.edit");
   const canEditWorkbookTags = permissions.includes("workbook.tags.write");
+  const canManageWorkbookAssignments = permissions.includes("workbook.access.manage");
   const canManageLibraryViews = permissions.includes("library.views.write");
   const canToggleNotifications = permissions.includes("notifications.read");
 
@@ -537,6 +559,9 @@ function resolveReviewerAuthorization(
       workbookTags: canEditWorkbookTags
         ? ""
         : `The ${roleLabel} role cannot edit workbook tags.`,
+      workbookAccessManage: canManageWorkbookAssignments
+        ? ""
+        : `The ${roleLabel} role cannot manage workbook assignments.`,
       libraryViews: canManageLibraryViews
         ? ""
         : `The ${roleLabel} role cannot save, archive, or delete saved views.`,
@@ -550,9 +575,191 @@ function resolveReviewerAuthorization(
     canCommentOnItems,
     canEditSketch,
     canEditWorkbookTags,
+    canManageWorkbookAssignments,
     canManageLibraryViews,
     canToggleNotifications,
   };
+}
+
+function workbookAccessLevelRank(level: WorkbookAccessLevel) {
+  switch (level) {
+    case "manage":
+      return 4;
+    case "edit":
+      return 3;
+    case "comment":
+      return 2;
+    case "view":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function normalizeWorkbookAccessLevel(value: unknown): WorkbookAccessLevel {
+  const token = String(value ?? "").trim().toLowerCase();
+
+  if (token === "manage" || token === "admin" || token === "owner") {
+    return "manage";
+  }
+
+  if (token === "edit" || token === "write" || token === "editor") {
+    return "edit";
+  }
+
+  if (token === "comment" || token === "commenter" || token === "review") {
+    return "comment";
+  }
+
+  if (token === "view" || token === "read" || token === "viewer") {
+    return "view";
+  }
+
+  return "none";
+}
+
+function workbookAccessLevelLabel(level: WorkbookAccessLevel) {
+  switch (level) {
+    case "manage":
+      return "Manage";
+    case "edit":
+      return "Edit";
+    case "comment":
+      return "Comment";
+    case "view":
+      return "View";
+    default:
+      return "No access";
+  }
+}
+
+type WorkbookAccessApiAssignment = {
+  reviewerId?: unknown;
+  reviewerName?: unknown;
+  reviewerHandle?: unknown;
+  reviewer?: unknown;
+  handle?: unknown;
+  name?: unknown;
+  role?: unknown;
+  level?: unknown;
+  accessLevel?: unknown;
+  assignedBy?: unknown;
+  assignedAt?: unknown;
+  source?: unknown;
+};
+
+type WorkbookAccessApiResponse = {
+  workbookId?: unknown;
+  assignments?: unknown;
+  currentAssignment?: unknown;
+  effectiveAccess?: unknown;
+  effectiveAccessLevel?: unknown;
+  canManageAssignments?: unknown;
+  source?: unknown;
+};
+
+function normalizeWorkbookAccessAssignments(value: unknown): WorkbookAccessAssignment[] {
+  const record =
+    value && typeof value === "object" ? (value as WorkbookAccessApiResponse & Record<string, unknown>) : null;
+  const source = Array.isArray(value)
+    ? value
+    : record
+      ? Array.isArray(record.assignments)
+        ? record.assignments
+        : Array.isArray(record.access)
+          ? record.access
+          : Array.isArray(record.effectiveAccess)
+            ? record.effectiveAccess
+            : record.currentAssignment && typeof record.currentAssignment === "object"
+              ? [record.currentAssignment]
+              : []
+      : [];
+
+  return source
+    .map((item, index) => {
+      const assignment = item as WorkbookAccessApiAssignment & {
+        reviewer?: unknown;
+        handle?: unknown;
+        name?: unknown;
+      };
+      const reviewerName =
+        typeof assignment.reviewerName === "string" && assignment.reviewerName.trim().length > 0
+          ? assignment.reviewerName.trim()
+          : typeof assignment.name === "string" && assignment.name.trim().length > 0
+            ? assignment.name.trim()
+            : typeof assignment.reviewer === "string" && assignment.reviewer.trim().length > 0
+              ? assignment.reviewer.trim()
+              : `Reviewer ${index + 1}`;
+      const reviewerHandle =
+        typeof assignment.reviewerHandle === "string" && assignment.reviewerHandle.trim().length > 0
+          ? assignment.reviewerHandle.trim()
+          : typeof assignment.handle === "string" && assignment.handle.trim().length > 0
+            ? assignment.handle.trim()
+            : mentionHandleForReviewer(reviewerName);
+      const reviewerId =
+        typeof assignment.reviewerId === "string" && assignment.reviewerId.trim().length > 0
+          ? assignment.reviewerId.trim()
+          : normalizeHandle(reviewerHandle) || normalizeHandle(reviewerName) || `reviewer_${index + 1}`;
+
+      return {
+        reviewerId,
+        reviewerName,
+        reviewerHandle,
+        level: normalizeWorkbookAccessLevel(assignment.level ?? assignment.accessLevel),
+        assignedBy:
+          typeof assignment.assignedBy === "string" && assignment.assignedBy.trim().length > 0
+            ? assignment.assignedBy.trim()
+            : undefined,
+        assignedAt:
+          typeof assignment.assignedAt === "string" && assignment.assignedAt.trim().length > 0
+            ? assignment.assignedAt.trim()
+            : undefined,
+        source: assignment.source === "api" ? "api" : "derived",
+      } satisfies WorkbookAccessAssignment;
+    })
+    .filter((assignment) => assignment.reviewerName.length > 0);
+}
+
+function createDerivedWorkbookAccessAssignments(
+  snapshot: WorkbookReviewSnapshot,
+) {
+  const owner = snapshot.workbook.owner?.trim();
+
+  const assignments: WorkbookAccessAssignment[] = [];
+
+  if (owner) {
+    assignments.push({
+      reviewerId: normalizeHandle(owner) || `${snapshot.workbook.id}_owner`,
+      reviewerName: owner,
+      reviewerHandle: mentionHandleForReviewer(owner),
+      level: "manage",
+      source: "derived",
+    });
+  }
+
+  return assignments;
+}
+
+function resolveWorkbookAccessLevel(
+  assignments: WorkbookAccessAssignment[],
+  reviewer: ReviewerIdentity,
+) {
+  const match = assignments.find((assignment) => {
+    const identityTokens = [
+      assignment.reviewerId,
+      assignment.reviewerHandle.replace(/^@/, ""),
+      normalizeHandle(assignment.reviewerName),
+    ];
+    const reviewerTokens = [
+      reviewer.id,
+      reviewer.handle.replace(/^@/, ""),
+      normalizeHandle(reviewer.displayName),
+    ];
+
+    return reviewerTokens.some((token) => identityTokens.includes(token));
+  });
+
+  return match?.level ?? "none";
 }
 
 function mentionHandleForReviewer(value: string) {
@@ -861,6 +1068,17 @@ function App() {
   const [reviewerSessionProfile, setReviewerSessionProfile] = useState<ReviewerSessionProfile | null>(
     null,
   );
+  const [workbookAccessAssignments, setWorkbookAccessAssignments] = useState<
+    WorkbookAccessAssignment[]
+  >([]);
+  const [workbookAccessMode, setWorkbookAccessMode] = useState<"api" | "derived">("derived");
+  const [workbookAccessError, setWorkbookAccessError] = useState<string | null>(null);
+  const [workbookAccessSaving, setWorkbookAccessSaving] = useState(false);
+  const [workbookAccessDraftReviewerId, setWorkbookAccessDraftReviewerId] = useState(
+    fallbackReviewerDirectory[0].id,
+  );
+  const [workbookAccessDraftLevel, setWorkbookAccessDraftLevel] =
+    useState<WorkbookAccessLevel>("view");
   const [reviewComment, setReviewComment] = useState("");
   const [runtimeBackend, setRuntimeBackend] = useState<RuntimeBackendInfo>(
     createDerivedRuntimeInfo([createDemoWorkbookSummary()], demoReviewSnapshot),
@@ -911,11 +1129,68 @@ function App() {
     () => resolveReviewerAuthorization(activeReviewer, reviewerSessionProfile, reviewerIdentityMode),
     [activeReviewer, reviewerIdentityMode, reviewerSessionProfile],
   );
+  const currentWorkbookAssignment = useMemo(
+    () =>
+      workbookAccessAssignments.find((assignment) => {
+        const assignmentTokens = [
+          assignment.reviewerId,
+          assignment.reviewerHandle.replace(/^@/, ""),
+          normalizeHandle(assignment.reviewerName),
+        ];
+        const reviewerTokens = [
+          activeReviewer.id,
+          activeReviewer.handle.replace(/^@/, ""),
+          normalizeHandle(activeReviewer.displayName),
+        ];
+
+        return reviewerTokens.some((token) => assignmentTokens.includes(token));
+      }) ?? null,
+    [activeReviewer, workbookAccessAssignments],
+  );
+  const effectiveWorkbookAccessLevel = currentWorkbookAssignment?.level ?? "none";
+  const workbookAccessSummary = currentWorkbookAssignment
+    ? `${activeReviewer.displayName} is assigned as ${workbookAccessLevelLabel(effectiveWorkbookAccessLevel)} on this workbook.`
+    : `No workbook assignment found for ${activeReviewer.displayName}; workbook-scoped actions stay read-only.`;
+  const workbookAccessReason = (requiredLevel: WorkbookAccessLevel) => {
+    if (workbookAccessLevelRank(effectiveWorkbookAccessLevel) >= workbookAccessLevelRank(requiredLevel)) {
+      return null;
+    }
+
+    if (effectiveWorkbookAccessLevel === "none") {
+      return `You are not assigned to ${snapshot.workbook.name}. Workbook access is read-only until an assignment is added.`;
+    }
+
+    return `Your workbook access is ${workbookAccessLevelLabel(effectiveWorkbookAccessLevel)}; ${workbookAccessLevelLabel(requiredLevel)} access is required for this action.`;
+  };
+  const canEditCurrentWorkbook =
+    workbookAccessLevelRank(effectiveWorkbookAccessLevel) >= workbookAccessLevelRank("edit");
+  const canCommentCurrentWorkbook =
+    workbookAccessLevelRank(effectiveWorkbookAccessLevel) >= workbookAccessLevelRank("comment");
+  const workbookEditReason = workbookAccessReason("edit");
+  const workbookCommentReason = workbookAccessReason("comment");
 
   function getAuthorizationReason(
     action: ReviewerAuthorizationAction,
     entry?: ProposalDiffEntry,
   ) {
+    if (
+      action === "proposalDecision" ||
+      action === "proposalItemDecision" ||
+      action === "proposalApply" ||
+      action === "itemComment" ||
+      action === "sketchEdit" ||
+      action === "workbookTags" ||
+      action === "libraryViews"
+    ) {
+      const requiredLevel =
+        action === "itemComment" ? "comment" : "edit";
+      const workbookReason = workbookAccessReason(requiredLevel as WorkbookAccessLevel);
+
+      if (workbookReason) {
+        return workbookReason;
+      }
+    }
+
     if (action === "proposalDecision" && !reviewerAuthorization.canApproveProposal) {
       return reviewerAuthorization.actionReasons.proposalDecision;
     }
@@ -942,6 +1217,10 @@ function App() {
 
     if (action === "libraryViews" && !reviewerAuthorization.canManageLibraryViews) {
       return reviewerAuthorization.actionReasons.libraryViews;
+    }
+
+    if (action === "workbookAccessManage" && !reviewerAuthorization.canManageWorkbookAssignments) {
+      return reviewerAuthorization.actionReasons.workbookAccessManage;
     }
 
     if (action === "notificationRead" && !reviewerAuthorization.canToggleNotifications) {
@@ -993,6 +1272,8 @@ function App() {
       case "workbookTags":
         return null;
       case "libraryViews":
+        return null;
+      case "workbookAccessManage":
         return null;
       case "notificationRead":
         return null;
@@ -1386,6 +1667,7 @@ function App() {
       !proposalIsLocked &&
       !mutationInFlight &&
       reviewerAuthorization.canCommentOnItems &&
+      canCommentCurrentWorkbook &&
       reviewerName.trim().length > 0 &&
       !getItemCommentState(entry.id).submitting
     );
@@ -1401,7 +1683,7 @@ function App() {
     linkId: string,
     updater: (link: WorkbookSketchBoard["links"][number]) => WorkbookSketchBoard["links"][number],
   ) {
-    if (!reviewerAuthorization.canEditSketch) {
+    if (!reviewerAuthorization.canEditSketch || !canEditCurrentWorkbook) {
       return;
     }
 
@@ -1414,7 +1696,7 @@ function App() {
   }
 
   function addSketchLink() {
-    if (!reviewerAuthorization.canEditSketch) {
+    if (!reviewerAuthorization.canEditSketch || !canEditCurrentWorkbook) {
       return;
     }
 
@@ -1445,7 +1727,7 @@ function App() {
   }
 
   function removeSketchLink(linkId: string) {
-    if (!reviewerAuthorization.canEditSketch) {
+    if (!reviewerAuthorization.canEditSketch || !canEditCurrentWorkbook) {
       return;
     }
 
@@ -1673,7 +1955,7 @@ function App() {
     event: ReactPointerEvent<HTMLDivElement>,
     nodeId: string,
   ) {
-    if (mutationInFlight || !reviewerAuthorization.canEditSketch) {
+    if (mutationInFlight || !reviewerAuthorization.canEditSketch || !canEditCurrentWorkbook) {
       return;
     }
 
@@ -1741,6 +2023,101 @@ function App() {
     }
   }
 
+  async function loadWorkbookAccess(
+    workbookId: string,
+    reviewSnapshot: WorkbookReviewSnapshot,
+  ) {
+    const fallbackAssignments = createDerivedWorkbookAccessAssignments(
+      reviewSnapshot,
+    );
+
+    setWorkbookAccessError(null);
+
+    const endpoints = [
+      `/api/workbooks/${encodeURIComponent(workbookId)}/access`,
+      `/api/workbooks/${encodeURIComponent(workbookId)}/assignments`,
+    ];
+
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(endpoint);
+
+        if (!response.ok) {
+          if (response.status === 404 || response.status === 405) {
+            continue;
+          }
+
+          throw new Error(`Failed to load workbook access (${response.status})`);
+        }
+
+        const data = (await response.json()) as WorkbookAccessApiResponse;
+        const assignments = normalizeWorkbookAccessAssignments(data);
+
+        setWorkbookAccessAssignments(
+          assignments.length > 0 ? assignments : fallbackAssignments,
+        );
+        setWorkbookAccessMode("api");
+        return;
+      } catch (error) {
+        if (error instanceof Error) {
+          setWorkbookAccessError(error.message);
+        }
+      }
+    }
+
+    setWorkbookAccessAssignments(fallbackAssignments);
+    setWorkbookAccessMode("derived");
+  }
+
+  async function persistWorkbookAccessAssignments(
+    workbookId: string,
+    assignments: WorkbookAccessAssignment[],
+  ) {
+    const payload = {
+      workbookId,
+      assignments: assignments.map((assignment) => ({
+        reviewerId: assignment.reviewerId,
+        reviewerName: assignment.reviewerName,
+        reviewerHandle: assignment.reviewerHandle,
+        level: assignment.level,
+        assignedBy: reviewerName,
+        assignedAt: new Date().toISOString(),
+      })),
+    };
+
+    const endpoints = [
+      `/api/workbooks/${encodeURIComponent(workbookId)}/access`,
+      `/api/workbooks/${encodeURIComponent(workbookId)}/assignments`,
+    ];
+
+    for (const endpoint of endpoints) {
+      const response = await fetch(endpoint, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as WorkbookAccessApiResponse;
+        const normalized = normalizeWorkbookAccessAssignments(data);
+        setWorkbookAccessAssignments(normalized.length > 0 ? normalized : assignments);
+        setWorkbookAccessMode("api");
+        setWorkbookAccessError(null);
+        return;
+      }
+
+      if (response.status !== 404 && response.status !== 405) {
+        throw new Error(`Failed to save workbook access (${response.status})`);
+      }
+    }
+
+    setWorkbookAccessAssignments(assignments);
+    setWorkbookAccessMode("derived");
+    setWorkbookAccessError(null);
+  }
+
   async function loadLibraryViews(includeArchived = showArchivedViews) {
     const response = await fetch(
       includeArchived ? "/api/library/views?includeArchived=true" : "/api/library/views",
@@ -1752,6 +2129,72 @@ function App() {
 
     const data = (await response.json()) as WorkbookLibraryViewsResponse;
     setSavedWorkbookViews(data.views);
+  }
+
+  async function handleWorkbookAccessSave() {
+    if (!reviewerAuthorization.canManageWorkbookAssignments || workbookAccessSaving) {
+      return;
+    }
+
+    const selectedReviewer = reviewerDirectory.find(
+      (reviewer) => reviewer.id === workbookAccessDraftReviewerId,
+    );
+
+    if (!selectedReviewer) {
+      setWorkbookAccessError("Choose a reviewer before saving workbook access.");
+      return;
+    }
+
+    const nextAssignments = [
+      ...workbookAccessAssignments.filter(
+        (assignment) => assignment.reviewerId !== selectedReviewer.id,
+      ),
+      {
+        reviewerId: selectedReviewer.id,
+        reviewerName: selectedReviewer.displayName,
+        reviewerHandle: selectedReviewer.handle,
+        level: workbookAccessDraftLevel,
+        assignedBy: reviewerName,
+        assignedAt: new Date().toISOString(),
+        source: "derived",
+      } satisfies WorkbookAccessAssignment,
+    ];
+
+    setWorkbookAccessSaving(true);
+    setWorkbookAccessError(null);
+
+    try {
+      await persistWorkbookAccessAssignments(snapshot.workbook.id, nextAssignments);
+    } catch (error) {
+      setWorkbookAccessError(
+        error instanceof Error ? error.message : "Failed to update workbook access.",
+      );
+    } finally {
+      setWorkbookAccessSaving(false);
+    }
+  }
+
+  async function handleWorkbookAccessRevoke(reviewerId: string) {
+    if (!reviewerAuthorization.canManageWorkbookAssignments || workbookAccessSaving) {
+      return;
+    }
+
+    const nextAssignments = workbookAccessAssignments.filter(
+      (assignment) => assignment.reviewerId !== reviewerId,
+    );
+
+    setWorkbookAccessSaving(true);
+    setWorkbookAccessError(null);
+
+    try {
+      await persistWorkbookAccessAssignments(snapshot.workbook.id, nextAssignments);
+    } catch (error) {
+      setWorkbookAccessError(
+        error instanceof Error ? error.message : "Failed to update workbook access.",
+      );
+    } finally {
+      setWorkbookAccessSaving(false);
+    }
   }
 
   useEffect(() => {
@@ -1890,6 +2333,11 @@ function App() {
             ? activeId
             : reviewers[0].id,
         );
+        setWorkbookAccessDraftReviewerId(
+          reviewers.some((reviewer) => reviewer.id === activeId)
+            ? activeId
+            : reviewers[0].id,
+        );
         setReviewerIdentityMode("api");
         return;
       }
@@ -1902,6 +2350,11 @@ function App() {
     setReviewerDirectory(fallbackReviewerDirectory);
     setReviewerSessionProfile(null);
     setSelectedReviewerId((current) =>
+      fallbackReviewerDirectory.some((reviewer) => reviewer.id === current)
+        ? current
+        : fallbackReviewerDirectory[0].id,
+    );
+    setWorkbookAccessDraftReviewerId((current) =>
       fallbackReviewerDirectory.some((reviewer) => reviewer.id === current)
         ? current
         : fallbackReviewerDirectory[0].id,
@@ -1967,6 +2420,7 @@ function App() {
         const activeId = data.session?.currentProfile?.id ?? reviewer.id;
         setReviewerSessionProfile(extractReviewerSessionProfile(data.session, reviewer));
         setSelectedReviewerId(activeId);
+        setWorkbookAccessDraftReviewerId(activeId);
         setReviewerIdentityMode("api");
         return;
       }
@@ -1983,6 +2437,7 @@ function App() {
     setReviewerIdentityMode("derived");
     setReviewerSessionProfile(null);
     setSelectedReviewerId(reviewer.id);
+    setWorkbookAccessDraftReviewerId(reviewer.id);
   }
 
   async function loadWorkbooks(options: {
@@ -2032,6 +2487,7 @@ function App() {
     const data = (await response.json()) as { review: WorkbookReviewSnapshot };
     setSnapshot(data.review);
     await loadSketchBoard(workbookId, data.review);
+    await loadWorkbookAccess(workbookId, data.review);
   }
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -2288,7 +2744,7 @@ function App() {
   }
 
   async function handleSketchSave() {
-    if (mutationInFlight || !reviewerAuthorization.canEditSketch) {
+    if (mutationInFlight || !reviewerAuthorization.canEditSketch || !canEditCurrentWorkbook) {
       return;
     }
 
@@ -2734,6 +3190,152 @@ function App() {
                 </div>
               </div>
             </section>
+
+            <section className="panel grid-two">
+              <div>
+                <p className="panel-kicker">Workbook Access</p>
+                <h2>Assignments decide whether this workbook is editable or read-only.</h2>
+                <p>{workbookAccessSummary}</p>
+                <div className="assignment-list">
+                  {workbookAccessAssignments.length > 0 ? (
+                    workbookAccessAssignments.map((assignment) => (
+                      <article key={assignment.reviewerId}>
+                        <span>{assignment.reviewerName}</span>
+                        <strong>{workbookAccessLevelLabel(assignment.level)}</strong>
+                        <small>
+                          {assignment.reviewerHandle}
+                          {assignment.assignedBy ? ` · assigned by ${assignment.assignedBy}` : ""}
+                          {assignment.assignedAt
+                            ? ` · ${new Date(assignment.assignedAt).toLocaleString()}`
+                            : ""}
+                        </small>
+                      </article>
+                    ))
+                  ) : (
+                    <article>
+                      <span>No assignments loaded</span>
+                      <strong>Workbook-scoped actions stay read-only</strong>
+                      <small>
+                        {workbookAccessMode === "api"
+                          ? "The backend returned no assignments for this workbook."
+                          : "No backend assignment endpoint was available, so the UI is using a read-only fallback."}
+                      </small>
+                    </article>
+                  )}
+                </div>
+              </div>
+              <div className="authorization-panel">
+                <div className="authorization-panel-head">
+                  <div>
+                    <span>Effective workbook access</span>
+                    <strong>{workbookAccessLevelLabel(effectiveWorkbookAccessLevel)}</strong>
+                  </div>
+                  <small>
+                    {workbookAccessMode === "api"
+                      ? "Backend-backed assignments"
+                      : "Derived fallback assignments"}
+                  </small>
+                </div>
+                <div className="authorization-chip-row">
+                  <span className="authorization-chip">
+                    {canEditCurrentWorkbook ? "Workbook editable" : "Workbook read-only"}
+                  </span>
+                  <span className="authorization-chip">
+                    {canCommentCurrentWorkbook ? "Comments allowed" : "Comments blocked"}
+                  </span>
+                  <span className="authorization-chip">
+                    {reviewerAuthorization.canManageWorkbookAssignments
+                      ? "Assignment manager"
+                      : "Assignment viewer"}
+                  </span>
+                </div>
+                <p className="review-meta">{workbookAccessSummary}</p>
+                <p className="authorization-note">
+                  {canEditCurrentWorkbook
+                    ? "Workbook-scoped edit actions are enabled on this assignment."
+                    : workbookEditReason ?? "Workbook-scoped actions are enabled only when the reviewer is assigned."}
+                </p>
+                {!canCommentCurrentWorkbook ? (
+                  <p className="authorization-note">{workbookCommentReason}</p>
+                ) : null}
+                {workbookAccessError ? <p className="comment-error">{workbookAccessError}</p> : null}
+              </div>
+            </section>
+
+            {reviewerAuthorization.canManageWorkbookAssignments ? (
+              <section className="panel">
+                <p className="panel-kicker">Access Management</p>
+                <h2>Grant or revoke workbook access for the signed-in reviewer.</h2>
+                <div className="access-management-grid">
+                  <label>
+                    <span>Reviewer</span>
+                    <select
+                      disabled={workbookAccessSaving}
+                      onChange={(event) => setWorkbookAccessDraftReviewerId(event.target.value)}
+                      value={workbookAccessDraftReviewerId}
+                    >
+                      {reviewerDirectory.map((reviewer) => (
+                        <option key={reviewer.id} value={reviewer.id}>
+                          {reviewer.displayName} · {reviewer.handle}
+                          {reviewer.role ? ` · ${reviewer.role}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Access level</span>
+                    <select
+                      disabled={workbookAccessSaving}
+                      onChange={(event) =>
+                        setWorkbookAccessDraftLevel(
+                          normalizeWorkbookAccessLevel(event.target.value),
+                        )
+                      }
+                      value={workbookAccessDraftLevel}
+                    >
+                      <option value="view">View</option>
+                      <option value="comment">Comment</option>
+                      <option value="edit">Edit</option>
+                      <option value="manage">Manage</option>
+                    </select>
+                  </label>
+                  <div className="action-row">
+                    <button
+                      className="decision-button approve"
+                      disabled={workbookAccessSaving}
+                      onClick={() => void handleWorkbookAccessSave()}
+                      type="button"
+                    >
+                      {workbookAccessSaving ? "Saving..." : "Save assignment"}
+                    </button>
+                    <button
+                      className="decision-button reject"
+                      disabled={
+                        workbookAccessSaving ||
+                        !workbookAccessAssignments.some(
+                          (assignment) => assignment.reviewerId === workbookAccessDraftReviewerId,
+                        )
+                      }
+                      onClick={() => void handleWorkbookAccessRevoke(workbookAccessDraftReviewerId)}
+                      type="button"
+                    >
+                      Revoke assignment
+                    </button>
+                  </div>
+                </div>
+                {workbookAccessError ? <p className="comment-error">{workbookAccessError}</p> : null}
+                <p className="authorization-note">
+                  Assignment changes are scoped to this workbook and fall back to a local update
+                  if the backend endpoint is not available yet.
+                </p>
+              </section>
+            ) : (
+              <section className="panel">
+                <p className="panel-kicker">Access Management</p>
+                <h2>Workbook assignment changes are hidden for this reviewer.</h2>
+                <p className="authorization-note">{reviewerAuthorization.actionReasons.workbookAccessManage}</p>
+              </section>
+            )}
 
             <section className="panel grid-two">
               <div>
@@ -3201,12 +3803,8 @@ function App() {
                                   Replying to {replyTarget.author} with {replyTarget.handle}
                                 </span>
                                 <button
-                                  disabled={!reviewerAuthorization.canCommentOnItems}
-                                  title={
-                                    reviewerAuthorization.canCommentOnItems
-                                      ? undefined
-                                      : reviewerAuthorization.actionReasons.itemComment
-                                  }
+                                  disabled={!canCommentOnItem(entry)}
+                                  title={commentReason ?? undefined}
                                   onClick={() => setReplyTarget(entry.id, null)}
                                   type="button"
                                 >
@@ -3226,16 +3824,16 @@ function App() {
                               value={commentDraft}
                             />
                             <div className="comment-composer-row">
-                              <button
-                                className="mini-button comment"
-                                disabled={
-                                  !canCommentOnItem(entry) ||
-                                  commentDraft.trim().length === 0
-                                }
-                                title={commentReason ?? undefined}
-                                onClick={() => void handleProposalItemComment(entry.id)}
-                                type="button"
-                              >
+                            <button
+                              className="mini-button comment"
+                              disabled={
+                                !canCommentOnItem(entry) ||
+                                commentDraft.trim().length === 0
+                              }
+                              title={commentReason ?? undefined}
+                              onClick={() => void handleProposalItemComment(entry.id)}
+                              type="button"
+                            >
                                 {commentState.submitting ? "Saving..." : "Add comment"}
                               </button>
                               <small>Use handles like {reviewerHandle}</small>

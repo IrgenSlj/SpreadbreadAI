@@ -16,6 +16,20 @@ alter table if exists workbooks
 alter table if exists workbooks
   add column if not exists sketch_json jsonb not null default '{}'::jsonb;
 
+create table if not exists workbook_access_assignments (
+  workbook_id text not null references workbooks(id) on delete cascade,
+  reviewer_profile_id text not null,
+  reviewer_handle text not null,
+  reviewer_display_name text not null,
+  assignment_role text not null,
+  assigned_at timestamptz not null,
+  assigned_by text not null,
+  primary key (workbook_id, reviewer_profile_id)
+);
+
+create index if not exists workbook_access_assignments_workbook_id_idx
+  on workbook_access_assignments (workbook_id, assigned_at asc, reviewer_profile_id asc);
+
 create table if not exists workbook_versions (
   id text primary key,
   workbook_id text not null references workbooks(id) on delete cascade,
@@ -173,6 +187,20 @@ create table if not exists reviewer_profiles (
   email text,
   active boolean not null default true
 );
+
+create table if not exists workbook_access_assignments (
+  workbook_id text not null references workbooks(id) on delete cascade,
+  reviewer_profile_id text not null references reviewer_profiles(handle) on delete cascade,
+  reviewer_handle text not null,
+  reviewer_display_name text not null,
+  assignment_role text not null,
+  assigned_at timestamptz not null,
+  assigned_by text not null,
+  primary key (workbook_id, reviewer_profile_id)
+);
+
+create index if not exists workbook_access_assignments_workbook_id_idx
+  on workbook_access_assignments (workbook_id, assigned_at asc);
 
 create table if not exists reviewer_sessions (
   session_key text primary key,

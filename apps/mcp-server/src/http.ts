@@ -8,6 +8,7 @@ import {
   applyApprovedProposalItems,
   appendStoredProposalItemComment,
   deleteStoredWorkbookLibraryView,
+  getStoredWorkbookAccess,
   getStoredWorkbookTags,
   getStoredSketchBoard,
   getStoredWorkbookReview,
@@ -30,6 +31,7 @@ import {
   type SketchBoardMutationResult,
   updateStoredProposalItemDecision,
   updateStoredProposalDecision,
+  updateStoredWorkbookAccess,
   updateStoredWorkbookTags,
   updateStoredSketchBoard,
 } from "./store.js";
@@ -91,6 +93,16 @@ const sketchBoardSchema = z.object({
 const workbookTagsSchema = z.object({
   updatedBy: z.string().trim().min(1),
   tags: z.array(z.string().trim().min(1).max(48)).max(32),
+});
+
+const workbookAccessAssignmentSchema = z.object({
+  reviewerProfileId: z.string().trim().min(1).optional(),
+  reviewerHandle: z.string().trim().min(1),
+  assignmentRole: z.enum(["owner", "approver", "reviewer", "editor"]),
+});
+
+const workbookAccessSchema = z.object({
+  assignments: z.array(workbookAccessAssignmentSchema).max(32),
 });
 
 const libraryViewSchema = z.object({
@@ -291,6 +303,70 @@ function sendTagsResult(
   );
 }
 
+function sendWorkbookAccessResult(
+  response: ServerResponse,
+  result:
+    | { ok: true; access: unknown }
+    | { ok: false; code: string },
+  notFoundMessage: string,
+) {
+  if ("ok" in result && result.ok) {
+    const access = result.access as {
+      assignments?: Array<{
+        reviewerProfileId?: string;
+        reviewerHandle?: string;
+        reviewerDisplayName?: string;
+        assignmentRole?: string;
+        assignedAt?: string;
+        assignedBy?: string;
+      }>;
+      currentReviewerAssignmentRole?: string;
+      currentReviewerCanManage?: boolean;
+    };
+    sendJson(response, 200, {
+      assignments: (access.assignments ?? []).map((assignment) => ({
+        reviewerId: assignment.reviewerProfileId,
+        reviewerName: assignment.reviewerDisplayName,
+        reviewerHandle: assignment.reviewerHandle,
+        assignmentRole: assignment.assignmentRole,
+        level:
+          assignment.assignmentRole === "owner" || assignment.assignmentRole === "approver"
+            ? "manage"
+            : assignment.assignmentRole === "reviewer"
+              ? "edit"
+              : "comment",
+        assignedAt: assignment.assignedAt,
+        assignedBy: assignment.assignedBy,
+        source: "api",
+      })),
+      effectiveAccessLevel:
+        access.currentReviewerAssignmentRole === "owner" ||
+        access.currentReviewerAssignmentRole === "approver"
+          ? "manage"
+          : access.currentReviewerAssignmentRole === "reviewer"
+            ? "edit"
+            : access.currentReviewerAssignmentRole === "editor"
+              ? "comment"
+              : "none",
+      canManageAssignments: access.currentReviewerCanManage ?? false,
+      access,
+      source: "api",
+    });
+    return;
+  }
+
+  sendJson(
+    response,
+    result.code === "forbidden" ? 403 : 404,
+    {
+      error:
+        result.code === "forbidden"
+          ? "Reviewer does not have permission for this action"
+          : notFoundMessage,
+    },
+  );
+}
+
 function sendLibraryViewResult(
   response: ServerResponse,
   result: LibraryViewMutationResult,
@@ -439,6 +515,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   const tagsMatch = url.pathname.match(/^\/api\/workbooks\/([^/]+)\/tags$/);
+  const workbookAccessMatch = url.pathname.match(/^\/api\/workbooks\/([^/]+)\/access$/);
   if (method === "GET" && tagsMatch) {
     const workbookId = decodeURIComponent(tagsMatch[1]);
     const tags = await getStoredWorkbookTags(workbookId);
@@ -452,6 +529,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (method === "GET" && workbookAccessMatch) {
+    const workbookId = decodeURIComponent(workbookAccessMatch[1]);
+    const review = await getStoredWorkbookReview(workbookId);
+    if (!review) {
+      sendJson(response, 404, { error: "Workbook not found" });
+      return;
+    }
+
+    const access = await getStoredWorkbookAccess(workbookId);
+    sendWorkbookAccessResult(
+      response,
+      access ? { ok: true, access } : { ok: false, code: "not_found" },
+      "Workbook access not found",
+    );
+    return;
+  }
+
   if (method === "PUT" && tagsMatch) {
     const workbookId = decodeURIComponent(tagsMatch[1]);
     const body = await readValidatedJsonBody(request, workbookTagsSchema);
@@ -462,6 +556,21 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     });
 
     sendTagsResult(response, result, "Workbook not found");
+    return;
+  }
+
+  if (method === "PUT" && workbookAccessMatch) {
+    const workbookId = decodeURIComponent(workbookAccessMatch[1]);
+    const body = await readValidatedJsonBody(request, workbookAccessSchema);
+    const session = await getReviewerSession();
+    const updatedBy = session?.currentProfile?.displayName ?? session?.reviewerProfileId ?? "system";
+    const result = await updateStoredWorkbookAccess({
+      workbookId,
+      updatedBy,
+      assignments: body.assignments,
+    });
+
+    sendWorkbookAccessResult(response, result, "Workbook not found");
     return;
   }
 

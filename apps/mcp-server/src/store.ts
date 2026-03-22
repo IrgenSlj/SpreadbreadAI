@@ -9,6 +9,7 @@ import type {
   TagsMutationResult,
   LibraryViewMutationResult,
   SketchBoardMutationResult,
+  WorkbookAccessMutationResult,
   StoreBackend,
   StoredWorkbookRecord,
 } from "./store-backend.js";
@@ -22,6 +23,7 @@ export type {
   ReviewerSessionMutationResult,
   TagsMutationResult,
   SketchBoardMutationResult,
+  WorkbookAccessMutationResult,
   StoredWorkbookRecord,
 } from "./store-backend.js";
 
@@ -82,6 +84,10 @@ export function getStoredWorkbookReview(workbookId: string) {
   return backend.getStoredWorkbookReview(workbookId);
 }
 
+export function getStoredWorkbookAccess(workbookId: string) {
+  return backend.getStoredWorkbookAccess(workbookId);
+}
+
 export function getStoredWorkbookTags(workbookId: string) {
   return backend.getStoredWorkbookTags(workbookId);
 }
@@ -104,6 +110,18 @@ export function updateStoredWorkbookTags(input: {
   updatedBy: string;
 }): Promise<TagsMutationResult> {
   return backend.updateStoredWorkbookTags(input);
+}
+
+export function updateStoredWorkbookAccess(input: {
+  workbookId: string;
+  updatedBy: string;
+  assignments: Array<{
+    reviewerProfileId?: string;
+    reviewerHandle: string;
+    assignmentRole: import("../../../packages/shared/src/index.js").WorkbookAccessRole;
+  }>;
+}): Promise<WorkbookAccessMutationResult> {
+  return backend.updateStoredWorkbookAccess(input);
 }
 
 export function updateStoredProposalDecision(input: {

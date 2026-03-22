@@ -7,6 +7,9 @@ import type {
   ReviewerProfile,
   ReviewerRole,
   ReviewerSession,
+  WorkbookAccessAssignment,
+  WorkbookAccessRole,
+  WorkbookAccessState,
   WorkbookLibraryView,
   ProposalDetail,
   ProposalDiffEntry,
@@ -21,7 +24,7 @@ import type {
   WorkbookSummary,
   WorkbookVersionSummary,
 } from "../../../packages/shared/src/index.js";
-import { authorizeReviewerAction } from "./authorization.js";
+import { authorizeReviewerAction, authorizeWorkbookAction } from "./authorization.js";
 import { parseWorkbookReviewSnapshot } from "./parser.js";
 import { withTransaction } from "./postgres.js";
 import type {
@@ -33,6 +36,7 @@ import type {
   ReviewerSessionMutationResult,
   SketchBoardMutationResult,
   TagsMutationResult,
+  WorkbookAccessMutationResult,
   StoreBackend,
   StoredWorkbookRecord,
 } from "./store-backend.js";
@@ -237,6 +241,144 @@ function normalizeReviewerProfile(row: {
   };
 }
 
+function workbookAccessRoleForReviewerRole(role?: ReviewerRole): WorkbookAccessRole {
+  if (role === "Approver") {
+    return "owner";
+  }
+
+  if (role === "Reviewer") {
+    return "reviewer";
+  }
+
+  return "editor";
+}
+
+function normalizeWorkbookAccessRole(value?: string): WorkbookAccessRole | undefined {
+  if (value === "owner" || value === "approver" || value === "reviewer" || value === "editor") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function createWorkbookAccessState(
+  assignments: WorkbookAccessAssignment[],
+  session: ReviewerSession | null,
+): WorkbookAccessState {
+  const currentAssignment = assignments.find(
+    (assignment) =>
+      assignment.reviewerProfileId === session?.currentProfile?.id ||
+      assignment.reviewerHandle === session?.currentProfile?.handle,
+  );
+
+  return {
+    assignments,
+    currentReviewerAssignmentRole: currentAssignment?.assignmentRole,
+    currentReviewerCanManage:
+      currentAssignment?.assignmentRole === "owner" ||
+      currentAssignment?.assignmentRole === "approver",
+    currentReviewerCanWrite: Boolean(currentAssignment),
+  };
+}
+
+function createOwnerWorkbookAccessState(
+  reviewer: ReviewerProfile,
+  assignedAt: string,
+): WorkbookAccessState {
+  return createWorkbookAccessState(
+    [
+      {
+        reviewerProfileId: reviewer.id,
+        reviewerHandle: reviewer.handle,
+        reviewerDisplayName: reviewer.displayName,
+        assignmentRole: "owner",
+        assignedAt,
+        assignedBy: reviewer.displayName,
+      },
+    ],
+    {
+      reviewerProfileId: reviewer.id,
+      signedInAt: assignedAt,
+      updatedAt: assignedAt,
+      currentProfile: reviewer,
+    },
+  );
+}
+
+function normalizeWorkbookAccessAssignments(
+  value: unknown,
+  profiles: ReviewerProfile[],
+  fallbackAssignedBy: string,
+  fallbackAssignedAt: string,
+): WorkbookAccessAssignment[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return profiles.map((profile) => ({
+      reviewerProfileId: profile.id,
+      reviewerHandle: profile.handle,
+      reviewerDisplayName: profile.displayName,
+      assignmentRole: workbookAccessRoleForReviewerRole(profile.role),
+      assignedAt: fallbackAssignedAt,
+      assignedBy: fallbackAssignedBy,
+    }));
+  }
+
+  const assignments: WorkbookAccessAssignment[] = [];
+  const seen = new Set<string>();
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const candidate = item as Record<string, unknown>;
+    const reviewerIdentifier =
+      typeof candidate.reviewerProfileId === "string"
+        ? normalizeReviewer(candidate.reviewerProfileId)
+        : typeof candidate.reviewerHandle === "string"
+          ? normalizeReviewer(candidate.reviewerHandle)
+          : "";
+    const reviewer =
+      profiles.find((profile) => profile.id === reviewerIdentifier) ??
+      profiles.find((profile) => profile.handle === reviewerIdentifier);
+
+    if (!reviewer || seen.has(reviewer.id)) {
+      continue;
+    }
+
+    const assignmentRole =
+      normalizeWorkbookAccessRole(
+        typeof candidate.assignmentRole === "string" ? candidate.assignmentRole : undefined,
+      ) ?? workbookAccessRoleForReviewerRole(reviewer.role);
+
+    seen.add(reviewer.id);
+    assignments.push({
+      reviewerProfileId: reviewer.id,
+      reviewerHandle: reviewer.handle,
+      reviewerDisplayName: reviewer.displayName,
+      assignmentRole,
+      assignedAt:
+        typeof candidate.assignedAt === "string" && candidate.assignedAt
+          ? candidate.assignedAt
+          : fallbackAssignedAt,
+      assignedBy:
+        typeof candidate.assignedBy === "string" && candidate.assignedBy
+          ? candidate.assignedBy
+          : fallbackAssignedBy,
+    });
+  }
+
+  return assignments.length > 0
+    ? assignments
+    : profiles.map((profile) => ({
+        reviewerProfileId: profile.id,
+        reviewerHandle: profile.handle,
+        reviewerDisplayName: profile.displayName,
+        assignmentRole: workbookAccessRoleForReviewerRole(profile.role),
+        assignedAt: fallbackAssignedAt,
+        assignedBy: fallbackAssignedBy,
+      }));
+}
+
 async function ensureReviewerProfiles(client: PgClient): Promise<ReviewerProfile[]> {
   for (const reviewer of defaultReviewerProfiles) {
     await client.query(
@@ -334,6 +476,56 @@ async function authorizeReviewerMutation(
   const reviewers = await ensureReviewerProfiles(client);
   const session = await ensureCurrentReviewerSession(client, reviewers);
   return authorizeReviewerAction(session, permission, actor);
+}
+
+async function loadWorkbookAccessState(
+  client: PgClient,
+  workbookId: string,
+  session: ReviewerSession,
+): Promise<WorkbookAccessState | null> {
+  const reviewers = await ensureReviewerProfiles(client);
+  const result = await client.query<{
+    reviewer_profile_id: string;
+    reviewer_handle: string;
+    reviewer_display_name: string;
+    assignment_role: string;
+    assigned_at: string;
+    assigned_by: string;
+  }>(
+    `select reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, assigned_at, assigned_by
+     from workbook_access_assignments
+     where workbook_id = $1
+     order by assigned_at asc, reviewer_profile_id asc`,
+    [workbookId],
+  );
+
+  const assignments = normalizeWorkbookAccessAssignments(
+    result.rows.map((row) => ({
+      reviewerProfileId: row.reviewer_profile_id,
+      reviewerHandle: row.reviewer_handle,
+      reviewerDisplayName: row.reviewer_display_name,
+      assignmentRole: normalizeWorkbookAccessRole(row.assignment_role) ?? "editor",
+      assignedAt: row.assigned_at,
+      assignedBy: row.assigned_by,
+    })),
+    reviewers,
+    session.currentProfile?.displayName ?? "system",
+    session.updatedAt ?? new Date().toISOString(),
+  );
+
+  return createWorkbookAccessState(assignments, session);
+}
+
+async function authorizeWorkbookMutation(
+  client: PgClient,
+  workbookId: string,
+  permission: Parameters<typeof authorizeReviewerAction>[1],
+  actor?: string,
+) {
+  const reviewers = await ensureReviewerProfiles(client);
+  const session = await ensureCurrentReviewerSession(client, reviewers);
+  const access = await loadWorkbookAccessState(client, workbookId, session);
+  return authorizeWorkbookAction(session, permission, access ?? undefined, actor);
 }
 
 function buildCommentNotifications(input: {
@@ -733,6 +925,27 @@ async function insertSnapshot(
     ],
   );
 
+  if (workbook.access) {
+    await client.query(`delete from workbook_access_assignments where workbook_id = $1`, [workbook.id]);
+
+    for (const assignment of workbook.access.assignments) {
+      await client.query(
+        `insert into workbook_access_assignments
+         (workbook_id, reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, assigned_at, assigned_by)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          workbook.id,
+          assignment.reviewerProfileId,
+          assignment.reviewerHandle,
+          assignment.reviewerDisplayName,
+          assignment.assignmentRole,
+          assignment.assignedAt,
+          assignment.assignedBy,
+        ],
+      );
+    }
+  }
+
   for (const version of versions) {
     await client.query(
       `insert into workbook_versions (id, workbook_id, created_at, created_by, note, artifact_path)
@@ -904,6 +1117,7 @@ async function deleteWorkbookById(client: PgClient, workbookId: string) {
      where workbook_version_id in (select id from workbook_versions where workbook_id = $1)`,
     [workbookId],
   );
+  await client.query(`delete from workbook_access_assignments where workbook_id = $1`, [workbookId]);
   await client.query(`delete from workbook_versions where workbook_id = $1`, [workbookId]);
   await client.query(`delete from workbooks where id = $1`, [workbookId]);
 }
@@ -963,7 +1177,7 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
     return null;
   }
 
-  const [versionsResult, sheetsResult, rangesResult, risksResult, proposalResult, itemsResult, auditsResult] =
+  const [versionsResult, sheetsResult, rangesResult, risksResult, proposalResult, itemsResult, auditsResult, accessResult] =
     await Promise.all([
       client.query<{
         id: string;
@@ -1079,6 +1293,20 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
          order by created_at desc, id desc`,
         [workbookId],
       ),
+      client.query<{
+        reviewer_profile_id: string;
+        reviewer_handle: string;
+        reviewer_display_name: string;
+        assignment_role: string;
+        assigned_at: string;
+        assigned_by: string;
+      }>(
+        `select reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, assigned_at, assigned_by
+         from workbook_access_assignments
+         where workbook_id = $1
+         order by assigned_at asc, reviewer_profile_id asc`,
+        [workbookId],
+      ),
     ]);
 
   const proposalRow = proposalResult.rows[0];
@@ -1146,6 +1374,25 @@ async function loadSnapshot(client: PgClient, workbookId: string): Promise<Workb
       workbookRow.id,
       workbookRow.name,
       workbookRow.last_reviewed_at,
+    ),
+    access: createWorkbookAccessState(
+      normalizeWorkbookAccessAssignments(
+        accessResult.rows.map((row) => ({
+          reviewerProfileId: row.reviewer_profile_id,
+          reviewerHandle: row.reviewer_handle,
+          reviewerDisplayName: row.reviewer_display_name,
+          assignmentRole: normalizeWorkbookAccessRole(row.assignment_role) ?? "editor",
+          assignedAt: row.assigned_at,
+          assignedBy: row.assigned_by,
+        })),
+        await ensureReviewerProfiles(client),
+        workbookRow.owner,
+        workbookRow.created_at,
+      ),
+      await ensureCurrentReviewerSession(
+        client,
+        await ensureReviewerProfiles(client),
+      ),
     ),
   };
 
@@ -1339,6 +1586,13 @@ export function createPostgresStoreBackend(): StoreBackend {
       });
     },
 
+    async getStoredWorkbookAccess(workbookId: string): Promise<WorkbookAccessState | null> {
+      return withTransaction(async (client) => {
+        const snapshot = await loadSnapshot(client, workbookId);
+        return snapshot?.workbook.access ?? null;
+      });
+    },
+
     async saveUploadedWorkbook(input): Promise<StoredWorkbookRecord> {
       await ensureUploadsDir();
 
@@ -1355,9 +1609,29 @@ export function createPostgresStoreBackend(): StoreBackend {
           uploadedAt: storedAt,
           bytes: input.bytes,
         });
+        let nextSnapshot: WorkbookReviewSnapshot = {
+          ...snapshot,
+          workbook: {
+            ...snapshot.workbook,
+            access: undefined,
+          },
+        };
 
         await withTransaction(async (client) => {
-          await insertSnapshot(client, snapshot, uploadPath);
+          const reviewers = await ensureReviewerProfiles(client);
+          const session = await ensureCurrentReviewerSession(client, reviewers);
+          const access = createOwnerWorkbookAccessState(
+            session.currentProfile ?? reviewers[0] ?? defaultReviewerProfiles[0],
+            storedAt,
+          );
+          nextSnapshot = {
+            ...snapshot,
+            workbook: {
+              ...snapshot.workbook,
+              access,
+            },
+          };
+          await insertSnapshot(client, nextSnapshot, uploadPath);
           return null;
         });
 
@@ -1368,7 +1642,7 @@ export function createPostgresStoreBackend(): StoreBackend {
           fileSize: input.bytes.byteLength,
           storedAt,
           uploadPath,
-          snapshot,
+          snapshot: nextSnapshot,
         };
       } catch (error) {
         await unlink(uploadPath).catch(() => undefined);
@@ -1382,7 +1656,12 @@ export function createPostgresStoreBackend(): StoreBackend {
       updatedBy: string;
     }): Promise<TagsMutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeReviewerMutation(client, "tag_write", input.updatedBy);
+        const auth = await authorizeWorkbookMutation(
+          client,
+          input.workbookId,
+          "tag_write",
+          input.updatedBy,
+        );
         if (!auth.ok) {
           return { ok: false, code: "forbidden" };
         }
@@ -1414,9 +1693,83 @@ export function createPostgresStoreBackend(): StoreBackend {
       });
     },
 
+    async updateStoredWorkbookAccess(input: {
+      workbookId: string;
+      updatedBy: string;
+      assignments: Array<{
+        reviewerProfileId?: string;
+        reviewerHandle: string;
+        assignmentRole: WorkbookAccessRole;
+      }>;
+    }): Promise<WorkbookAccessMutationResult> {
+      return withTransaction(async (client) => {
+        const auth = await authorizeWorkbookMutation(
+          client,
+          input.workbookId,
+          "workbook_access_write",
+          input.updatedBy,
+        );
+        if (!auth.ok) {
+          return { ok: false, code: "forbidden" };
+        }
+
+        const updatedBy = auth.reviewer.displayName;
+        const reviewers = await ensureReviewerProfiles(client);
+        const session = await ensureCurrentReviewerSession(client, reviewers);
+        const current = await loadSnapshot(client, input.workbookId);
+        if (!current) {
+          return { ok: false, code: "not_found" };
+        }
+
+        const updatedAt = new Date().toISOString();
+        const assignments = normalizeWorkbookAccessAssignments(
+          input.assignments,
+          reviewers,
+          updatedBy,
+          updatedAt,
+        );
+
+        await client.query(`delete from workbook_access_assignments where workbook_id = $1`, [
+          input.workbookId,
+        ]);
+        for (const assignment of assignments) {
+          await client.query(
+            `insert into workbook_access_assignments
+             (workbook_id, reviewer_profile_id, reviewer_handle, reviewer_display_name, assignment_role, assigned_at, assigned_by)
+             values ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              input.workbookId,
+              assignment.reviewerProfileId,
+              assignment.reviewerHandle,
+              assignment.reviewerDisplayName,
+              assignment.assignmentRole,
+              assignment.assignedAt,
+              assignment.assignedBy,
+            ],
+          );
+        }
+
+        await appendAuditEvent(
+          client,
+          input.workbookId,
+          updatedBy,
+          "workbook.access.updated",
+          `Workbook access assignments updated to ${assignments.length} reviewers.`,
+        );
+
+        const access = createWorkbookAccessState(assignments, session);
+        return { ok: true, access };
+      });
+    },
+
     async updateStoredProposalDecision(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeReviewerMutation(client, "proposal_review", input.reviewer);
+        const auth = await authorizeWorkbookMutation(
+          client,
+          input.workbookId,
+          "proposal_review",
+          input.reviewer,
+        );
         if (!auth.ok) {
           return { ok: false, code: "forbidden" };
         }
@@ -1484,7 +1837,12 @@ export function createPostgresStoreBackend(): StoreBackend {
 
     async updateStoredProposalItemDecision(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeReviewerMutation(client, "item_review", input.reviewer);
+        const auth = await authorizeWorkbookMutation(
+          client,
+          input.workbookId,
+          "item_review",
+          input.reviewer,
+        );
         if (!auth.ok) {
           return { ok: false, code: "forbidden" };
         }
@@ -1571,7 +1929,12 @@ export function createPostgresStoreBackend(): StoreBackend {
       mentions?: string[];
     }): Promise<MutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeReviewerMutation(client, "comment", input.author);
+        const auth = await authorizeWorkbookMutation(
+          client,
+          input.workbookId,
+          "comment",
+          input.author,
+        );
         if (!auth.ok) {
           return { ok: false, code: "forbidden" };
         }
@@ -1654,7 +2017,12 @@ export function createPostgresStoreBackend(): StoreBackend {
       notes?: string;
     }): Promise<SketchBoardMutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeReviewerMutation(client, "sketch_write", input.updatedBy);
+        const auth = await authorizeWorkbookMutation(
+          client,
+          input.workbookId,
+          "sketch_write",
+          input.updatedBy,
+        );
         if (!auth.ok) {
           return { ok: false, code: "forbidden" };
         }
@@ -2019,7 +2387,12 @@ export function createPostgresStoreBackend(): StoreBackend {
 
     async applyApprovedProposalItems(input): Promise<MutationResult> {
       return withTransaction(async (client) => {
-        const auth = await authorizeReviewerMutation(client, "apply", input.actor);
+        const auth = await authorizeWorkbookMutation(
+          client,
+          input.workbookId,
+          "apply",
+          input.actor,
+        );
         if (!auth.ok) {
           return { ok: false, code: "forbidden" };
         }
