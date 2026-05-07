@@ -103,3 +103,23 @@ def test_apply_rejects_when_no_approved_items(tmp_path: Path) -> None:
     store.save_proposal(proposal)
     with pytest.raises(ApplyError, match="no approved"):
         apply_proposal(store, prop_id)
+
+
+def test_decide_all_pending_flips_only_pending(tmp_path: Path) -> None:
+    store, _, prop_id = _seed(tmp_path)
+    proposal = store.get_proposal(prop_id)
+    assert proposal is not None
+    # _seed leaves: 2 approved, 1 rejected, 0 pending
+    proposal.items[0].status = "pending"
+    proposal.items[1].status = "pending"
+    store.save_proposal(proposal)
+
+    updated, flipped = store.decide_all_pending(prop_id, "approve", reviewer="finance")
+    assert len(flipped) == 2
+    statuses = [item.status for item in updated.items]
+    assert statuses.count("approved") == 2
+    assert statuses.count("rejected") == 1
+    for item in updated.items:
+        if item.id in flipped:
+            assert item.reviewer == "finance"
+            assert item.reviewed_at is not None

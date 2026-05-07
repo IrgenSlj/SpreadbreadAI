@@ -1,0 +1,121 @@
+"""HTTP-level smoke tests using FastAPI's TestClient.
+
+Specifically guards against the FastAPI + `from __future__ import annotations`
+trap where Pydantic body models defined inside `create_app` cannot be
+resolved by FastAPI's type-hint introspection.
+"""
+from __future__ import annotations
+
+import io
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from openpyxl import Workbook as XlsxWorkbook
+
+from spreadbread_core.config import Config
+from spreadbread_core.http import create_app
+
+
+@pytest.fixture
+def client(tmp_path: Path, monkeypatch) -> TestClient:
+    monkeypatch.setenv("SPREADBREAD_DATA_DIR", str(tmp_path))
+    cfg = Config.load()
+    return TestClient(create_app(cfg))
+
+
+def _sample_xlsx() -> bytes:
+    book = XlsxWorkbook()
+    sheet = book.active
+    sheet.title = "Forecast"
+    sheet.append(["Month", "Quota", "Forecast"])
+    sheet.append(["Apr", 500000, 478000])
+    sheet.append(["May", 520000, "=B3*1.05"])
+    out = io.BytesIO()
+    book.save(out)
+    return out.getvalue()
+
+
+def test_healthz(client: TestClient) -> None:
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert "list_workbooks" in body["tools"]
+
+
+def test_upload_and_review(client: TestClient) -> None:
+    files = {"file": ("sample.xlsx", _sample_xlsx(),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    upload = client.post("/api/workbooks/upload", files=files)
+    assert upload.status_code == 200, upload.text
+    wb = upload.json()
+    assert wb["sheets"][0]["name"] == "Forecast"
+
+    review = client.get(f"/api/workbooks/{wb['id']}/review")
+    assert review.status_code == 200
+    assert review.json()["workbook"]["id"] == wb["id"]
+
+
+def test_chat_endpoint_accepts_json_body(client: TestClient, monkeypatch) -> None:
+    """Direct guard against the body-model resolution bug."""
+    files = {"file": ("sample.xlsx", _sample_xlsx(),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    wb = client.post("/api/workbooks/upload", files=files).json()
+
+    # Stub the LLM so this test does not require Ollama.
+    from spreadbread_core import http as http_module
+    from spreadbread_core.llm import ChatResult
+
+    captured: dict = {}
+
+    def fake_chat(self, message: str, system: str = "") -> ChatResult:  # noqa: ARG001
+        captured["message"] = message
+        return ChatResult(final_message="ok", tool_calls=[], rounds=1)
+
+    monkeypatch.setattr(http_module.OllamaClient, "chat", fake_chat)
+
+    response = client.post(f"/api/workbooks/{wb['id']}/chat", json={"message": "review"})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reply"] == "ok"
+    assert payload["rounds"] == 1
+    assert "review" in captured["message"]
+
+
+def test_decision_and_approve_all_endpoints(client: TestClient) -> None:
+    """End-to-end: upload, hand-craft a proposal, approve, apply."""
+    from spreadbread_core.config import Config
+    from spreadbread_core.domain import ProposalItem, new_proposal
+    from spreadbread_core.store import Store
+
+    files = {"file": ("sample.xlsx", _sample_xlsx(),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    wb = client.post("/api/workbooks/upload", files=files).json()
+
+    cfg = Config.load()
+    store = Store(cfg.db_path)
+    proposal = new_proposal(wb["id"], "test", "test", "llm")
+    proposal.items = [
+        ProposalItem(kind="update", cell="Forecast!C3", before="=B3*1.05",
+                     after="=B3*1.08", rationale="growth"),
+        ProposalItem(kind="comment", cell="Forecast!A1", after="Reviewed",
+                     rationale="note"),
+    ]
+    store.save_proposal(proposal)
+
+    bulk = client.post(
+        f"/api/proposals/{proposal.id}/approve-all",
+        json={"decision": "approve", "reviewer": "finance"},
+    )
+    assert bulk.status_code == 200, bulk.text
+    assert len(bulk.json()["flipped_item_ids"]) == 2
+
+    apply_resp = client.post(f"/api/proposals/{proposal.id}/apply", json={"reviewer": "finance"})
+    assert apply_resp.status_code == 200, apply_resp.text
+    assert apply_resp.json()["proposal"]["status"] == "applied"
+
+    # idempotent: applying again returns the same version
+    again = client.post(f"/api/proposals/{proposal.id}/apply", json={"reviewer": "finance"})
+    assert again.status_code == 200
+    assert again.json()["version"]["id"] == apply_resp.json()["version"]["id"]

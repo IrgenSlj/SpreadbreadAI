@@ -153,6 +153,31 @@ class Store:
         self.save_proposal(proposal)
         return proposal
 
+    def decide_all_pending(
+        self,
+        proposal_id: str,
+        decision: str,
+        reviewer: str,
+        comment: Optional[str] = None,
+    ) -> tuple[Proposal, list[str]]:
+        if decision not in ("approve", "reject"):
+            raise ValueError("decision must be approve or reject")
+        proposal = self.get_proposal(proposal_id)
+        if not proposal:
+            raise KeyError(f"proposal {proposal_id} not found")
+        new_status: str = "approved" if decision == "approve" else "rejected"
+        flipped: list[str] = []
+        now = _now()
+        for item in proposal.items:
+            if item.status == "pending":
+                item.status = new_status  # type: ignore[assignment]
+                item.reviewer = reviewer
+                item.reviewed_at = now
+                item.review_comment = comment
+                flipped.append(item.id)
+        self.save_proposal(proposal)
+        return proposal, flipped
+
     # --- audit ---------------------------------------------------------
     def append_audit(self, event: AuditEvent) -> None:
         with self._conn() as cx:

@@ -38,6 +38,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"proposal": {"id": "p1", "status": "applied"},
                               "version": {"id": "wbv_001"},
                               "applied_item_ids": ["i1"]})
+        elif self.path.endswith("/approve-all"):
+            _Handler.state["last_approve_all"] = json.loads(body.decode("utf-8"))
+            self._json(200, {"proposal": {"id": "p1", "status": "pending_approval"},
+                              "flipped_item_ids": ["i1", "i2"]})
         else:
             self._json(404, {"error": "not found"})
 
@@ -83,6 +87,14 @@ def test_apply(server):
     assert result["proposal"]["status"] == "applied"
     assert result["version"]["id"] == "wbv_001"
     assert _Handler.state["last_apply"] == {"reviewer": "finance"}
+
+
+def test_approve_all(server):
+    port = server.server_address[1]
+    client = DaemonClient(base_url=f"http://127.0.0.1:{port}")
+    result = client.approve_all("p1", reviewer="finance")
+    assert result["flipped_item_ids"] == ["i1", "i2"]
+    assert _Handler.state["last_approve_all"] == {"decision": "approve", "reviewer": "finance"}
 
 
 def test_unreachable():

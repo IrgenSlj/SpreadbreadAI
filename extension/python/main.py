@@ -28,7 +28,7 @@ except ImportError:
     UNO_AVAILABLE = False
 
 from spreadbreadai.client import DaemonClient  # noqa: E402  (path setup above)
-from spreadbreadai.sidebar import handle_apply, handle_review  # noqa: E402
+from spreadbreadai.sidebar import handle_apply, handle_approve_all, handle_review  # noqa: E402
 
 IMPL_NAME = "ai.spreadbread.ProtocolHandler"
 SERVICE_NAMES = ("com.sun.star.frame.ProtocolHandler",)
@@ -57,6 +57,8 @@ if UNO_AVAILABLE:  # pragma: no cover - runs inside LibreOffice
             command = url.Path
             if command == "review":
                 handle_review(self.ctx, self.client)
+            elif command == "approve-all":
+                handle_approve_all(self.ctx, self.client)
             elif command == "apply":
                 handle_apply(self.ctx, self.client)
 

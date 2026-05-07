@@ -20,7 +20,7 @@
               <value>spreadbread:review</value>
             </prop>
             <prop oor:name="Title" oor:type="xs:string">
-              <value xml:lang="en">Review with SpreadbreadAI</value>
+              <value xml:lang="en">1. Review with SpreadbreadAI</value>
             </prop>
             <prop oor:name="Target" oor:type="xs:string">
               <value>_self</value>
@@ -28,10 +28,21 @@
           </node>
           <node oor:name="m2" oor:op="replace">
             <prop oor:name="URL" oor:type="xs:string">
+              <value>spreadbread:approve-all</value>
+            </prop>
+            <prop oor:name="Title" oor:type="xs:string">
+              <value xml:lang="en">2. Approve all pending items</value>
+            </prop>
+            <prop oor:name="Target" oor:type="xs:string">
+              <value>_self</value>
+            </prop>
+          </node>
+          <node oor:name="m3" oor:op="replace">
+            <prop oor:name="URL" oor:type="xs:string">
               <value>spreadbread:apply</value>
             </prop>
             <prop oor:name="Title" oor:type="xs:string">
-              <value xml:lang="en">Apply approved diffs</value>
+              <value xml:lang="en">3. Apply approved diffs</value>
             </prop>
             <prop oor:name="Target" oor:type="xs:string">
               <value>_self</value>

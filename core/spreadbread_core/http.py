@@ -1,9 +1,12 @@
 """Local HTTP daemon for the LibreOffice extension and any other client."""
-from __future__ import annotations
+# NOTE: do NOT add `from __future__ import annotations` here. FastAPI / Pydantic
+# build schemas eagerly from the route signatures, and stringified ForwardRef
+# annotations break body-model resolution (Pydantic raises class-not-fully-defined
+# and FastAPI falls back to treating the body as a query param).
 
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -18,24 +21,33 @@ from .store import Store
 from .tools import ToolRegistry
 
 
-def create_app(config: Config | None = None) -> FastAPI:
+class ChatRequest(BaseModel):
+    message: str
+
+
+class DecisionRequest(BaseModel):
+    decision: str
+    reviewer: str
+    comment: Optional[str] = None
+
+
+class ApplyRequest(BaseModel):
+    reviewer: str = "user"
+
+
+class BulkDecisionRequest(BaseModel):
+    decision: str = "approve"
+    reviewer: str = "user"
+    comment: Optional[str] = None
+
+
+def create_app(config: Optional[Config] = None) -> FastAPI:
     cfg = config or Config.load()
     store = Store(cfg.db_path)
     registry = ToolRegistry(store)
     llm = OllamaClient(cfg.ollama_host, cfg.model, registry)
 
     app = FastAPI(title="SpreadbreadAI Core", version="0.1.0")
-
-    class ChatRequest(BaseModel):
-        message: str
-
-    class DecisionRequest(BaseModel):
-        decision: str
-        reviewer: str
-        comment: str | None = None
-
-    class ApplyRequest(BaseModel):
-        reviewer: str = "user"
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
@@ -101,6 +113,27 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         )
         return proposal.model_dump()
+
+    @app.post("/api/proposals/{proposal_id}/approve-all")
+    def approve_all(proposal_id: str, req: BulkDecisionRequest) -> dict[str, Any]:
+        try:
+            proposal, flipped = store.decide_all_pending(
+                proposal_id, req.decision, req.reviewer, req.comment
+            )
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if flipped:
+            store.append_audit(
+                AuditEvent(
+                    workbook_id=proposal.workbook_id,
+                    actor=req.reviewer,
+                    action=f"proposal.bulk.{req.decision}",
+                    detail=f"{req.reviewer} {req.decision}d {len(flipped)} pending item(s) on {proposal_id}",
+                )
+            )
+        return {"proposal": proposal.model_dump(), "flipped_item_ids": flipped}
 
     @app.post("/api/proposals/{proposal_id}/apply")
     def apply(proposal_id: str, req: ApplyRequest) -> dict[str, Any]:
