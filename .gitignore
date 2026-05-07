@@ -9,4 +9,18 @@ build
 coverage
 *.log
 *.tsbuildinfo
-apps/mcp-server/.data/
+
+# Legacy Node prototype runtime data
+legacy/apps/mcp-server/.data/
+
+# Python core
+core/.venv/
+core/.data/
+core/.pytest_cache/
+core/**/__pycache__/
+core/*.egg-info/
+core/build/
+
+# LibreOffice extension build artifacts
+extension/build/
+extension/*.oxt

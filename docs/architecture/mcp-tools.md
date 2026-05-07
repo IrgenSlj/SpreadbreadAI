@@ -1,99 +1,75 @@
-# MCP Tool Design
+# Tool Surface
 
-## Tool Classes
+The platform exposes a tool registry to the LLM (and, later, to MCP
+clients). Tool definitions live in
+`core/spreadbread_core/tools.py` and the schemas are emitted in
+Ollama / OpenAI tool-calling format.
 
-### Read Tools
+## v0.1 catalog (implemented)
 
-Safe inspection tools with no side effects.
+### Read tools (no side effects)
 
-Examples:
+- `list_workbooks()` — every workbook the user has uploaded.
+- `get_review_snapshot(workbook_id)` — workbook + latest proposal +
+  audit trail.
+- `inspect_sheet(workbook_id, sheet_name)` — dimensions, formula count,
+  sample rows.
+- `list_risks(workbook_id)` — detected risks (formula chains, stale
+  inputs, reference drift).
 
-- `workbook.list`
-- `workbook.get_structure`
-- `workbook.get_formula_graph`
-- `workbook.get_risk_summary`
-- `proposal.list`
-- `canvas.get_document`
+### Write-staging tools (cannot mutate workbooks)
 
-Current prototype status:
+- `propose_diff(workbook_id, cell, kind, before?, after?, rationale)` —
+  creates or appends to the workbook's pending proposal. Returns
+  `{proposal_id, item_id, status: "pending"}`.
+- `add_comment(workbook_id, cell, body)` — convenience over
+  `propose_diff` with `kind="comment"`.
 
-- `workbook.read` is the main implemented read path
-- the remaining read tools are target surfaces for the next contract pass
+The registry rejects any attempt to bypass approval; the model has no
+function it can call to apply or write directly.
 
-### Draft Tools
+## Planned tools
 
-Tools that create proposals but do not mutate approved workbook state.
+- `get_dependencies(workbook_id, cell)` — formula dependency graph.
+- `find_similar_cells(workbook_id, pattern)` — pattern search across
+  cells / formulas.
+- `summarize_changes(workbook_id, since_version_id)` — diff between two
+  versions.
+- `request_apply(proposal_id)` — raises an apply request for an
+  approver. Apply itself is performed by the daemon, not the model.
 
-Examples:
+## Approval model
 
-- `proposal.create_from_prompt`
-- `proposal.create_formula_fix`
-- `proposal.create_scenario_update`
-- `canvas.draft_diagram`
-- `comment.create_draft`
+1. User asks the daemon to review a workbook.
+2. Daemon hands the model the tool catalog and the request.
+3. Model emits tool calls. Read tools answer directly. Write tools
+   stage items.
+4. Approver reviews each item via
+   `POST /api/proposals/{proposal_id}/items/{item_id}/decision` with
+   `{decision: "approve" | "reject", reviewer, comment?}`.
+5. Apply (Phase 3) writes a new workbook version from approved items
+   only and emits audit events.
 
-Current prototype status:
+## Security rules
 
-- proposal generation exists, but the draft contract still needs to be formalized around durable proposal records and item-level review items
+- Read tools are least-privilege.
+- Write tools create reviewable items, never direct writes.
+- Apply requires a fully approved proposal and is one-shot per
+  proposal.
+- Tool annotations are not security boundaries; the registry enforces
+  the read / stage / apply split.
+- All tool calls emit audit events.
+- Malformed requests fail closed with an explicit error message.
 
-### Apply Tools
+## Audit fields
 
-Tools that mutate state only when approval requirements are satisfied.
+Each tool call produces or appends to an audit event with:
 
-Examples:
-
-- `proposal.apply`
-- `canvas.apply_changes`
-- `approval.approve`
-- `approval.reject`
-
-Current prototype status:
-
-- apply exists, but it still needs one-shot semantics, canonical approval state, and stronger validation
-
-## Security Rules
-
-- read tools are least-privilege
-- draft tools create reviewable objects, not direct writes
-- apply tools require a valid approval state
-- tool annotations are not security boundaries
-- all tool calls emit audit events
-- tool invocations should be workspace-scoped
-- malformed requests should fail closed with explicit errors
-- apply tools should not be repeatable without a new proposal revision
-
-## Approval Model
-
-Suggested flow:
-
-1. agent inspects workbook
-2. agent creates a proposal
-3. user reviews structured diff
-4. user approves or rejects
-5. platform applies mutation and records a new version
-
-Recommended next refinement:
-
-- make proposal status derived from proposal item state
-- keep approval and apply as separate operations
-- treat applied proposals as immutable history rather than editable drafts
-
-## Audit Requirements
-
-Capture at minimum:
-
-- tool name
-- caller identity
-- tenant and workspace
-- proposal id if present
-- argument hash
 - timestamp
-- approval outcome
-- resulting workbook version
+- actor (`llm`, `user`, `system`, or a reviewer handle)
+- action (e.g. `proposal.created`, `proposal.item.added`,
+  `proposal.item.approve`)
+- detail (free-form, includes proposal id and item id where present)
 
-For the next phase, audit records should also capture:
-
-- proposal item id
-- request validation result
-- apply idempotency outcome
-- review state transitions
+Apply (Phase 3) will additionally record the resulting workbook version
+id and the source proposal id.

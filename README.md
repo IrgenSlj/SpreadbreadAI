@@ -1,106 +1,83 @@
 # SpreadbreadAI
 
-SpreadbreadAI is an open-source, human-in-the-loop spreadsheet operations platform for teams that still run critical parts of the business in spreadsheets.
+> Open-source, human-in-the-loop AI review for spreadsheets.
+> Runs locally on free LLMs. Lives inside LibreOffice Calc.
 
-The product direction is not "chat with Excel." It is a governed control plane where AI can inspect workbooks, draft formulas and edits, explain recommendations, and propose operational actions while humans review and approve every meaningful change.
+SpreadbreadAI is **not** chat-with-spreadsheet. It is a governed control
+plane: AI inspects workbooks, drafts proposals, and explains its
+reasoning — humans review every diff and approve every write.
 
-## Product Thesis
+## Architecture at a glance
 
-Companies already rely on spreadsheets for planning, reconciliation, pricing, inventory, commissions, and reporting. The pain is not the lack of AI chat. The pain is weak control, manual review, poor traceability, and unsafe changes.
+- **LibreOffice Calc plugin** (`extension/`) — Python UNO sidebar that
+  reviewers use right next to their cells.
+- **Local Python daemon** (`core/`) — FastAPI + SQLite, owns workbooks,
+  proposals, diffs, and the audit trail. Runs on `127.0.0.1:8765`.
+- **Local LLM by default** — Gemma 4 E2B via Ollama, with tool calling
+  so the model can read workbooks and stage proposals (but never write).
 
-SpreadbreadAI addresses that by combining:
+The model has the same permissions as a junior analyst: it can suggest;
+it cannot apply.
 
-- spreadsheet-native workflows
-- approval gates and policy controls
-- audit logs and workbook lineage
-- AI tool interoperability over MCP
-- a collaborative sketchpad linked to workbook entities
+## Project status
 
-## Current State
+- ✅ **Core daemon scaffold landed** — domain model, SQLite store, xlsx
+  parser, tool registry, Ollama tool-calling loop, FastAPI HTTP API,
+  pytest suites including a live Gemma 4 E2B integration test.
+- 🚧 **LibreOffice extension** — scaffolding next.
+- 📚 **Development plan:** [`docs/development-plan.md`](docs/development-plan.md).
+- 🗄️ **Legacy Node + React prototype:** preserved under
+  [`legacy/`](legacy/) for reference. No longer the supported runtime.
 
-The repository now contains a working local prototype with:
+## Quick start
 
-- workbook upload and parsing for `.xlsx`, `.xls`, and `.csv`
-- workbook review snapshots with sheet summaries, risks, named ranges, and version history
-- proposal generation from parsed workbook findings
-- item-level review decisions and a workbook apply flow
-- a local HTTP API and a stdio MCP server scaffold
+Prereqs: Python 3.11+, [Ollama](https://ollama.com), and
+`ollama pull gemma4:e2b` (≈7 GB).
 
-The current prototype is intentionally narrow. It is useful for evaluation, but it still needs workflow hardening before it can support serious production use.
-
-## Immediate Priorities
-
-The next phase is about trust and correctness:
-
-- unify approval semantics so proposal status is derived from item state
-- make apply idempotent or one-shot
-- add strict request validation and clean API errors
-- move persistence from JSON files to PostgreSQL
-- replace the sketchpad placeholder with a real collaborative canvas
-
-## MVP Focus
-
-The first wedge is **FP&A workbook review and reconciliation**.
-
-Core MVP outcomes:
-
-- ingest `.xlsx` workbooks and normalize them
-- inspect formulas, references, stale values, and anomalies
-- let AI draft workbook edits and review commentary
-- present cell and range diffs before apply
-- require explicit user approval for writes
-- maintain append-only audit history
-- support a linked sketchpad for process maps and planning notes
-
-## Opinionated Stack
-
-- Frontend: React + TypeScript
-- Spreadsheet and data workspace: Grist-inspired app model with explicit workbook abstractions
-- Sketchpad: Excalidraw
-- Realtime collaboration: Yjs
-- Backend API: Node.js + TypeScript
-- Excel I/O and recalculation: Apache POI service boundary
-- AI tool boundary: Model Context Protocol (MCP)
-- Database: PostgreSQL
-- Object storage: S3-compatible snapshots for workbook versions and artifacts
-
-## Architecture Principle
-
-SpreadbreadAI owns:
-
-- policy
-- approvals
-- audit
-- workbook versioning
-- permissions
-- UI for review and apply
-
-Claude Code and Codex are optional clients that connect to SpreadbreadAI through MCP. They are not the product core.
-
-## Repository Layout
-
-```text
-apps/
-  web/                Frontend application
-  mcp-server/         MCP server exposing read/draft/apply tools
-packages/
-  shared/             Shared types and domain utilities
-docs/
-  product/            PRD, roadmap, workflows
-  architecture/       System architecture and MCP tool design
-  adr/                Architecture decisions
-  runbooks/           Local setup and operational notes
+```bash
+cd core
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/spreadbread-core            # serves on 127.0.0.1:8765
 ```
 
-## Initial Milestones
+Sanity-check it:
 
-1. Define workbook domain model, approval model, and audit model.
-2. Stand up the web app shell and shared TypeScript workspace.
-3. Implement workbook ingestion, normalization, and snapshot storage.
-4. Implement MCP read tools, then draft tools, then approval-gated apply tools.
-5. Embed the sketchpad and link it to workbook entities.
-6. Ship the first finance review workflow end to end.
+```bash
+curl http://127.0.0.1:8765/healthz
+```
 
-## Status
+Run the test suite (live LLM test is skipped automatically if Ollama is
+not reachable):
 
-This repository has a working prototype and a documented next-phase roadmap. See the documents under `docs/` for the current product scope, architecture, and implementation plan.
+```bash
+cd core && .venv/bin/pip install pytest
+.venv/bin/python -m pytest -q
+```
+
+## Repository layout
+
+```text
+core/         Python daemon — domain, store, parser, tools, llm, http
+extension/    LibreOffice .oxt plugin (in progress)
+docs/         development plan, product, architecture, ADRs, runbooks
+legacy/       frozen Node + React prototype (reference only)
+```
+
+## Documentation
+
+- [`docs/development-plan.md`](docs/development-plan.md) — phased plan, what is built, what is next.
+- [`docs/product/prd.md`](docs/product/prd.md) — product requirements.
+- [`docs/architecture/system-architecture.md`](docs/architecture/system-architecture.md) — components and contracts.
+- [`docs/architecture/mcp-tools.md`](docs/architecture/mcp-tools.md) — tool surface.
+- [`docs/runbooks/setup.md`](docs/runbooks/setup.md) — local setup.
+- [`docs/adr/0001-architecture-principles.md`](docs/adr/0001-architecture-principles.md) — non-negotiables.
+
+## License
+
+See [`LICENSE`](LICENSE).
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The single hardest rule:
+no write path may bypass human approval.

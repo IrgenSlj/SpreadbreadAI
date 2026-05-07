@@ -1,103 +1,98 @@
 # Product Requirements Document
 
-## Product Name
+## Product
 
-SpreadbreadAI
+SpreadbreadAI — open-source, human-in-the-loop AI review for
+spreadsheets, delivered as a LibreOffice Calc plugin backed by a local
+daemon and free LLMs.
 
 ## Positioning
 
-An open-source spreadsheet operations platform that lets AI analyze and draft work while humans review, approve, and apply changes.
+A governed AI review surface that lives where finance users already
+work. The model can read the workbook, list risks, and stage proposed
+changes; humans approve every write.
 
 ## Target Users
 
-- FP&A teams
+- FP&A analysts and finance managers
 - finance operations teams
-- revenue operations teams
-- procurement and supply-chain operators
-- spreadsheet-heavy operations managers
+- revenue operations and procurement teams that own large workbooks
 
 ## Primary User Problems
 
-- critical workbook logic is difficult to review
+- workbook logic is hard to review and easy to break
 - spreadsheet changes are hard to trace and approve
-- formula and reference errors are expensive and common
-- operational workflows live in ad hoc spreadsheet processes
-- AI copilots are not trusted to write directly to business-critical workbooks
+- formula and reference errors are common and expensive
+- generic AI copilots are not trusted to write to business-critical
+  workbooks
+- cloud-only AI tooling is a non-starter for finance data in many orgs
 
 ## MVP Scope
 
-### In Scope
+### In scope
 
-- workbook upload and versioning
-- workbook metadata extraction
-- formula graph inspection
-- anomaly and integrity checks
-- AI-generated commentary and draft workbook changes
-- cell and range diffs before apply
-- approval workflow for writes
-- audit log for all AI and user actions
-- collaborative sketchpad linked to workbook entities
-- MCP server for read, draft, and apply tools
+- LibreOffice Calc plugin with a review sidebar
+- local Python daemon owning workbooks, proposals, diffs, and audit
+- xlsx parsing: sheet metadata, formulas, sample rows, seeded risks
+- LLM tool calling against a fixed catalog (read + staged-write)
+- diff cards: cell, before, after, rationale, approve/reject
+- apply pipeline: write approved diffs into a new workbook version
+- append-only audit trail for every state transition
+- offline operation with Gemma 4 E2B via Ollama as the default model
 
-### Out of Scope
+### Out of scope (for the MVP)
 
-- full Excel replacement
+- Excel add-in (Calc first; Excel comes after the loop is loved)
+- full formula recalculation engine — Calc / Excel evaluate
+- a custom DSL or query language
+- multi-tenant cloud deployment
 - autonomous AI execution without approval
-- deep ERP-native orchestration in v1
-- custom on-sheet formula language in v1
-- broad multi-industry workflow coverage before validating the finance wedge
 
-## Current Product State
+## Success Metrics
 
-The product already has a local prototype with:
-
-- workbook upload and parsing
-- workbook review snapshots
-- proposal generation from parsed workbook findings
-- item-level reviewer decisions
-- a basic apply flow that creates a new workbook version
-- a local HTTP API and MCP server scaffold
-
-The prototype is intentionally minimal and still needs workflow integrity hardening before it should be considered production-ready.
-
-## MVP Success Metrics
-
-- reduce workbook review time by at least 50%
-- detect broken formulas, missing references, or suspicious values before close
-- achieve repeat usage on weekly or monthly review workflows
-- maintain zero unapproved AI writes to protected workbooks
+- workbook review time cut by at least 50%
+- broken formulas, missing references, or stale inputs detected before
+  close
+- repeat usage on weekly or monthly close cycles
+- zero unapproved AI writes to protected workbooks
+- the full demo runs offline on a laptop with 8 GB RAM
 
 ## Core User Stories
 
-1. As a finance manager, I upload a workbook and receive a structured review of risk areas, broken references, and suspicious formulas.
-2. As an analyst, I can ask AI to draft a scenario update without directly modifying the workbook.
-3. As an approver, I can compare a proposed workbook diff and approve or reject it.
-4. As an operator, I can see who changed what, why it changed, and which model or user proposed it.
-5. As a team, we can sketch a process or planning model and link it to workbook ranges and approvals.
+1. As a finance manager, I open a workbook in Calc, click "Review with
+   SpreadbreadAI," and see a structured list of risks and proposed
+   changes drafted by a local model.
+2. As an analyst, I ask the AI to draft a scenario update; the
+   proposal appears in the sidebar without touching the workbook.
+3. As an approver, I review each diff card and approve or reject it
+   one at a time.
+4. As an operator, I see a complete audit trail of who proposed what,
+   when, and which model produced it.
+5. As a privacy-conscious user, I run the entire stack offline with
+   Gemma 4 E2B; no data leaves my machine.
 
 ## Differentiation
 
-- approval-first AI workflow
+- approval-first AI workflow that lives inside the spreadsheet
 - workbook diff and lineage as first-class product concepts
-- open MCP tool surface rather than a hard-coded model dependency
-- sketchpad linked to operational spreadsheet objects
+- works fully offline on free local LLMs
+- model-agnostic — local Gemma / Qwen / Llama or cloud Claude / GPT /
+  Gemini, swappable in one setting
 
 ## Risks
 
-- Excel compatibility edge cases
-- users expecting a full spreadsheet editor immediately
-- overbuilding generic AI features before proving the first wedge
-- weak trust if explanations and diffs are not precise
-- approval semantics drifting between whole-proposal and item-level state
-- apply actions being repeatable when they should be idempotent or one-shot
-- weak request validation and unclear API errors
-- local JSON persistence not scaling to concurrent reviewers
-- sketchpad becoming a placeholder instead of a real workflow surface
+- LibreOffice UNO API friction
+- 2B-class local models hallucinating cell references — mitigated by
+  staging-only writes and cell-existence validation in the registry
+- Excel parity expectation arriving immediately — mitigated by keeping
+  the daemon format-agnostic from day one
+- distribution surface (extension, daemon, Ollama, model files)
 
 ## MVP Exit Criteria
 
-- one end-to-end finance review workflow in production quality
-- durable workbook and proposal persistence in PostgreSQL
-- audit and approval trail for all write actions
-- usable MCP interface for external agent clients
-- real sketchpad linked to workbook entities
+- one finance review workflow runs end-to-end inside LibreOffice Calc
+- daemon, extension, and a local model run fully offline
+- approval state machine is canonical and enforced in the daemon
+- audit trail covers upload, proposal creation, every item decision,
+  and apply
+- a packaged `.oxt` and a `pipx`-installable daemon are available

@@ -1,72 +1,68 @@
 # Local Setup
 
-## Current State
+## Prereqs
 
-This repository has a working local prototype. You can run the web UI and backend locally to inspect workbook upload, review, approval, and apply flows.
+- Python 3.11+ (3.14 tested)
+- [Ollama](https://ollama.com) running locally
+- A pulled model: `ollama pull gemma4:e2b` (≈7 GB)
 
-## Planned Local Tooling
-
-- Node.js 22+
-- pnpm 10+
-- PostgreSQL 16+
-- Java 21+ for Apache POI-backed workbook processing
-
-## Expected Services
-
-- `apps/web`
-- `apps/mcp-server`
-- future workbook processing service
-
-## Local Prototype
-
-Run the backend:
+## Install and run the core daemon
 
 ```bash
-cd apps/mcp-server && node --import tsx src/http-main.ts
+cd core
+python3 -m venv .venv
+.venv/bin/pip install -e .[dev]
+.venv/bin/spreadbread-core
 ```
 
-Run the web app:
+The daemon listens on `127.0.0.1:8765`. Verify:
 
 ```bash
-cd apps/web && ./node_modules/.bin/vite --host 127.0.0.1 --port 5173
+curl http://127.0.0.1:8765/healthz
 ```
 
-Open:
+You should see something like:
 
-- `http://127.0.0.1:5173/`
-- `http://127.0.0.1:4242/healthz`
+```json
+{
+  "ok": true,
+  "model": "gemma4:e2b",
+  "tools": ["list_workbooks", "get_review_snapshot", "inspect_sheet",
+            "list_risks", "propose_diff", "add_comment"]
+}
+```
 
-## Current Data Layout
-
-- local workbook records and uploads live under `apps/mcp-server/.data/`
-- deleting that directory resets the local prototype state
-- runtime data is ignored by git
-- when `DATABASE_URL` is set, workbook review data is persisted in PostgreSQL instead
-
-## PostgreSQL Mode
-
-Initialize the schema:
+## Run the tests
 
 ```bash
-cd apps/mcp-server && DATABASE_URL=postgres://... node --import tsx src/db-init.ts
+cd core
+.venv/bin/python -m pytest -q
 ```
 
-The first schema file is:
+The live LLM test (`tests/test_llm_live.py`) is skipped automatically
+if Ollama is not reachable.
 
-- `apps/mcp-server/sql/001_initial_schema.sql`
+## Configuration
 
-The runtime store facade will keep using the local file-backed path until `DATABASE_URL` is provided.
+Environment variables, all optional:
 
-Import the current file-store data into PostgreSQL:
+- `SPREADBREAD_DATA_DIR` — where SQLite + uploads live (default `core/.data/`)
+- `SPREADBREAD_MODEL` — Ollama model tag (default `gemma4:e2b`)
+- `OLLAMA_HOST` — Ollama URL (default `http://127.0.0.1:11434`)
+- `SPREADBREAD_HOST` / `SPREADBREAD_PORT` — daemon bind (default `127.0.0.1:8765`)
 
-```bash
-cd apps/mcp-server && DATABASE_URL=postgres://... node --import tsx src/db-import.ts
-```
+## LibreOffice extension
 
-## Next Setup Steps
+In progress. See [`extension/README.md`](../../extension/README.md) and
+[`docs/development-plan.md`](../development-plan.md) Phase 2.
 
-1. run the new import flow against a real PostgreSQL instance
-2. add a workspace-managed dependency install and migration path
-3. replace the sketchpad placeholder with a real collaborative canvas
-4. expand workbook parsing and formula intelligence
-5. wire a dedicated workbook processing boundary
+## Resetting local state
+
+Delete `core/.data/` to wipe the SQLite database and uploaded workbooks.
+The directory is gitignored.
+
+## Legacy prototype
+
+The old Node + React prototype is preserved under `legacy/` for
+reference. It is not built or tested by this setup. See
+[`legacy/README.md`](../../legacy/README.md).

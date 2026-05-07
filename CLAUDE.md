@@ -2,170 +2,133 @@
 
 ## Mission
 
-SpreadbreadAI is an open-source, human-in-the-loop spreadsheet operations platform.
+SpreadbreadAI is an open-source, human-in-the-loop spreadsheet operations
+platform. The product is a governed control plane where AI inspects
+workbooks, drafts proposals, and humans review and approve every write.
 
-The product is not a generic spreadsheet chat assistant. It is a governed control plane for spreadsheet-heavy business workflows where:
+The current focus is **LibreOffice Calc as the primary surface** with a
+**local Python daemon** running **free local LLMs** (Gemma 4 E2B by
+default via Ollama).
 
-- AI inspects workbooks
-- AI drafts proposals and commentary
-- humans review diffs and approve writes
-- the platform owns policy, audit, and versioning
-
-## Current Product Direction
-
-Primary wedge:
-
-- FP&A / finance workbook review and reconciliation
-
-Core interaction model:
-
-1. user uploads a workbook
-2. platform parses workbook structure
-3. AI or system creates a review snapshot and draft proposal
-4. user reviews risks, diffs, and audit trail
-5. user approves or rejects proposal items
-6. approved items can be applied into a new workbook version
-
-The current implementation is a local prototype, not a production service. It already supports upload, parsing, proposal generation, item-level review, and a first integrity-hardening pass on approval/apply behavior.
+Read [`docs/development-plan.md`](docs/development-plan.md) before
+starting work — it is the source of truth for phases, decisions, and the
+target architecture.
 
 ## Repository Layout
 
-- `apps/web`
-  React + Vite frontend for workbook review, proposals, audit trail, and sketchpad
-- `apps/mcp-server`
-  MCP server plus local HTTP API and disk-backed workbook store
-- `packages/shared`
-  shared domain types and helper functions
-- `docs/`
-  PRD, roadmap, architecture, implementation plan
+```text
+core/                   Python daemon (FastAPI + SQLite + Ollama)
+  spreadbread_core/
+    domain.py           Pydantic models — Workbook, Proposal, Item, Audit
+    store.py            SQLite repository
+    parser.py           openpyxl-based .xlsx parser
+    tools.py            tool registry exposed to the LLM
+    llm.py              Ollama tool-calling loop
+    http.py             FastAPI app + uvicorn entry
+    config.py
+  tests/                pytest suites (unit + live LLM)
+  pyproject.toml
+extension/              LibreOffice .oxt plugin (Python UNO) — in progress
+docs/                   product, architecture, ADRs, runbooks, plan
+legacy/                 frozen Node + React prototype (reference only)
+```
 
 ## What Exists Today
 
-### Frontend
+### Core daemon (`core/`)
 
-`apps/web` currently supports:
+- **Domain model** in Pydantic, ported from the legacy TypeScript types.
+- **SQLite store** — single backend, no Postgres, no dual-store split.
+- **xlsx parser** with openpyxl: sheet metadata, formula counts, sample
+  rows, seeded risks.
+- **Tool registry** with the v0.1 catalog the LLM can call.
+- **Ollama loop** wired to `gemma4:e2b`, capped at 8 tool-call rounds.
+- **FastAPI daemon** with `/healthz`, upload, review, chat, item decisions.
+- **Tests**: `tests/test_smoke.py` (unit) and `tests/test_llm_live.py`
+  (live, skipped automatically if Ollama is down).
 
-- loading workbook list from local API
-- uploading `.xlsx`, `.xls`, and `.csv`
-- viewing workbook review metadata
-- viewing proposal summary and diff
-- viewing audit trail
-- switching between persisted workbook snapshots
-- applying approved proposal items
+### LLM tool catalog (read vs write boundary)
 
-The sketchpad section is still only a placeholder UI and should be replaced with a real collaborative canvas.
+Read tools (no side effects):
 
-### Backend
+- `list_workbooks`
+- `get_review_snapshot(workbook_id)`
+- `inspect_sheet(workbook_id, sheet_name)`
+- `list_risks(workbook_id)`
 
-`apps/mcp-server` currently supports:
+Write tools (stage a pending proposal item; never mutate a workbook):
 
-- stdio MCP server
-- local HTTP API
-- persisted disk store under `apps/mcp-server/.data/`
-- upload endpoint storing raw workbook bytes
-- workbook parsing via open-source `xlsx`
-- generated review snapshots from parsed workbook metadata
-- item-level proposal decisions
-- apply flow that creates a new workbook version
+- `propose_diff(workbook_id, cell, kind, before?, after?, rationale)`
+- `add_comment(workbook_id, cell, body)`
 
-Current HTTP endpoints:
+The registry enforces this split. The model has no path to a real write.
 
-- `GET /healthz`
-- `GET /api/workbooks`
-- `GET /api/workbooks/:id/review`
-- `POST /api/workbooks/upload`
-- `POST /api/workbooks/:id/proposal/decision`
-- `POST /api/workbooks/:id/proposal/items/:diffId/decision`
-- `POST /api/workbooks/:id/proposal/apply`
+### Legacy (`legacy/`)
 
-### MCP
-
-Current MCP tools:
-
-- `workbook.read`
-- `workbook.draft`
-- `workbook.apply`
-
-Important:
-
-- `workbook.read` is real enough to inspect stored review snapshots
-- `workbook.draft` and `workbook.apply` are still prototype paths
-- approval and write enforcement still need full integrity hardening
-
-## Key Files
-
-- `packages/shared/src/index.ts`
-  shared domain model
-- `apps/mcp-server/src/parser.ts`
-  workbook parsing and heuristic review generation
-- `apps/mcp-server/src/store.ts`
-  persisted local workbook store
-- `apps/mcp-server/src/http.ts`
-  local HTTP API
-- `apps/mcp-server/src/tools.ts`
-  MCP tool layer
-- `apps/web/src/App.tsx`
-  current main review UI
+The Node + React prototype lives here for reference. It is not built or
+tested by the current setup. Do not extend it. Port useful logic into
+the Python core when needed.
 
 ## Working Rules For Future Agents
 
-- Preserve the human-in-the-loop architecture.
-- Do not add any direct AI write path that bypasses approval.
-- Keep the product model-agnostic. Claude Code and Codex are clients, not the core.
-- Treat workbook versions, proposals, diffs, and audit events as first-class entities.
-- Prefer extending the shared domain model before adding app-specific ad hoc shapes.
-- Keep runtime data out of git. `apps/mcp-server/.data/` is ignored.
-- Verify both frontend and backend after meaningful changes.
-
-## Current Technical Constraints
-
-- persistence is still local JSON + raw file storage, not a database
-- workbook parsing is structural and heuristic, not a full formula graph engine
-- proposal generation is still seeded from parsed metadata, not model-driven
-- persistence still uses mutable snapshots rather than first-class relational records
-- approval semantics are now partially hardened, but the platform still needs a canonical proposal/item/apply state machine
-- request validation is improved, but still not backed by a full domain schema layer across all surfaces
-- sketchpad is not implemented yet
-- there is no real auth, tenancy, or RBAC yet
+- Read [`docs/development-plan.md`](docs/development-plan.md) first.
+- Never add an LLM-driven write path that bypasses approval. Write tools
+  must only stage proposal items.
+- Keep the platform model-agnostic. Gemma 4 is the default; the LLM
+  adapter must support swapping models.
+- Prefer extending the Pydantic domain model in `core/spreadbread_core/domain.py`
+  before adding ad-hoc shapes elsewhere.
+- Keep runtime data out of git. `core/.data/` and `core/.venv/` are
+  ignored.
+- Do not edit files in `legacy/`. Port forward, do not maintain backward.
+- One language per layer: Python in `core/` and `extension/`. No TypeScript
+  outside `legacy/`.
 
 ## Useful Verification Commands
 
 From repo root:
 
-- web typecheck:
-  `cd apps/web && ./node_modules/.bin/tsc --noEmit -p tsconfig.json`
-- web build:
-  `cd apps/web && ./node_modules/.bin/vite build`
-- backend compile:
-  `cd apps/mcp-server && ./node_modules/.bin/tsc -p tsconfig.json`
-- MCP health:
-  `cd apps/mcp-server && node --import tsx src/health.ts`
-- local HTTP server:
-  `cd apps/mcp-server && node --import tsx src/http-main.ts`
+- Install core deps:
+  `cd core && python3 -m venv .venv && .venv/bin/pip install -e .[dev]`
+- Run daemon:
+  `cd core && .venv/bin/spreadbread-core`
+- Run tests:
+  `cd core && .venv/bin/python -m pytest -q`
+- Health check:
+  `curl http://127.0.0.1:8765/healthz`
+- List Ollama models:
+  `ollama list`
+
+## Current Technical Constraints
+
+- Persistence is SQLite only. Postgres is a future option behind the
+  same store interface.
+- Workbook parsing is structural: formula counts, sample rows, no
+  evaluation. LibreOffice / Excel evaluate formulas.
+- Apply pipeline (write a new `.xlsx` from approved diffs) is not yet
+  implemented — see development plan Phase 3.
+- LibreOffice extension is scaffolded as a directory; the UNO component
+  is next — see development plan Phase 2.
+- No auth, no tenancy. Single-user local install.
 
 ## Recommended Next Steps
 
-Near-term priority order:
+In order:
 
-1. persist workbook, proposal, item, version, and audit records in PostgreSQL
-2. finish the canonical approval/apply state machine and enforce it through one relational model
-3. enrich parsed workbook intelligence:
-   named ranges, sample values, sheet previews, formula/error summaries, dependency graphs
-4. implement a real collaborative sketchpad:
-   Excalidraw integration linked to workbook entities
-5. expose a fuller MCP contract for workbook, proposal, and sketch operations
+1. Scaffold the LibreOffice extension (`extension/`): manifest, Python
+   UNO component, daemon HTTP client, sidebar stub.
+2. Implement the apply pipeline (`POST /api/proposals/{id}/apply`).
+3. Add Calc bridge in the extension to write approved diffs to the
+   active sheet.
+4. Enrich the parser (dependency graph, stale inputs, named ranges).
+5. Expose the tool catalog over MCP stdio for external agent clients.
 
 ## Current Git State Expectation
 
-The repo should have:
-
-- private GitHub remote at `origin`
-- branch `main`
-
-Before starting work, check:
+Branch: `main`. Remote: `origin`. Before starting work:
 
 - `git status --short --branch`
 - `git remote -v`
 - `gh auth status`
 
-If you continue implementation, prefer small commits after each validated slice.
+Prefer small commits after each validated slice.

@@ -2,25 +2,44 @@
 
 ## Status
 
-Accepted
+Accepted.
 
 ## Context
 
-The product must stay open-source, support spreadsheet-heavy business workflows, and integrate with external AI agents without delegating trust or policy enforcement to them.
+SpreadbreadAI must remain open-source, work offline on free local LLMs,
+support spreadsheet-heavy business workflows, and integrate with
+external AI agents without delegating policy enforcement to them. After
+an initial Node + React prototype, the product is being rebuilt as a
+LibreOffice Calc plugin backed by a local Python daemon.
 
-## Decision
+## Decisions
 
-We will:
-
-- design the platform as a governed spreadsheet control plane
-- keep human approval in the product core
-- expose AI capabilities through MCP rather than vendor-specific logic
-- treat workbook versions and diffs as first-class entities
-- keep the sketchpad linked to operational spreadsheet entities
+1. **Human-in-the-loop is non-negotiable.** No tool path may mutate a
+   workbook without human approval. Enforced in the tool registry, not
+   in the prompt.
+2. **The platform owns policy, audit, and versioning.** Models are
+   replaceable; the platform is the source of truth.
+3. **Local-first.** The default install runs fully offline with
+   Gemma 4 E2B via Ollama. Cloud models are opt-in.
+4. **Model-agnostic.** The LLM adapter exposes one interface; Gemma,
+   Qwen, Llama, and cloud providers are interchangeable.
+5. **Workbook versions are immutable.** Apply produces a new version;
+   it never edits in place.
+6. **MCP is the agent integration boundary** — Claude Code, Codex, and
+   other clients connect through the same tool catalog the local LLM
+   uses.
+7. **The sketchpad is deferred** until the core review loop is loved.
 
 ## Consequences
 
-- the system remains model-agnostic
-- approval and audit are mandatory concerns, not later additions
-- we can support Claude Code, Codex, and future clients through one tool surface
-- implementation complexity increases in exchange for enterprise trust and defensibility
+- Approval and audit are first-class concerns from day one.
+- The product can ship fully offline on commodity hardware.
+- Implementation complexity sits in the daemon, not in the extension or
+  the model.
+- The platform stays portable: the same daemon can power the LO
+  extension, an Excel add-in, an MCP client, or a web review UI.
+
+## Superseded sections
+
+The original ADR predated the LibreOffice pivot and assumed a Node /
+React stack. The principles above are the current canonical version.

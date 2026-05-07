@@ -1,112 +1,106 @@
 # System Architecture
 
-## Top-Level Components
+See [`docs/development-plan.md`](../development-plan.md) for the phased
+plan. This document describes the steady-state shape.
 
-### Web App
+## Top-level components
 
-Responsibilities:
+### LibreOffice extension (`extension/`)
 
-- workbook upload and review UI
-- approval and policy UI
-- sketchpad UI
-- audit log viewer
-- collaboration surfaces
-
-Current state:
-
-- the web app is a working prototype
-- workbook review, proposal review, audit history, and apply actions are present
-- the sketchpad is still a placeholder and needs a real collaborative canvas
-
-### API Backend
+A Python UNO extension installed as `spreadbreadai.oxt`.
 
 Responsibilities:
 
-- auth and tenancy
-- workbook metadata and snapshot lifecycle
-- proposal storage
-- approval workflow
-- audit event persistence
-- orchestration between workbook analysis and MCP tooling
+- register a sidebar in Calc
+- show workbook risks and staged proposal items
+- render diff cards with approve / reject buttons
+- write approved cell diffs into the active sheet
+- talk to the local daemon over `127.0.0.1:8765`
 
-Current state:
+The extension contains no business logic. Everything authoritative
+lives in the daemon.
 
-- the API backend is a local HTTP server backed by disk files
-- upload, review lookup, proposal decisions, and apply endpoints exist
-- request validation, concurrency control, and idempotency still need hardening
+### Core daemon (`core/`)
 
-### Workbook Processing Service
+A Python process serving FastAPI on `127.0.0.1:8765`, backed by SQLite.
 
 Responsibilities:
 
-- `.xlsx` ingestion
-- workbook normalization
-- formula recalculation
-- structure extraction
-- generation of workbook snapshots and derived metadata
+- own the canonical state of every workbook, proposal, item, and audit
+  event
+- parse `.xlsx` uploads (openpyxl)
+- expose the tool registry to the LLM
+- run the LLM tool-calling loop (Ollama by default)
+- enforce the human-in-the-loop guarantee — write tools stage items;
+  apply requires approved items only
+- expose the same tool catalog over MCP stdio (planned)
 
-This service can be JVM-based if Apache POI is used directly.
+### LLM adapter (`core/spreadbread_core/llm.py`)
 
-Current state:
+Default: Ollama, model `gemma4:e2b`. The adapter speaks the OpenAI-style
+tool-calling protocol Ollama exposes; cloud providers can be plugged in
+behind the same interface.
 
-- workbook parsing is handled inside the MCP server for the prototype
-- the next architecture step is to split parsing into a dedicated service or module boundary
+The LLM never has direct workbook access. It uses tools.
 
-### MCP Server
+### Optional review web UI (deferred)
 
-Responsibilities:
+A small SPA that hits the same daemon. Out of scope for the MVP but the
+daemon API is shaped to support it without changes.
 
-- expose read, draft, and apply tool surfaces
-- enforce workspace scoping
-- require approval tokens or workflow state for apply actions
-- emit auditable tool invocation events
+## Domain objects
 
-Current state:
+These live in `core/spreadbread_core/domain.py`:
 
-- the MCP server is implemented in TypeScript
-- `workbook.read` is wired to persisted review snapshots
-- `workbook.draft` and `workbook.apply` exist as prototype surfaces and should be aligned with the approval model
+- `Workbook` — id, name, owner, sheets, risks, versions, tags, status
+- `WorkbookSheet` — name, dimensions, formula counts, sample rows
+- `WorkbookRisk` — id, label, severity, location, summary
+- `WorkbookVersion` — id, created_at, created_by, note
+- `Proposal` — id, workbook_id, status, items, applied_*
+- `ProposalItem` — id, kind, cell, before, after, rationale, status
+- `AuditEvent` — id, workbook_id, actor, action, detail, created_at
+- `ReviewSnapshot` — Workbook + latest Proposal + audit list
 
-### Realtime Collaboration Layer
+## Storage
 
-Responsibilities:
+SQLite by default. Schema in `core/spreadbread_core/store.py`:
 
-- shared comments
-- shared presence
-- collaborative review state
-- linked sketch annotations
+- `workbooks(id, name, owner, created_at, payload JSON)`
+- `proposals(id, workbook_id, status, created_at, payload JSON)`
+- `audit_events(id, workbook_id, actor, action, detail, created_at)`
 
-## Canonical Domain Objects
+Pydantic payloads are stored as JSON inside the row, with normalized
+columns for query and indexing. Postgres is a future option behind the
+same store interface.
 
-- `Workbook`
-- `WorkbookVersion`
-- `Sheet`
-- `CellReference`
-- `Proposal`
-- `ProposalItem`
-- `ProposalDiff`
-- `ApprovalRequest`
-- `AuditEvent`
-- `CanvasDocument`
-- `EntityLink`
+## API surface
 
-For the next phase, persistence should promote these objects to first-class database records rather than storing them inside a single mutable snapshot.
+Local HTTP (FastAPI), `127.0.0.1:8765`:
 
-## Design Constraints
+- `GET  /healthz`
+- `GET  /api/workbooks`
+- `POST /api/workbooks/upload`
+- `GET  /api/workbooks/{id}/review`
+- `POST /api/workbooks/{id}/chat`
+- `POST /api/proposals/{proposal_id}/items/{item_id}/decision`
+- `GET  /api/tools`
 
-- AI never writes directly to a protected workbook
-- all meaningful mutations create audit events
-- workbook state is versioned, not overwritten in place
-- agent clients are replaceable
-- policy is enforced by the platform, not delegated to the model
-- approval state must be canonical and derived consistently
-- apply actions should be idempotent or one-shot
-- request validation must fail closed with clear errors
+MCP stdio: planned, will mirror the tool catalog.
 
-## Suggested Delivery Shape
+## Design constraints
 
-- `apps/web`: review-first frontend
-- `apps/mcp-server`: tool server exposing workbook and sketch operations
-- `packages/shared`: shared domain contracts and validation
-- future `services/workbook-processor`: Excel ingestion and recalc boundary
-- future `services/api`: PostgreSQL-backed workflow and approval service
+- The LLM cannot mutate a workbook. Period. Write tools stage; apply
+  needs approved items.
+- Every state transition writes an audit event.
+- Workbook versions are immutable; new versions are created, never
+  edited.
+- The platform is model-agnostic; the LLM is replaceable.
+- Local-first; cloud is opt-in.
+- Apply must be idempotent — a proposal is applied at most once.
+- Request validation fails closed with explicit errors.
+
+## What is not here
+
+The full apply pipeline (Phase 3), the dependency graph (Phase 4), the
+MCP surface (Phase 6), and the optional web review UI (Phase 7) are
+documented in the development plan and tracked there.
