@@ -18,17 +18,17 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 try:  # pragma: no cover - only available inside LibreOffice
-    import uno
+    import uno  # noqa: F401  (required side effect for com.sun.star.* imports)
     import unohelper
-    from com.sun.star.frame import XDispatchProvider, XDispatch
+    from com.sun.star.frame import XDispatch, XDispatchProvider
     from com.sun.star.lang import XServiceInfo
 
     UNO_AVAILABLE = True
 except ImportError:
     UNO_AVAILABLE = False
 
-from spreadbreadai.client import DaemonClient
-from spreadbreadai.sidebar import handle_apply, handle_review
+from spreadbreadai.client import DaemonClient  # noqa: E402  (path setup above)
+from spreadbreadai.sidebar import handle_apply, handle_review  # noqa: E402
 
 IMPL_NAME = "ai.spreadbread.ProtocolHandler"
 SERVICE_NAMES = ("com.sun.star.frame.ProtocolHandler",)

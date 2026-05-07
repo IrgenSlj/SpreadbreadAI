@@ -1,5 +1,9 @@
 # SpreadbreadAI
 
+[![CI](https://github.com/IrgenSlj/SpreadbreadAI/actions/workflows/ci.yml/badge.svg)](https://github.com/IrgenSlj/SpreadbreadAI/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/IrgenSlj/SpreadbreadAI?include_prereleases&sort=semver)](https://github.com/IrgenSlj/SpreadbreadAI/releases)
+
 > Open-source, human-in-the-loop AI review for spreadsheets.
 > Runs locally on free LLMs. Lives inside LibreOffice Calc.
 
@@ -30,7 +34,21 @@ it cannot apply.
 - 🚧 **Real sidebar UI** — replacing the v0.1 message-box review surface.
 - 📚 **Development plan:** [`docs/development-plan.md`](docs/development-plan.md).
 
-## Quick start
+## Install
+
+The fastest path — bootstrap script handles `pipx`, the daemon, and the
+default model:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/IrgenSlj/SpreadbreadAI/main/scripts/install.sh | bash
+```
+
+Then grab the LibreOffice extension from the
+[latest release](https://github.com/IrgenSlj/SpreadbreadAI/releases/latest)
+(`spreadbreadai.oxt`) and add it via Tools → Extension Manager (or
+`unopkg add spreadbreadai.oxt`).
+
+### Manual install (from a clone)
 
 Prereqs: Python 3.11+, [Ollama](https://ollama.com), and
 `ollama pull gemma4:e2b` (≈7 GB).
@@ -40,6 +58,13 @@ cd core
 python3 -m venv .venv
 .venv/bin/pip install -e .
 .venv/bin/spreadbread-core            # serves on 127.0.0.1:8765
+```
+
+Build the LibreOffice extension:
+
+```bash
+cd extension && ./build.sh             # produces spreadbreadai.oxt
+unopkg add spreadbreadai.oxt
 ```
 
 Sanity-check it:
@@ -75,9 +100,10 @@ docs/         development plan, product, architecture, ADRs, runbooks
 
 ## License
 
-See [`LICENSE`](LICENSE).
+Apache 2.0. See [`LICENSE`](LICENSE).
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). The single hardest rule:
+See [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md),
+and [`SECURITY.md`](SECURITY.md). The single hardest rule:
 no write path may bypass human approval.

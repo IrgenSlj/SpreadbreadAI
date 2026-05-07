@@ -2,11 +2,20 @@
 name = "spreadbreadai-extension"
 version = "0.1.0"
 description = "LibreOffice Calc extension for SpreadbreadAI (Python UNO)"
+readme = "README.md"
 requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = [{ name = "SpreadbreadAI contributors" }]
+keywords = ["libreoffice", "calc", "uno", "extension", "spreadsheet", "ai"]
 dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/IrgenSlj/SpreadbreadAI"
+Repository = "https://github.com/IrgenSlj/SpreadbreadAI"
+Issues = "https://github.com/IrgenSlj/SpreadbreadAI/issues"
 
 [tool.pytest.ini_options]
 pythonpath = ["python"]
