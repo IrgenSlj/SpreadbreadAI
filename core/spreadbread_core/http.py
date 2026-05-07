@@ -9,6 +9,7 @@ import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from .apply import ApplyError, apply_proposal
 from .config import Config
 from .domain import AuditEvent
 from .llm import OllamaClient
@@ -33,6 +34,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         reviewer: str
         comment: str | None = None
 
+    class ApplyRequest(BaseModel):
+        reviewer: str = "user"
+
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
         return {"ok": True, "model": cfg.model, "tools": [t.name for t in registry.list_tools()]}
@@ -46,14 +50,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not file.filename:
             raise HTTPException(400, "filename required")
         suffix = Path(file.filename).suffix or ".xlsx"
+        raw = await file.read()
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(await file.read())
+            tmp.write(raw)
             tmp_path = Path(tmp.name)
         try:
             wb = parse_xlsx(tmp_path, name=Path(file.filename).stem)
         finally:
             tmp_path.unlink(missing_ok=True)
         store.save_workbook(wb)
+        store.save_version_bytes(wb.id, wb.latest_version_id, raw)
         store.append_audit(
             AuditEvent(
                 workbook_id=wb.id,
@@ -95,6 +101,18 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         )
         return proposal.model_dump()
+
+    @app.post("/api/proposals/{proposal_id}/apply")
+    def apply(proposal_id: str, req: ApplyRequest) -> dict[str, Any]:
+        try:
+            result = apply_proposal(store, proposal_id, reviewer=req.reviewer)
+        except ApplyError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {
+            "proposal": result.proposal.model_dump(),
+            "version": result.version.model_dump(),
+            "applied_item_ids": result.applied_item_ids,
+        }
 
     @app.get("/api/tools")
     def tools() -> list[dict[str, Any]]:

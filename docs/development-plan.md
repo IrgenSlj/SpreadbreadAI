@@ -114,24 +114,30 @@ Loop:
 - FastAPI HTTP daemon with healthz, upload, review, chat, decision.
 - Unit + live integration tests.
 
-### Phase 2 — LibreOffice Extension (status: in progress)
+### Phase 2 — LibreOffice Extension (status: ✅ scaffold landed; UI pending)
 
-- Manifest scaffold (`META-INF/manifest.xml`, `description.xml`).
-- Sidebar registration (`Sidebar.xcu`) and Calc menu entry (`Addons.xcu`).
-- Python UNO component — open sidebar, talk to daemon, render snapshot.
-- Diff card UI: cell, before/after, rationale, approve/reject buttons.
-- "Apply approved" action — writes approved cell diffs to the active sheet.
-- `build.sh` to package the extension as `.oxt`.
+- ✅ Manifest scaffold (`META-INF/manifest.xml`, `description.xml`).
+- ✅ Calc menu entry (`Addons.xcu`) and protocol handler (`ProtocolHandler.xcu`).
+- ✅ Python UNO component — review action uploads workbook, asks Gemma 4
+  to draft proposals, shows snapshot.
+- ✅ `build.sh` packages `.oxt` cleanly (no `__pycache__`).
+- 🚧 Real sidebar `.ui` panel with per-item approve / reject (replaces
+  the v0.1 message-box UI).
 
-### Phase 3 — Apply Pipeline
+### Phase 3 — Apply Pipeline (status: ✅ landed)
 
-- Daemon endpoint `/api/proposals/{id}/apply` produces a new workbook
-  version (`.xlsx` written to the data dir).
-- Idempotent: a proposal can be applied at most once.
-- Audit event written for every applied item plus the version creation.
-- Conflict detection: if the active workbook diverges from the version
-  the proposal was generated against, the apply must be rejected with
-  a clear error.
+- ✅ Daemon endpoint `POST /api/proposals/{id}/apply` produces a new
+  workbook version (`.xlsx` bytes written to the data dir).
+- ✅ Idempotent: a proposal in `applied` state returns its existing
+  version.
+- ✅ Guards: pending items block apply; zero approved items blocks
+  apply.
+- ✅ Audit events written: `proposal.applied` + `version.created`.
+- ✅ Extension `spreadbread:apply` writes approved cells into the
+  active Calc document via the Calc bridge, then asks the daemon to
+  commit the canonical version.
+- 🚧 Conflict detection when the active workbook diverges from the
+  version the proposal was generated against.
 
 ### Phase 4 — Smarter Review
 

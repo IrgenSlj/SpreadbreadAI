@@ -7,16 +7,15 @@ This is a high-level view of phases. Detail and rationale live in
 
 - ✅ Core daemon scaffold: domain, store, parser, tools, Ollama loop, FastAPI.
 - ✅ Tool-calling integration with Gemma 4 E2B verified end-to-end.
-- 🚧 LibreOffice extension scaffold (manifest, sidebar, Calc bridge).
+- ✅ LibreOffice extension scaffold (manifest, daemon client, Calc bridge, `.oxt` build).
+- ✅ Apply pipeline: approved diffs commit a new canonical `.xlsx` version, idempotent, audited.
 
 ## Next
 
-- Apply pipeline: write approved diffs into a new `.xlsx` version.
-- Calc bridge: extension writes approved cells into the active sheet
-  and asks the daemon to persist the new version.
-- Richer parser: dependency graph, stale inputs, named ranges, external
-  reference detection.
-- Packaging: `.oxt` build script, `pipx` distribution for the daemon.
+- Real sidebar UI (replace the v0.1 message-box review surface).
+- Conflict detection when the active workbook diverges from the version a proposal was generated against.
+- Richer parser: dependency graph, stale inputs, named ranges, external reference detection.
+- Packaging: `pipx` distribution for the daemon, signed `.oxt` releases.
 
 ## Later
 

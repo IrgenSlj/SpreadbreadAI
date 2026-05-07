@@ -1,0 +1,157 @@
+"""Apply pipeline.
+
+Takes a proposal whose items have been reviewed and produces a new
+workbook version by writing approved diffs into a copy of the base
+xlsx. Idempotent per proposal: a proposal in `applied` status returns
+its existing version without rewriting.
+
+Rules:
+- Every item in the proposal must have a non-pending status. If any
+  item is still pending, apply is rejected (409).
+- At least one item must be approved. A proposal with all items
+  rejected has nothing to apply (409).
+- The base version is the workbook's `latest_version_id` at the time
+  of apply. The new version is appended to the workbook.
+- Comment items are written as openpyxl Comment objects on their cell.
+- Add / update items write a value or a formula (formula if the value
+  starts with `=`).
+- Remove items clear the cell.
+"""
+from __future__ import annotations
+
+import io
+import re
+from dataclasses import dataclass
+
+from openpyxl import load_workbook as _load
+from openpyxl.comments import Comment
+
+from .domain import AuditEvent, Proposal, ProposalItem, WorkbookVersion, _now, _id
+from .store import Store
+
+CELL_REF = re.compile(r"^(?:'?(?P<sheet>[^'!]+)'?!)?(?P<col>[A-Z]+)(?P<row>\d+)$")
+
+
+class ApplyError(Exception):
+    """Raised when a proposal cannot be applied for a domain reason."""
+
+
+@dataclass
+class ApplyResult:
+    proposal: Proposal
+    version: WorkbookVersion
+    applied_item_ids: list[str]
+
+
+def _parse_cell(ref: str) -> tuple[str | None, str]:
+    """Return (sheet_name, A1_address). Sheet may be None for default sheet."""
+    match = CELL_REF.match(ref.strip())
+    if not match:
+        raise ApplyError(f"invalid cell reference: {ref!r}")
+    return match.group("sheet"), f"{match.group('col')}{match.group('row')}"
+
+
+def _select_sheet(book, sheet_name: str | None):
+    if sheet_name is None:
+        return book.active
+    if sheet_name not in book.sheetnames:
+        raise ApplyError(f"sheet {sheet_name!r} not found")
+    return book[sheet_name]
+
+
+def _write_item(book, item: ProposalItem) -> None:
+    sheet_name, address = _parse_cell(item.cell)
+    sheet = _select_sheet(book, sheet_name)
+    cell = sheet[address]
+    if item.kind == "comment":
+        cell.comment = Comment(item.after or item.rationale, "spreadbreadai")
+        return
+    if item.kind == "remove":
+        cell.value = None
+        return
+    value = item.after
+    if value is None:
+        return
+    if value.startswith("="):
+        cell.value = value
+    else:
+        try:
+            cell.value = float(value)
+        except ValueError:
+            cell.value = value
+
+
+def apply_proposal(store: Store, proposal_id: str, reviewer: str = "system") -> ApplyResult:
+    proposal = store.get_proposal(proposal_id)
+    if not proposal:
+        raise ApplyError(f"proposal {proposal_id} not found")
+    workbook = store.get_workbook(proposal.workbook_id)
+    if not workbook:
+        raise ApplyError(f"workbook {proposal.workbook_id} not found")
+
+    # idempotent short-circuit
+    if proposal.status == "applied" and proposal.applied_version_id:
+        existing_version = next(
+            (v for v in workbook.versions if v.id == proposal.applied_version_id), None
+        )
+        if existing_version:
+            return ApplyResult(proposal, existing_version, [i.id for i in proposal.items if i.status == "approved"])
+
+    pending = [i for i in proposal.items if i.status == "pending"]
+    if pending:
+        raise ApplyError(f"{len(pending)} item(s) still pending review")
+    approved = [i for i in proposal.items if i.status == "approved"]
+    if not approved:
+        raise ApplyError("no approved items to apply")
+
+    if not store.has_version_bytes(workbook.id, workbook.latest_version_id):
+        raise ApplyError("base workbook bytes missing — workbook was not uploaded")
+
+    base_bytes = store.load_version_bytes(workbook.id, workbook.latest_version_id)
+    book = _load(io.BytesIO(base_bytes), data_only=False, read_only=False)
+
+    for item in approved:
+        _write_item(book, item)
+
+    out = io.BytesIO()
+    book.save(out)
+    new_bytes = out.getvalue()
+
+    new_version_id = _id("wbv")
+    now = _now()
+    new_version = WorkbookVersion(
+        id=new_version_id,
+        created_at=now,
+        created_by=reviewer,
+        note=f"Applied proposal {proposal.id} ({len(approved)} item{'s' if len(approved) != 1 else ''})",
+    )
+    workbook.versions.append(new_version)
+    workbook.latest_version_id = new_version_id
+    workbook.status = "healthy"
+    store.save_workbook(workbook)
+    store.save_version_bytes(workbook.id, new_version_id, new_bytes)
+
+    proposal.status = "applied"
+    proposal.applied_version_id = new_version_id
+    proposal.applied_at = now
+    proposal.applied_by = reviewer
+    store.save_proposal(proposal)
+
+    store.append_audit(
+        AuditEvent(
+            workbook_id=workbook.id,
+            actor=reviewer,
+            action="proposal.applied",
+            detail=f"Applied {len(approved)} item(s) from {proposal.id}; new version {new_version_id}",
+        )
+    )
+    store.append_audit(
+        AuditEvent(
+            workbook_id=workbook.id,
+            actor="system",
+            action="version.created",
+            detail=f"Workbook version {new_version_id} created",
+        )
+    )
+
+    return ApplyResult(proposal, new_version, [i.id for i in approved])

@@ -81,4 +81,70 @@ def handle_review(ctx: Any, client: DaemonClient) -> None:  # pragma: no cover -
 
 
 def handle_apply(ctx: Any, client: DaemonClient) -> None:  # pragma: no cover - requires UNO
-    _show_message(ctx, "SpreadbreadAI", "Apply pipeline lands in Phase 3.")
+    try:
+        workbooks = client.list_workbooks()
+    except DaemonError as exc:
+        _show_message(ctx, "SpreadbreadAI", f"Daemon not reachable.\n\n{exc}")
+        return
+    if not workbooks:
+        _show_message(ctx, "SpreadbreadAI", "No workbooks. Run Review first.")
+        return
+
+    # Most recent workbook owns the active proposal in v0.1
+    wb = workbooks[0]
+    try:
+        snapshot = client.review_snapshot(wb["id"])
+    except DaemonError as exc:
+        _show_message(ctx, "SpreadbreadAI", f"Could not load review.\n\n{exc}")
+        return
+
+    proposal = snapshot.get("proposal") or {}
+    if not proposal:
+        _show_message(ctx, "SpreadbreadAI", "Nothing to apply: no proposal yet.")
+        return
+
+    approved = [i for i in proposal.get("items", []) if i.get("status") == "approved"]
+    if not approved:
+        _show_message(
+            ctx,
+            "SpreadbreadAI",
+            "No approved items. Approve at least one diff before applying.",
+        )
+        return
+
+    # Write approved cells into the active document for immediate UX.
+    calc = ActiveCalc(ctx)
+    written: list[str] = []
+    for item in approved:
+        if item.get("kind") == "comment":
+            continue
+        try:
+            value = item.get("after")
+            if value is None and item.get("kind") != "remove":
+                continue
+            calc.write_cell(item["cell"], "" if item.get("kind") == "remove" else str(value))
+            written.append(item["cell"])
+        except Exception as exc:
+            _show_message(ctx, "SpreadbreadAI", f"Could not write {item['cell']}: {exc}")
+            return
+
+    # Ask the daemon to commit a new canonical version.
+    try:
+        result = client.apply(proposal["id"])
+    except DaemonError as exc:
+        _show_message(
+            ctx,
+            "SpreadbreadAI",
+            f"Cells written to active sheet but daemon apply failed.\n\n{exc}",
+        )
+        return
+
+    version = result.get("version", {})
+    _show_message(
+        ctx,
+        "SpreadbreadAI",
+        f"Applied {len(approved)} item(s).\n"
+        f"Wrote into active sheet: {', '.join(written) or '(none)'}\n"
+        f"New canonical version: {version.get('id')}\n"
+        f"Note: {version.get('note')}",
+    )

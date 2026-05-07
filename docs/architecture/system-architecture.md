@@ -83,6 +83,7 @@ Local HTTP (FastAPI), `127.0.0.1:8765`:
 - `GET  /api/workbooks/{id}/review`
 - `POST /api/workbooks/{id}/chat`
 - `POST /api/proposals/{proposal_id}/items/{item_id}/decision`
+- `POST /api/proposals/{proposal_id}/apply`
 - `GET  /api/tools`
 
 MCP stdio: planned, will mirror the tool catalog.

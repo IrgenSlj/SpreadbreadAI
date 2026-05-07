@@ -59,6 +59,13 @@ class DaemonClient:
             {"decision": decision, "reviewer": reviewer, "comment": comment},
         )
 
+    def apply(self, proposal_id: str, reviewer: str = "user") -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/api/proposals/{proposal_id}/apply",
+            {"reviewer": reviewer},
+        )
+
     def upload_workbook(self, file_path: str) -> dict[str, Any]:
         """Upload via multipart/form-data using stdlib only.
 

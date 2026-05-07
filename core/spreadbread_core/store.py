@@ -47,8 +47,29 @@ class Store:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.workbooks_dir = db_path.parent / "workbooks"
+        self.workbooks_dir.mkdir(parents=True, exist_ok=True)
         with self._conn() as cx:
             cx.executescript(SCHEMA)
+
+    # --- workbook bytes -----------------------------------------------
+    def _version_path(self, workbook_id: str, version_id: str) -> Path:
+        return self.workbooks_dir / workbook_id / f"{version_id}.xlsx"
+
+    def save_version_bytes(self, workbook_id: str, version_id: str, data: bytes) -> Path:
+        path = self._version_path(workbook_id, version_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def load_version_bytes(self, workbook_id: str, version_id: str) -> bytes:
+        path = self._version_path(workbook_id, version_id)
+        if not path.exists():
+            raise FileNotFoundError(f"version bytes missing: {path}")
+        return path.read_bytes()
+
+    def has_version_bytes(self, workbook_id: str, version_id: str) -> bool:
+        return self._version_path(workbook_id, version_id).exists()
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:

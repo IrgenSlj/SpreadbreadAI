@@ -105,23 +105,29 @@ From repo root:
   same store interface.
 - Workbook parsing is structural: formula counts, sample rows, no
   evaluation. LibreOffice / Excel evaluate formulas.
-- Apply pipeline (write a new `.xlsx` from approved diffs) is not yet
-  implemented — see development plan Phase 3.
-- LibreOffice extension is scaffolded as a directory; the UNO component
-  is next — see development plan Phase 2.
+- Apply pipeline lives in `core/spreadbread_core/apply.py` and is wired
+  to `POST /api/proposals/{id}/apply`. Idempotent, guarded against
+  pending items, writes a new `.xlsx` version under
+  `core/.data/workbooks/<workbook_id>/<version_id>.xlsx` and emits
+  `proposal.applied` + `version.created` audit events.
+- LibreOffice extension v0.1 UI is a message box; the real `.ui` sidebar
+  with per-item approve / reject is the next slice (development plan
+  Phase 2.5).
 - No auth, no tenancy. Single-user local install.
 
 ## Recommended Next Steps
 
 In order:
 
-1. Scaffold the LibreOffice extension (`extension/`): manifest, Python
-   UNO component, daemon HTTP client, sidebar stub.
-2. Implement the apply pipeline (`POST /api/proposals/{id}/apply`).
-3. Add Calc bridge in the extension to write approved diffs to the
-   active sheet.
-4. Enrich the parser (dependency graph, stale inputs, named ranges).
-5. Expose the tool catalog over MCP stdio for external agent clients.
+1. Replace the v0.1 message-box sidebar with a real `.ui`-defined panel
+   that renders diff cards with per-item approve / reject buttons.
+2. Add conflict detection: if the active workbook diverges from the
+   version a proposal was generated against, refuse apply with a clear
+   error.
+3. Enrich the parser (dependency graph, stale inputs, named ranges,
+   external reference drift).
+4. Expose the tool catalog over MCP stdio for external agent clients.
+5. Package: `pipx`-installable daemon, signed `.oxt` releases.
 
 ## Current Git State Expectation
 

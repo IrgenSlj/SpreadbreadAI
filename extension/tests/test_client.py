@@ -33,6 +33,11 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path.endswith("/chat"):
             _Handler.state["last_chat"] = json.loads(body.decode("utf-8"))
             self._json(200, {"reply": "ok", "rounds": 1, "tool_calls": []})
+        elif self.path.endswith("/apply"):
+            _Handler.state["last_apply"] = json.loads(body.decode("utf-8"))
+            self._json(200, {"proposal": {"id": "p1", "status": "applied"},
+                              "version": {"id": "wbv_001"},
+                              "applied_item_ids": ["i1"]})
         else:
             self._json(404, {"error": "not found"})
 
@@ -69,6 +74,15 @@ def test_chat(server):
     result = client.chat("wb_1", "review please")
     assert result["reply"] == "ok"
     assert _Handler.state["last_chat"] == {"message": "review please"}
+
+
+def test_apply(server):
+    port = server.server_address[1]
+    client = DaemonClient(base_url=f"http://127.0.0.1:{port}")
+    result = client.apply("p1", reviewer="finance")
+    assert result["proposal"]["status"] == "applied"
+    assert result["version"]["id"] == "wbv_001"
+    assert _Handler.state["last_apply"] == {"reviewer": "finance"}
 
 
 def test_unreachable():
