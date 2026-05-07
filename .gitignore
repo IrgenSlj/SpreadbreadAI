@@ -24,3 +24,5 @@ core/build/
 # LibreOffice extension build artifacts
 extension/build/
 extension/*.oxt
+extension/**/__pycache__/
+extension/**/*.pyc
