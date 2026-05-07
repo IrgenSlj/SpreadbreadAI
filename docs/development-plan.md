@@ -16,13 +16,11 @@ write.
 
 The original prototype was a Node + React web app with an MCP server.
 That prototype proved the domain model but missed the place where finance
-users actually live: inside their spreadsheet. The product is being
-rebuilt as a **LibreOffice Calc plugin** backed by a small **local Python
-daemon** that runs **free local LLMs** by default (Gemma 4 E2B via
-Ollama).
-
-The legacy Node + React code is preserved under `legacy/` for reference
-and is no longer the supported runtime.
+users actually live: inside their spreadsheet. The product was rebuilt
+as a **LibreOffice Calc plugin** backed by a small **local Python daemon**
+running **free local LLMs** by default (Gemma 4 E2B via Ollama). The
+prior Node + React code has been removed; the current shape is the
+canonical one.
 
 ## Target Architecture
 
@@ -66,16 +64,16 @@ and is no longer the supported runtime.
 ### Repository layout
 
 ```text
-core/                   Python daemon (current home of the rewrite)
-  spreadbread_core/     domain, store, parser, tools, llm, http, config
+core/                   Python daemon (FastAPI + SQLite + Ollama)
+  spreadbread_core/     domain, store, parser, tools, llm, apply, http, config
   tests/                pytest suites (unit + live LLM)
   pyproject.toml
 extension/              LibreOffice .oxt extension (Python UNO)
-  manifest/             META-INF, Description.xml, Addons.xcu, Sidebar.xcu
-  python/               UNO component code
+  manifest/             META-INF, description, Addons.xcu, ProtocolHandler.xcu
+  python/               UNO component + spreadbreadai package
+  tests/                pytest unit tests
   build.sh              packages → .oxt
 docs/                   product, architecture, ADRs, runbooks, this plan
-legacy/                 frozen Node + React prototype (reference only)
 ```
 
 ## How the LLM Does Work
@@ -171,7 +169,7 @@ Loop:
 
 - Optional shared-daemon deployment for small teams.
 - Postgres driver behind the same store interface.
-- Reviewer profiles, RBAC, scoped access (port from legacy).
+- Reviewer profiles, RBAC, scoped access.
 - Notification feed.
 
 ## Non-Goals (for the MVP)

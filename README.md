@@ -21,13 +21,14 @@ it cannot apply.
 
 ## Project status
 
-- ✅ **Core daemon scaffold landed** — domain model, SQLite store, xlsx
-  parser, tool registry, Ollama tool-calling loop, FastAPI HTTP API,
-  pytest suites including a live Gemma 4 E2B integration test.
-- 🚧 **LibreOffice extension** — scaffolding next.
+- ✅ **Core daemon** — domain model, SQLite store, xlsx parser, tool
+  registry, Ollama tool-calling loop, FastAPI HTTP API, apply pipeline.
+- ✅ **LibreOffice extension v0.1** — Python UNO plugin with daemon
+  client, Calc bridge, and `.oxt` build script.
+- ✅ **Apply pipeline** — approved diffs commit a new canonical `.xlsx`
+  version, idempotent and audited.
+- 🚧 **Real sidebar UI** — replacing the v0.1 message-box review surface.
 - 📚 **Development plan:** [`docs/development-plan.md`](docs/development-plan.md).
-- 🗄️ **Legacy Node + React prototype:** preserved under
-  [`legacy/`](legacy/) for reference. No longer the supported runtime.
 
 ## Quick start
 
@@ -58,10 +59,9 @@ cd core && .venv/bin/pip install pytest
 ## Repository layout
 
 ```text
-core/         Python daemon — domain, store, parser, tools, llm, http
-extension/    LibreOffice .oxt plugin (in progress)
+core/         Python daemon — domain, store, parser, tools, llm, apply, http
+extension/    LibreOffice .oxt plugin (Python UNO)
 docs/         development plan, product, architecture, ADRs, runbooks
-legacy/       frozen Node + React prototype (reference only)
 ```
 
 ## Documentation

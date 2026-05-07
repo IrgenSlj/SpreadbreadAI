@@ -24,7 +24,7 @@ This is a high-level view of phases. Detail and rationale live in
 - Optional small web review UI for users without LibreOffice.
 - Excel add-in reusing the same daemon.
 - Multi-user deployment behind a Postgres driver.
-- Reviewer profiles, RBAC, scoped access (port from legacy).
+- Reviewer profiles, RBAC, scoped access.
 
 ## Non-goals
 

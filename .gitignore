@@ -10,9 +10,6 @@ coverage
 *.log
 *.tsbuildinfo
 
-# Legacy Node prototype runtime data
-legacy/apps/mcp-server/.data/
-
 # Python core
 core/.venv/
 core/.data/

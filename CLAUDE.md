@@ -20,24 +20,28 @@ target architecture.
 core/                   Python daemon (FastAPI + SQLite + Ollama)
   spreadbread_core/
     domain.py           Pydantic models — Workbook, Proposal, Item, Audit
-    store.py            SQLite repository
+    store.py            SQLite repository + xlsx version bytes
     parser.py           openpyxl-based .xlsx parser
     tools.py            tool registry exposed to the LLM
     llm.py              Ollama tool-calling loop
+    apply.py            apply pipeline (approved diffs → new version)
     http.py             FastAPI app + uvicorn entry
     config.py
   tests/                pytest suites (unit + live LLM)
   pyproject.toml
-extension/              LibreOffice .oxt plugin (Python UNO) — in progress
+extension/              LibreOffice .oxt plugin (Python UNO)
+  manifest/             META-INF, description, Addons.xcu, ProtocolHandler.xcu
+  python/               main.py + spreadbreadai/ (client, sidebar, calc_bridge)
+  tests/                pytest tests for the client and cell parser
+  build.sh              packages → spreadbreadai.oxt
 docs/                   product, architecture, ADRs, runbooks, plan
-legacy/                 frozen Node + React prototype (reference only)
 ```
 
 ## What Exists Today
 
 ### Core daemon (`core/`)
 
-- **Domain model** in Pydantic, ported from the legacy TypeScript types.
+- **Domain model** in Pydantic — `Workbook`, `Proposal`, `ProposalItem`, `AuditEvent`.
 - **SQLite store** — single backend, no Postgres, no dual-store split.
 - **xlsx parser** with openpyxl: sheet metadata, formula counts, sample
   rows, seeded risks.
@@ -63,12 +67,6 @@ Write tools (stage a pending proposal item; never mutate a workbook):
 
 The registry enforces this split. The model has no path to a real write.
 
-### Legacy (`legacy/`)
-
-The Node + React prototype lives here for reference. It is not built or
-tested by the current setup. Do not extend it. Port useful logic into
-the Python core when needed.
-
 ## Working Rules For Future Agents
 
 - Read [`docs/development-plan.md`](docs/development-plan.md) first.
@@ -80,9 +78,7 @@ the Python core when needed.
   before adding ad-hoc shapes elsewhere.
 - Keep runtime data out of git. `core/.data/` and `core/.venv/` are
   ignored.
-- Do not edit files in `legacy/`. Port forward, do not maintain backward.
-- One language per layer: Python in `core/` and `extension/`. No TypeScript
-  outside `legacy/`.
+- One language across the stack: Python in `core/` and `extension/`.
 
 ## Useful Verification Commands
 

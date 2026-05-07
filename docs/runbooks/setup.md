@@ -61,8 +61,3 @@ In progress. See [`extension/README.md`](../../extension/README.md) and
 Delete `core/.data/` to wipe the SQLite database and uploaded workbooks.
 The directory is gitignored.
 
-## Legacy prototype
-
-The old Node + React prototype is preserved under `legacy/` for
-reference. It is not built or tested by this setup. See
-[`legacy/README.md`](../../legacy/README.md).

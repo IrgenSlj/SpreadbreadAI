@@ -32,7 +32,6 @@ If a change makes that rule weaker, do not ship it.
 - `core/` — Python daemon. New domain types, tools, and APIs.
 - `extension/` — LibreOffice plugin. UNO component, sidebar UI.
 - `docs/` — product, architecture, ADRs, runbooks, the development plan.
-- `legacy/` — read-only. Port forward, do not extend.
 
 ## Commit guidance
 
