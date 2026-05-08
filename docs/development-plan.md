@@ -122,6 +122,17 @@ Loop:
 - 🚧 Real sidebar `.ui` panel with per-item approve / reject (replaces
   the v0.1 message-box UI).
 
+### Phase 2.5 — End-to-end user-test affordances (status: ✅ landed)
+
+- ✅ `POST /api/proposals/{id}/approve-all` flips all pending items to
+  approved with a single reviewer name (still HITL: an approver clicks
+  the button).
+- ✅ Three-step LibreOffice menu (Review → Approve all → Apply) so the
+  full loop works without curl.
+- ✅ Confirmation dialog with item preview before bulk approval.
+- ✅ HTTP-level pytest coverage to guard against the FastAPI / Pydantic
+  forward-ref body-resolution trap (`test_http.py`).
+
 ### Phase 3 — Apply Pipeline (status: ✅ landed)
 
 - ✅ Daemon endpoint `POST /api/proposals/{id}/apply` produces a new

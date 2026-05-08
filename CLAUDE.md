@@ -67,6 +67,21 @@ Write tools (stage a pending proposal item; never mutate a workbook):
 
 The registry enforces this split. The model has no path to a real write.
 
+### Known traps
+
+- **Do not add `from __future__ import annotations` to
+  `core/spreadbread_core/http.py`.** FastAPI / Pydantic build schemas
+  eagerly from the route signatures; stringified ForwardRef annotations
+  break body-model resolution (Pydantic raises class-not-fully-defined
+  and FastAPI silently falls back to treating the body as a query
+  param). `tests/test_http.py` guards against this regression.
+- **`pip install -e .` may install non-editable on some pip /
+  setuptools combos.** If your edits to `core/spreadbread_core/*.py`
+  don't take effect when running the daemon, check
+  `.venv/lib/python3.X/site-packages/spreadbread_core-0.1.0.dist-info/direct_url.json`
+  for `"editable": true`. If missing, reinstall with
+  `pip install -e . --config-settings editable_mode=compat`.
+
 ## Working Rules For Future Agents
 
 - Read [`docs/development-plan.md`](docs/development-plan.md) first.

@@ -53,8 +53,26 @@ Environment variables, all optional:
 
 ## LibreOffice extension
 
-In progress. See [`extension/README.md`](../../extension/README.md) and
-[`docs/development-plan.md`](../development-plan.md) Phase 2.
+Build the `.oxt`:
+
+```bash
+cd extension && ./build.sh
+unopkg add spreadbreadai.oxt
+```
+
+After restarting LibreOffice, the **SpreadbreadAI** menu appears in
+Calc with three numbered actions:
+
+1. *Review with SpreadbreadAI* — uploads the active workbook and asks
+   Gemma 4 to draft proposal items.
+2. *Approve all pending items* — opens a confirmation dialog listing
+   the staged diffs. This is the human-in-the-loop step.
+3. *Apply approved diffs* — writes approved cells into the active sheet
+   and commits a new canonical version on the daemon side.
+
+The extension expects the daemon at `http://127.0.0.1:8765`. Override
+with the `SPREADBREAD_DAEMON` environment variable in LibreOffice's
+launch environment if you need a non-default address.
 
 ## Resetting local state
 

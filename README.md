@@ -67,6 +67,50 @@ cd extension && ./build.sh             # produces spreadbreadai.oxt
 unopkg add spreadbreadai.oxt
 ```
 
+> If `pip install -e .` ever produces a non-editable install (rare; depends
+> on your pip / setuptools combo), force editable mode:
+> `pip install -e . --config-settings editable_mode=compat`.
+
+## Your first test (5 minutes)
+
+Once the daemon is running and the extension is installed, the loop is
+three menu clicks:
+
+1. Open any `.xlsx` workbook in LibreOffice Calc and save it to disk.
+2. **SpreadbreadAI → 1. Review with SpreadbreadAI**
+   The extension uploads the file, asks Gemma 4 to inspect it, and shows
+   the staged proposal items in a message box. Items are `pending`.
+3. **SpreadbreadAI → 2. Approve all pending items**
+   A confirmation dialog lists the diffs. Click *Yes* to flip them all
+   to `approved`. (This is your human-in-the-loop checkpoint — nothing
+   has touched your workbook yet.)
+4. **SpreadbreadAI → 3. Apply approved diffs**
+   The extension writes the approved cells into the active sheet and
+   the daemon commits a new canonical `.xlsx` version under
+   `core/.data/workbooks/<workbook_id>/`. The audit trail records every
+   step.
+
+If you prefer to drive it from a terminal instead of LibreOffice, use
+the [HTTP API](docs/architecture/system-architecture.md#api-surface):
+
+```bash
+# 1. upload
+WB=$(curl -s -F "file=@/tmp/sample.xlsx" \
+  http://127.0.0.1:8765/api/workbooks/upload | jq -r .id)
+# 2. ask Gemma 4 to review
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"message":"review this workbook"}' \
+  "http://127.0.0.1:8765/api/workbooks/$WB/chat"
+# 3. find the proposal, approve all pending, apply
+PROP=$(curl -s "http://127.0.0.1:8765/api/workbooks/$WB/review" | jq -r .proposal.id)
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"decision":"approve","reviewer":"me"}' \
+  "http://127.0.0.1:8765/api/proposals/$PROP/approve-all"
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"reviewer":"me"}' \
+  "http://127.0.0.1:8765/api/proposals/$PROP/apply"
+```
+
 Sanity-check it:
 
 ```bash
