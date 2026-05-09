@@ -1,8 +1,8 @@
 # SpreadbreadAI LibreOffice Extension
 
-A Python UNO extension that turns LibreOffice Calc into a human-in-the-loop
-AI review surface. The extension is a thin sidebar — all logic lives in the
-core daemon at `127.0.0.1:8765`.
+A Python UNO extension that surfaces SpreadbreadAI inside LibreOffice
+Calc. The extension is a thin client; all logic lives in the daemon
+at `127.0.0.1:8765`.
 
 ## Status
 

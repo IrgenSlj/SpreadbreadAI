@@ -4,37 +4,64 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/IrgenSlj/SpreadbreadAI?include_prereleases&sort=semver)](https://github.com/IrgenSlj/SpreadbreadAI/releases)
 
-> Open-source, human-in-the-loop AI review for spreadsheets.
-> Runs locally on free LLMs. Lives inside LibreOffice Calc.
+SpreadbreadAI is an open-source spreadsheet AI assistant with
+human-in-the-loop controls, built for enterprise and professional use.
+It runs locally on free LLMs, inspects and edits workbooks through a
+defined tool catalog, and produces a versioned audit trail of every
+change.
 
-SpreadbreadAI is **not** chat-with-spreadsheet. It is a governed control
-plane: AI inspects workbooks, drafts proposals, and explains its
-reasoning — humans review every diff and approve every write.
+It ships as a LibreOffice Calc plugin and a local daemon. External
+agents (Claude Desktop, Cursor, VS Code, Codex) can drive the same
+toolset over MCP.
 
-## Architecture at a glance
+## What it does
 
-- **LibreOffice Calc plugin** (`extension/`) — Python UNO sidebar that
-  reviewers use right next to their cells.
-- **Local Python daemon** (`core/`) — FastAPI + SQLite, owns workbooks,
-  proposals, diffs, and the audit trail. Runs on `127.0.0.1:8765`.
-- **Local LLM by default** — Gemma 4 E2B via Ollama, with tool calling
-  so the model can read workbooks and stage proposals (but never write).
+- Parses uploaded `.xlsx` workbooks and surfaces structural risks.
+- Lets a local LLM read sheets, list risks, and stage proposed edits.
+- Routes every write through an explicit approval and an immutable,
+  versioned `.xlsx` snapshot.
+- Records an append-only audit trail of every tool call, decision,
+  and applied change.
+- Runs fully offline by default; cloud LLMs are opt-in.
 
-The model has the same permissions as a junior analyst: it can suggest;
-it cannot apply.
+## Architecture
 
-## Project status
+- `extension/` — LibreOffice Calc plugin (Python UNO). Three menu
+  actions cover the full Review → Approve → Apply loop.
+- `core/` — Python daemon (FastAPI + SQLite + openpyxl) on
+  `127.0.0.1:8765`. Owns workbooks, proposals, diffs, and audit
+  events.
+- LLM layer — Ollama with `gemma4:e2b` by default; the adapter is
+  pluggable for larger local models or cloud providers.
+- MCP server — `spreadbread-mcp` exposes the same tool registry over
+  stdio for external AI clients.
 
-- **Core daemon (landed)** — domain model, SQLite store, xlsx parser,
-  tool registry, Ollama tool-calling loop, FastAPI HTTP API, apply
-  pipeline.
-- **LibreOffice extension v0.1 (landed)** — Python UNO plugin with
-  daemon client, Calc bridge, and `.oxt` build script.
-- **Apply pipeline (landed)** — approved diffs commit a new canonical
-  `.xlsx` version, idempotent and audited.
-- **In progress** — real sidebar UI to replace the v0.1 message-box
-  review surface; conflict detection; multi-LLM adapter.
-- **Development plan**: [`docs/development-plan.md`](docs/development-plan.md).
+## Tool catalog
+
+Read tools (no side effects): `list_workbooks`, `get_review_snapshot`,
+`inspect_sheet`, `list_risks`. Write-staging tools (create pending
+proposal items, never mutate workbooks directly): `propose_diff`,
+`add_comment`. The registry enforces this split — there is no tool
+the LLM can call that bypasses the approval pipeline.
+
+## Status
+
+Landed in `v0.1.2`:
+
+- Core daemon: domain model, SQLite store, xlsx parser, tool registry,
+  Ollama tool-calling loop, FastAPI HTTP API.
+- Apply pipeline with conflict detection, sha256 base-bytes guard, and
+  idempotent re-apply.
+- LibreOffice extension v0.1 with the Review → Approve → Apply menu.
+- MCP stdio server (`spreadbread-mcp`) for external AI clients.
+- Single shared cell-reference parser covering absolute refs, ranges,
+  quoted sheet names, and named-range identifiers.
+
+In progress: real sidebar UI to replace the message-box review
+surface, multi-LLM adapter (Gemini / OpenAI / Anthropic), expanded
+parser intelligence (dependency graphs, stale-input detection).
+See [`docs/development-plan.md`](docs/development-plan.md) for the
+phased plan.
 
 ## Install
 
@@ -195,6 +222,8 @@ Apache 2.0. See [`LICENSE`](LICENSE).
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md),
-and [`SECURITY.md`](SECURITY.md). The single hardest rule:
-no write path may bypass human approval.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md),
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and
+[`SECURITY.md`](SECURITY.md). Every contribution is expected to
+preserve the approval and audit guarantees that the registry, store,
+and apply pipeline enforce.

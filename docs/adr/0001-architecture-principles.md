@@ -14,21 +14,23 @@ LibreOffice Calc plugin backed by a local Python daemon.
 
 ## Decisions
 
-1. **Human-in-the-loop is non-negotiable.** No tool path may mutate a
-   workbook without human approval. Enforced in the tool registry, not
-   in the prompt.
-2. **The platform owns policy, audit, and versioning.** Models are
-   replaceable; the platform is the source of truth.
-3. **Local-first.** The default install runs fully offline with
-   Gemma 4 E2B via Ollama. Cloud models are opt-in.
-4. **Model-agnostic.** The LLM adapter exposes one interface; Gemma,
-   Qwen, Llama, and cloud providers are interchangeable.
-5. **Workbook versions are immutable.** Apply produces a new version;
+1. Human-in-the-loop approval is enforced at the tool registry, not
+   in the prompt. Write tools stage proposal items only; `apply` is
+   the single code path that mutates workbook state and requires
+   approved items.
+2. The platform owns policy, audit, and versioning. Models are
+   replaceable; the platform is the system of record.
+3. Local-first by default. The default install runs fully offline
+   using Ollama with Gemma 4 E2B. Cloud LLMs are opt-in.
+4. Model-agnostic LLM layer. The adapter exposes one interface so
+   Gemma, Qwen, Llama, and cloud providers are interchangeable.
+5. Workbook versions are immutable. `apply` produces a new version;
    it never edits in place.
-6. **MCP is the agent integration boundary** — Claude Code, Codex, and
-   other clients connect through the same tool catalog the local LLM
-   uses.
-7. **The sketchpad is deferred** until the core review loop is loved.
+6. MCP is the integration boundary for external AI clients. Claude
+   Desktop, Cursor, VS Code agents, and Codex connect through the
+   same tool catalog the local LLM uses.
+7. The sketchpad is deferred until the core review and apply loop is
+   stable and adopted.
 
 ## Consequences
 

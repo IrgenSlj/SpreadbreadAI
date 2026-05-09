@@ -1,51 +1,57 @@
 # Contributing
 
-## The hard rule
+Thanks for considering a contribution. SpreadbreadAI is an
+open-source spreadsheet AI assistant intended for professional and
+enterprise use; the bar is correctness, traceability, and
+predictability.
 
-No write path may bypass human approval. Tools that look like writes
-(`propose_diff`, `add_comment`, future apply tools) must stage items
-for an approver. The model is a junior analyst, not an admin.
+## Approval and audit guarantees
 
-If a change makes that rule weaker, do not ship it.
+Every change must preserve these:
 
-## Principles
+1. The LLM has read tools and write-staging tools only. There is no
+   tool path that mutates a workbook directly.
+2. `apply` is the single code path that produces a new workbook
+   version, and it requires approved items.
+3. Every state transition writes an audit event.
+4. Workbook versions are immutable; updates create new versions.
 
-- Human-in-the-loop is the product, not a feature.
-- Prefer deterministic behavior over opaque automation.
-- Auditability is mandatory: every state transition writes an audit
-  event.
-- Open source and offline-first by default. Cloud LLMs are an option,
-  not a requirement.
+If a change weakens any of these, it does not ship.
 
 ## Workflow
 
-1. Open an issue or write a short proposal for any non-trivial change.
-2. Read [`docs/development-plan.md`](docs/development-plan.md). If your
+1. Open an issue or a short proposal before non-trivial work.
+2. Read [`docs/development-plan.md`](docs/development-plan.md). If the
    change shifts a phase, update that document in the same PR.
-3. Keep PRs focused — one slice, one concern.
-4. Add or update tests for behavior changes. Live LLM tests should skip
+3. Keep PRs focused on one concern.
+4. Add or update tests for behavior changes. Live LLM tests must skip
    gracefully when Ollama is unreachable.
-5. Update `CLAUDE.md` when the layout, commands, or constraints change.
+5. Update `CLAUDE.md` when the layout, commands, or constraints
+   change.
 
-## Where work happens
+## Where work lives
 
-- `core/` — Python daemon. New domain types, tools, and APIs.
-- `extension/` — LibreOffice plugin. UNO component, sidebar UI.
-- `docs/` — product, architecture, ADRs, runbooks, the development plan.
+- `core/` — Python daemon. Domain types, tools, store, apply, MCP.
+- `extension/` — LibreOffice Calc plugin. UNO component and sidebar.
+- `docs/` — product, architecture, ADRs, runbooks, development plan.
 
 ## Commit guidance
 
-- Small, focused commits. Mention the affected subsystem in the message.
-- Document follow-ups in the PR description, not in half-finished code.
+- Small, focused commits. Reference the affected subsystem in the
+  subject line.
+- Document follow-up work in the PR description, not in half-finished
+  code.
 
 ## Definition of done
 
-- behavior is implemented in the right layer
-- tests cover the new behavior or risk area
-- docs are updated when needed (README, CLAUDE.md, development plan)
-- the human-in-the-loop guarantee is intact
+- The behavior lands in the right layer.
+- Tests cover the new behavior and the risk areas it touches.
+- `README.md`, `CLAUDE.md`, and the development plan are updated when
+  the change affects layout, commands, or constraints.
+- Approval and audit guarantees remain intact.
 
 ## Security
 
-Never commit secrets, production credentials, or customer workbook data.
-Local data lives under `core/.data/` and is gitignored.
+Do not commit secrets, production credentials, or customer workbook
+data. Local data lives under `core/.data/` and is gitignored. See
+[`SECURITY.md`](SECURITY.md) for how to report a vulnerability.

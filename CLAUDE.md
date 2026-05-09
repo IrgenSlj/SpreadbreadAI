@@ -1,18 +1,22 @@
 # SpreadbreadAI Agent Handoff
 
-## Mission
+## Project summary
 
-SpreadbreadAI is an open-source, human-in-the-loop spreadsheet operations
-platform. The product is a governed control plane where AI inspects
-workbooks, drafts proposals, and humans review and approve every write.
+SpreadbreadAI is an open-source spreadsheet AI assistant for
+enterprise and professional use. It combines agentic LLM tool calling
+with human-in-the-loop approval, immutable workbook versioning, and an
+append-only audit trail. The current implementation ships as a
+LibreOffice Calc plugin and a local Python daemon. External AI clients
+(Claude Desktop, Cursor, VS Code, Codex) can also drive the same tool
+catalog over MCP.
 
-The current focus is **LibreOffice Calc as the primary surface** with a
-**local Python daemon** running **free local LLMs** (Gemma 4 E2B by
-default via Ollama).
+Default LLM is `gemma4:e2b` via Ollama; the adapter is pluggable so
+larger local models or cloud providers can be added without changing
+the rest of the stack.
 
 Read [`docs/development-plan.md`](docs/development-plan.md) before
-starting work — it is the source of truth for phases, decisions, and the
-target architecture.
+starting work. It is the source of truth for phases, decisions, and
+the target architecture.
 
 ## Repository Layout
 

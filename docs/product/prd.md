@@ -2,15 +2,19 @@
 
 ## Product
 
-SpreadbreadAI — open-source, human-in-the-loop AI review for
-spreadsheets, delivered as a LibreOffice Calc plugin backed by a local
-daemon and free LLMs.
+SpreadbreadAI is an open-source spreadsheet AI assistant for
+enterprise and professional use. It pairs agentic LLM tool calling
+with human-in-the-loop approval, immutable workbook versioning, and an
+append-only audit trail. Delivered as a LibreOffice Calc plugin and a
+local Python daemon, with MCP support for external AI clients.
 
 ## Positioning
 
-A governed AI review surface that lives where finance users already
-work. The model can read the workbook, list risks, and stage proposed
-changes; humans approve every write.
+An agentic spreadsheet assistant that reviewers and operators can
+trust with business-critical workbooks. The LLM works inside a defined
+tool catalog: it inspects sheets, lists risks, and stages proposed
+edits. Humans approve changes; the daemon writes a new versioned copy
+of the workbook and records every step.
 
 ## Target Users
 
@@ -20,12 +24,13 @@ changes; humans approve every write.
 
 ## Primary User Problems
 
-- workbook logic is hard to review and easy to break
-- spreadsheet changes are hard to trace and approve
-- formula and reference errors are common and expensive
-- generic AI copilots are not trusted to write to business-critical
-  workbooks
-- cloud-only AI tooling is a non-starter for finance data in many orgs
+- Workbook logic is hard to review and easy to break.
+- Spreadsheet changes are hard to trace and approve at scale.
+- Formula and reference errors are common and expensive.
+- Generic AI copilots offer no controls strong enough for
+  business-critical workbooks.
+- Cloud-only AI tooling is unsuitable for finance and operations data
+  in regulated organizations.
 
 ## MVP Scope
 
@@ -73,11 +78,15 @@ changes; humans approve every write.
 
 ## Differentiation
 
-- approval-first AI workflow that lives inside the spreadsheet
-- workbook diff and lineage as first-class product concepts
-- works fully offline on free local LLMs
-- model-agnostic — local Gemma / Qwen / Llama or cloud Claude / GPT /
-  Gemini, swappable in one setting
+- Agentic LLM tool calling combined with explicit approval and an
+  immutable audit trail.
+- Workbook diffs and version lineage are first-class objects, not
+  dressed-up chat history.
+- Runs fully offline on a free local model by default.
+- Model-agnostic LLM layer: local Gemma / Qwen / Llama or cloud
+  Claude / GPT / Gemini, swappable through the adapter.
+- MCP server lets users' existing AI tools (Claude Desktop, Cursor,
+  VS Code) drive the same workflow.
 
 ## Risks
 

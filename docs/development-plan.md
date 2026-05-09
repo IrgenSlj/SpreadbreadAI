@@ -4,23 +4,25 @@ This document is the source of truth for what we are building, why, and in
 what order. It supersedes the earlier `docs/architecture/implementation-plan.md`
 and `docs/product/roadmap.md` for execution detail.
 
-## Mission
+## Project summary
 
-SpreadbreadAI is an open-source, human-in-the-loop spreadsheet operations
-platform. The product is **not** a generic chat-with-spreadsheet bot. It is
-a governed control plane where AI inspects workbooks, drafts proposals,
-and explains its reasoning — while humans review diffs and approve every
-write.
+SpreadbreadAI is an open-source spreadsheet AI assistant for enterprise
+and professional use. The product combines agentic LLM tool calling
+with human-in-the-loop approval, immutable workbook versioning, and an
+append-only audit trail. The LLM works through a fixed tool catalog
+that separates read access from write-staging; the daemon owns every
+state transition.
 
-## Strategic Pivot (2026-05)
+## Current shape (May 2026)
 
-The original prototype was a Node + React web app with an MCP server.
-That prototype proved the domain model but missed the place where finance
-users actually live: inside their spreadsheet. The product was rebuilt
-as a **LibreOffice Calc plugin** backed by a small **local Python daemon**
-running **free local LLMs** by default (Gemma 4 E2B via Ollama). The
-prior Node + React code has been removed; the current shape is the
-canonical one.
+The implementation ships as a LibreOffice Calc plugin and a local
+Python daemon. External AI clients (Claude Desktop, Cursor, VS Code,
+Codex) drive the same tool catalog over MCP. Default model is Gemma 4
+E2B via Ollama; the LLM adapter is pluggable.
+
+An earlier Node + React prototype proved the domain model but lived
+outside the spreadsheet. It has been retired; the LibreOffice plugin
+plus local daemon is the canonical shape.
 
 ## Target Architecture
 
