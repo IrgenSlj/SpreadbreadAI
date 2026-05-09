@@ -3,7 +3,7 @@ name = "spreadbreadai-extension"
 version = "0.1.2"
 description = "LibreOffice Calc extension for SpreadbreadAI (Python UNO)"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 authors = [{ name = "SpreadbreadAI contributors" }]
 keywords = ["libreoffice", "calc", "uno", "extension", "spreadsheet", "ai"]

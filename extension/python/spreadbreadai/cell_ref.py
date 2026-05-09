@@ -1,18 +1,23 @@
 """Cell reference parser used by the LibreOffice extension's Calc bridge.
 
-This module is a vendored copy of core/spreadbread_core/cell_ref.py.
-The extension is shipped as a self-contained .oxt and cannot import
-from the daemon's package, so we duplicate the file. Both copies must
-stay in sync — there is a CI guard for this in .github/workflows/ci.yml.
+Vendored copy of core/spreadbread_core/cell_ref.py. The extension is
+shipped as a self-contained .oxt and cannot import from the daemon's
+package, so the file is duplicated. Both copies must stay in sync —
+CI guards drift in .github/workflows/ci.yml.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional
 
+# A1-style address with optional absolute markers.
 _A1 = r"\$?[A-Z]+\$?\d+"
+
+# Sheet portion: either a quoted name (allowing anything but a closing
+# quote) or an unquoted identifier.
 _SHEET = r"(?:'(?P<qsheet>[^']+)'|(?P<sheet>[^'!:$\d][^'!:$]*))"
+
 _SINGLE = re.compile(rf"^(?:{_SHEET}!)?(?P<addr>{_A1})$")
 _RANGE = re.compile(rf"^(?:{_SHEET}!)?(?P<a>{_A1}):(?P<b>{_A1})$")
 _NAMED = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
@@ -21,9 +26,11 @@ _ABS_SPLIT = re.compile(r"^(\$?)([A-Z]+)(\$?)(\d+)$")
 
 @dataclass(frozen=True)
 class CellRef:
+    """A single A1-style cell reference."""
+
     sheet: Optional[str]
-    column: int
-    row: int
+    column: int  # 0-based
+    row: int  # 0-based
     column_absolute: bool = False
     row_absolute: bool = False
 
@@ -53,7 +60,7 @@ class NamedRef:
     name: str
 
 
-def _parse_a1(addr: str):
+def _parse_a1(addr: str) -> tuple[int, int, bool, bool]:
     match = _ABS_SPLIT.match(addr)
     if not match:
         raise ValueError(f"invalid A1 address: {addr!r}")
@@ -64,11 +71,12 @@ def _parse_a1(addr: str):
     return col - 1, int(row_str) - 1, bool(col_abs), bool(row_abs)
 
 
-def _resolve_sheet(match):
+def _resolve_sheet(match: re.Match[str]) -> Optional[str]:
     return match.group("qsheet") or match.group("sheet")
 
 
-def parse_cell(ref):
+def parse_cell(ref: str) -> CellRef:
+    """Parse a single-cell reference. Raises ValueError on a range or named ref."""
     match = _SINGLE.match(ref.strip())
     if not match:
         raise ValueError(f"not a single cell reference: {ref!r}")
@@ -82,7 +90,7 @@ def parse_cell(ref):
     )
 
 
-def parse_range(ref):
+def parse_range(ref: str) -> RangeRef:
     match = _RANGE.match(ref.strip())
     if not match:
         raise ValueError(f"not a range reference: {ref!r}")
@@ -96,7 +104,13 @@ def parse_range(ref):
     )
 
 
-def parse(ref) -> Union[CellRef, RangeRef, NamedRef]:
+def parse(ref: str) -> CellRef | RangeRef | NamedRef:
+    """Best-effort parse: returns whichever of cell / range / named matches.
+
+    Use this when accepting model output where the kind is not known in
+    advance. For sites that *must* be a single cell (e.g. propose_diff),
+    call parse_cell directly so a range / name raises immediately.
+    """
     stripped = ref.strip()
     try:
         return parse_cell(stripped)
