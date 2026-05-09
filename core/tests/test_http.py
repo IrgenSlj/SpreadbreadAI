@@ -83,6 +83,134 @@ def test_chat_endpoint_accepts_json_body(client: TestClient, monkeypatch) -> Non
     assert "review" in captured["message"]
 
 
+def test_direct_mode_auto_applies_after_chat(client: TestClient, monkeypatch) -> None:
+    """In direct mode, pending items are approved and applied as part of /chat."""
+    from spreadbread_core import http as http_module
+    from spreadbread_core.config import Config
+    from spreadbread_core.domain import ProposalItem, new_proposal
+    from spreadbread_core.llm import ChatResult
+    from spreadbread_core.store import Store
+
+    files = {"file": ("sample.xlsx", _sample_xlsx(),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    wb_resp = client.post("/api/workbooks/upload", files=files).json()
+    assert wb_resp["trust_mode"] == "direct"
+
+    # Pre-seed a proposal with two pending items before calling /chat.
+    cfg = Config.load()
+    store = Store(cfg.db_path)
+    proposal = new_proposal(wb_resp["id"], "auto test", "auto", "llm")
+    proposal.items = [
+        ProposalItem(kind="update", cell="Forecast!C3", before="=B3*1.05",
+                     after="=B3*1.08", rationale="growth"),
+        ProposalItem(kind="comment", cell="Forecast!A1", after="Reviewed",
+                     rationale="note"),
+    ]
+    store.save_proposal(proposal)
+
+    def fake_chat(self, message: str, system: str = "") -> ChatResult:  # noqa: ARG001
+        return ChatResult(final_message="done", tool_calls=[], rounds=1)
+
+    monkeypatch.setattr(http_module.OllamaClient, "chat", fake_chat)
+
+    response = client.post(f"/api/workbooks/{wb_resp['id']}/chat", json={"message": "review"})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["auto_applied"] is True
+    assert payload["applied_version_id"] is not None
+
+    snap = client.get(f"/api/workbooks/{wb_resp['id']}/review").json()
+    assert snap["proposal"]["status"] == "applied"
+
+
+def test_review_mode_does_not_auto_apply(client: TestClient, monkeypatch) -> None:
+    """In review mode, pending items are left pending after /chat."""
+    from spreadbread_core import http as http_module
+    from spreadbread_core.config import Config
+    from spreadbread_core.domain import ProposalItem, new_proposal
+    from spreadbread_core.llm import ChatResult
+    from spreadbread_core.store import Store
+
+    files = {"file": ("sample.xlsx", _sample_xlsx(),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    wb_resp = client.post("/api/workbooks/upload", files=files).json()
+
+    trust_resp = client.post(
+        f"/api/workbooks/{wb_resp['id']}/trust-mode",
+        json={"mode": "review"},
+    )
+    assert trust_resp.status_code == 200, trust_resp.text
+    assert trust_resp.json()["trust_mode"] == "review"
+
+    cfg = Config.load()
+    store = Store(cfg.db_path)
+    proposal = new_proposal(wb_resp["id"], "review test", "review", "llm")
+    proposal.items = [
+        ProposalItem(kind="update", cell="Forecast!C3", before="=B3*1.05",
+                     after="=B3*1.08", rationale="growth"),
+    ]
+    store.save_proposal(proposal)
+
+    def fake_chat(self, message: str, system: str = "") -> ChatResult:  # noqa: ARG001
+        return ChatResult(final_message="done", tool_calls=[], rounds=1)
+
+    monkeypatch.setattr(http_module.OllamaClient, "chat", fake_chat)
+
+    response = client.post(f"/api/workbooks/{wb_resp['id']}/chat", json={"message": "review"})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["auto_applied"] is False
+    assert payload["applied_version_id"] is None
+
+    snap = client.get(f"/api/workbooks/{wb_resp['id']}/review").json()
+    assert snap["proposal"]["status"] == "pending_approval"
+
+
+def test_locked_mode_blocks_bulk_approve(client: TestClient) -> None:
+    """In locked mode, /approve-all returns HTTP 403."""
+    from spreadbread_core.config import Config
+    from spreadbread_core.domain import ProposalItem, new_proposal
+    from spreadbread_core.store import Store
+
+    files = {"file": ("sample.xlsx", _sample_xlsx(),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    wb_resp = client.post("/api/workbooks/upload", files=files).json()
+
+    trust_resp = client.post(
+        f"/api/workbooks/{wb_resp['id']}/trust-mode",
+        json={"mode": "locked"},
+    )
+    assert trust_resp.status_code == 200, trust_resp.text
+
+    cfg = Config.load()
+    store = Store(cfg.db_path)
+    proposal = new_proposal(wb_resp["id"], "locked test", "locked", "llm")
+    proposal.items = [
+        ProposalItem(kind="update", cell="Forecast!C3", before="=B3*1.05",
+                     after="=B3*1.08", rationale="growth"),
+    ]
+    store.save_proposal(proposal)
+
+    bulk = client.post(
+        f"/api/proposals/{proposal.id}/approve-all",
+        json={"decision": "approve", "reviewer": "auditor"},
+    )
+    assert bulk.status_code == 403, bulk.text
+
+
+def test_trust_mode_endpoint_rejects_invalid_mode(client: TestClient) -> None:
+    """Posting an unrecognised trust mode returns HTTP 400 or 422."""
+    files = {"file": ("sample.xlsx", _sample_xlsx(),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    wb_resp = client.post("/api/workbooks/upload", files=files).json()
+
+    resp = client.post(
+        f"/api/workbooks/{wb_resp['id']}/trust-mode",
+        json={"mode": "bogus"},
+    )
+    assert resp.status_code in (400, 422), resp.text
+
+
 def test_decision_and_approve_all_endpoints(client: TestClient) -> None:
     """End-to-end: upload, hand-craft a proposal, approve, apply."""
     from spreadbread_core.config import Config

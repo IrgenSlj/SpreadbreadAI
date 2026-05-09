@@ -171,24 +171,35 @@ who want stronger cell reasoning can swap to Qwen 3 8B or a cloud
 provider through the multi-LLM adapter (Phase 7) — but the default
 will not change before the rest of the platform is fast and stable.
 
-### Phase 4 — Trust modes (planned)
+### Phase 4 — Trust modes (status: landed in daemon; extension follow-up pending)
 
-The current pipeline always stages every change for explicit approval.
-That is correct as the *default for non-owners and for autonomous
-agent runs*, but it is friction for the workbook owner who is actively
-driving the LLM. Trust modes:
-
-- `direct` (default for the workbook owner): the LLM applies tool
-  results immediately. Audit trail and versioning still capture every
-  change; the user can undo via the version history.
-- `review` (default for non-owners and scheduled agent runs): the
-  current Review → Approve → Apply pipeline.
-- `locked` (per-workbook setting): explicit approval required even
-  from owners. For compliance / regulated contexts.
-
-Apply remains one code path; only the trigger differs. The HITL
-guarantee is preserved through immutable versioning + audit, not
-through a forced per-action click.
+- (landed) `TrustMode = Literal["direct", "review", "locked"]` added to
+  the domain model; `Workbook` carries `trust_mode: TrustMode = "direct"`.
+- (landed) `POST /api/workbooks/{workbook_id}/trust-mode` validates the
+  mode, updates the workbook, and writes a `workbook.trust_mode_changed`
+  audit event.
+- (landed) `direct` mode: after `/chat` returns, the daemon automatically
+  approves all pending items on the latest proposal and calls apply in the
+  same request. Every direct-mode change still produces an immutable
+  workbook version and an audit event with actor `"user (direct mode)"`.
+  The HITL guarantee is preserved through versioning and audit, not through
+  a forced per-action click. If auto-apply fails (e.g. conflict detection),
+  the error is surfaced in `auto_apply_error` without failing the chat call.
+- (landed) `/chat` response shape extended with `auto_applied: bool`,
+  `applied_version_id: str | None`, and `auto_apply_error: str | None`.
+- (landed) `review` mode: existing behavior — items stage as pending,
+  an approver hits `/approve-all` or a per-item `/decision`, apply is
+  a separate call. No behavioral change, just an explicit mode value.
+- (landed) `locked` mode: `/approve-all` refuses with HTTP 403 on locked
+  workbooks. Every item must be approved individually via the per-item
+  `/decision` endpoint.
+- (landed) Four new HTTP-level pytest tests covering direct-mode auto-apply,
+  review-mode non-auto-apply, locked bulk-approve refusal, and invalid-mode
+  rejection.
+- (pending) Extension UI: the LibreOffice sidebar does not yet expose
+  trust-mode controls. The extension still uses the same Review / Approve
+  all / Apply menu regardless of the server-side trust mode. Extension
+  follow-up is a separate slice.
 
 ### Phase 5 — MCP server (status: landed)
 

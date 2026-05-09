@@ -24,6 +24,13 @@ toolset over MCP.
   and applied change.
 - Runs fully offline by default; cloud LLMs are opt-in.
 
+Trust modes per workbook control how directly the LLM acts: `direct`
+(default for the uploader) lets the model apply tool results immediately
+while still producing immutable versions and audit events; `review`
+requires explicit approval before apply; `locked` requires per-item
+approval and refuses bulk operations. The mode can be changed via the
+API at any time.
+
 ## Architecture
 
 - `extension/` — LibreOffice Calc plugin (Python UNO). Three menu

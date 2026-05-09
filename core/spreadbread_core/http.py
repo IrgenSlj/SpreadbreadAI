@@ -41,6 +41,10 @@ class BulkDecisionRequest(BaseModel):
     comment: Optional[str] = None
 
 
+class TrustModeRequest(BaseModel):
+    mode: str
+
+
 def create_app(config: Optional[Config] = None) -> FastAPI:
     cfg = config or Config.load()
     store = Store(cfg.db_path)
@@ -89,16 +93,56 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             raise HTTPException(404, "workbook not found")
         return snap.model_dump()
 
+    @app.post("/api/workbooks/{workbook_id}/trust-mode")
+    def set_trust_mode(workbook_id: str, req: TrustModeRequest) -> dict[str, Any]:
+        valid_modes = ("direct", "review", "locked")
+        if req.mode not in valid_modes:
+            raise HTTPException(400, f"mode must be one of {valid_modes}")
+        wb = store.get_workbook(workbook_id)
+        if not wb:
+            raise HTTPException(404, "workbook not found")
+        wb.trust_mode = req.mode  # type: ignore[assignment]
+        store.save_workbook(wb)
+        store.append_audit(
+            AuditEvent(
+                workbook_id=workbook_id,
+                actor="user",
+                action="workbook.trust_mode_changed",
+                detail=f"Trust mode set to {req.mode!r}",
+            )
+        )
+        return wb.model_dump()
+
     @app.post("/api/workbooks/{workbook_id}/chat")
     def chat(workbook_id: str, req: ChatRequest) -> dict[str, Any]:
-        if not store.get_workbook(workbook_id):
+        wb = store.get_workbook(workbook_id)
+        if not wb:
             raise HTTPException(404, "workbook not found")
         message = f"Workbook id: {workbook_id}\nUser request: {req.message}"
         result = llm.chat(message)
+
+        auto_applied = False
+        applied_version_id = None
+        auto_apply_error = None
+
+        if wb.trust_mode == "direct":
+            proposal = store.latest_proposal_for(workbook_id)
+            if proposal and any(item.status == "pending" for item in proposal.items):
+                try:
+                    store.decide_all_pending(proposal.id, "approve", "user (direct mode)")
+                    apply_result = apply_proposal(store, proposal.id, reviewer="user (direct mode)")
+                    auto_applied = True
+                    applied_version_id = apply_result.version.id
+                except ApplyError as exc:
+                    auto_apply_error = str(exc)
+
         return {
             "reply": result.final_message,
             "rounds": result.rounds,
             "tool_calls": result.tool_calls,
+            "auto_applied": auto_applied,
+            "applied_version_id": applied_version_id,
+            "auto_apply_error": auto_apply_error,
         }
 
     @app.post("/api/proposals/{proposal_id}/items/{item_id}/decision")
@@ -116,6 +160,16 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     @app.post("/api/proposals/{proposal_id}/approve-all")
     def approve_all(proposal_id: str, req: BulkDecisionRequest) -> dict[str, Any]:
+        proposal = store.get_proposal(proposal_id)
+        if not proposal:
+            raise HTTPException(404, f"proposal {proposal_id} not found")
+        wb = store.get_workbook(proposal.workbook_id)
+        if wb and wb.trust_mode == "locked":
+            raise HTTPException(
+                403,
+                "workbook is in locked trust mode — bulk approval is disabled; "
+                "each item must be approved individually",
+            )
         try:
             proposal, flipped = store.decide_all_pending(
                 proposal_id, req.decision, req.reviewer, req.comment

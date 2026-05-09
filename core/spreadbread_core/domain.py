@@ -20,6 +20,7 @@ ProposalItemStatus = Literal["pending", "approved", "rejected"]
 DiffKind = Literal["add", "remove", "update", "comment"]
 RiskSeverity = Literal["low", "medium", "high"]
 WorkbookAccessRole = Literal["owner", "approver", "reviewer", "editor"]
+TrustMode = Literal["direct", "review", "locked"]
 
 
 class WorkbookSheet(BaseModel):
@@ -57,6 +58,7 @@ class Workbook(BaseModel):
     versions: list[WorkbookVersion] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     status: Literal["healthy", "needs_review"] = "needs_review"
+    trust_mode: TrustMode = "direct"
 
 
 class ProposalItem(BaseModel):
