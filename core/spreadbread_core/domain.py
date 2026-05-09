@@ -23,6 +23,12 @@ WorkbookAccessRole = Literal["owner", "approver", "reviewer", "editor"]
 TrustMode = Literal["direct", "review", "locked"]
 
 
+class WorkbookNamedRange(BaseModel):
+    name: str
+    sheet_name: Optional[str] = None
+    reference: str
+
+
 class WorkbookSheet(BaseModel):
     name: str
     rows: int
@@ -30,6 +36,9 @@ class WorkbookSheet(BaseModel):
     formula_cells: int = 0
     populated_cells: int = 0
     sample_rows: list[list[str]] = Field(default_factory=list)
+    external_references: list[str] = Field(default_factory=list)
+    broken_references: list[str] = Field(default_factory=list)
+    stale_markers: list[str] = Field(default_factory=list)
 
 
 class WorkbookRisk(BaseModel):
@@ -59,6 +68,8 @@ class Workbook(BaseModel):
     tags: list[str] = Field(default_factory=list)
     status: Literal["healthy", "needs_review"] = "needs_review"
     trust_mode: TrustMode = "direct"
+    named_ranges: list[WorkbookNamedRange] = Field(default_factory=list)
+    dependencies: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class ProposalItem(BaseModel):

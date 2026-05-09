@@ -218,17 +218,40 @@ distribution channels.
   client (Claude Desktop config landed in README; Cursor and VS Code
   to follow).
 
-### Phase 6 — Smarter Review
+### Phase 6 — Smarter Review (status: landed)
 
-- Formula dependency graph (cell → cell references).
-- Stale-input detection (values not updated since last version).
-- External reference drift detection.
-- Named-range awareness in the parser and diffs.
-- LLM gets richer context tools: `get_dependencies(cell)`,
-  `find_similar_cells`.
-- Replace the placeholder "X formula cells need review" risk with
-  real signal — currently the risk system is a notification dressed
-  as insight.
+- (landed) Real risk detection replaces the placeholder "X formula
+  cells need review" risk.  The parser now emits three classes of
+  actual signal:
+  - **External workbook reference** (severity: medium) — any formula
+    containing `[filename.xlsx]` is flagged; the foreign filename
+    appears in the risk summary.
+  - **Broken sheet reference** (severity: high) — formulas that name
+    a sheet not present in the workbook are detected via the openpyxl
+    tokenizer and flagged with the missing sheet name.
+  - **Pending input** (severity: low) — non-formula text cells whose
+    stripped, lowercased value is one of `todo`, `tbd`, `fixme`, `?`,
+    `???`, or `xxx` are surfaced as stale-input markers.
+- (landed) Per-sheet tracking: `WorkbookSheet` carries
+  `external_references`, `broken_references`, and `stale_markers`
+  (short lists of cell addresses, capped at 50 entries each).
+- (landed) Named-range surfacing: the parser reads `book.defined_names`
+  and populates `Workbook.named_ranges` with `WorkbookNamedRange`
+  entries (`name`, `sheet_name`, `reference`).
+- (landed) Dependency graph: `Workbook.dependencies` maps each
+  formula cell's fully-qualified address (e.g. `Forecast!C7`) to the
+  list of cell addresses its formula references.  Capped at 500
+  entries to keep payloads bounded.
+- (landed) Three new read-only LLM tools:
+  - `get_dependencies(workbook_id, cell)` — returns depends_on list
+    for a cell; empty list if the cell has no captured formula.
+  - `find_external_references(workbook_id)` — flat list of
+    `{sheet, cell}` entries for every external-reference cell.
+  - `get_named_ranges(workbook_id)` — list of
+    `{name, sheet_name, reference}` from the workbook's named ranges.
+- (landed) The old placeholder "Formula review pending" risk is
+  removed.  Sheets with no detected real risks produce no risk entries.
+- (landed) 14 new parser tests + 1 new end-to-end tool test.
 
 ### Phase 7 — Multi-LLM adapter
 

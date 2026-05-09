@@ -80,6 +80,67 @@ def test_end_to_end(tmp_path: Path) -> None:
     assert "proposal.item.added" in actions
 
 
+def _build_enriched_xlsx(tmp_path: Path) -> Path:
+    """Workbook with a named range, an external reference, and a formula."""
+    from openpyxl import Workbook as XlsxWorkbook
+    from openpyxl.workbook.defined_name import DefinedName
+
+    book = XlsxWorkbook()
+    ws = book.active
+    ws.title = "Forecast"
+    ws["A1"] = 100
+    ws["B1"] = 200
+    ws["C1"] = "=A1+B1"
+    ws["D1"] = "=[Other.xlsx]Sheet1!$A$1"
+
+    dn = DefinedName("MyRange", attr_text="Forecast!$A$1:$B$1")
+    book.defined_names.add(dn)
+
+    out = tmp_path / "enriched.xlsx"
+    book.save(out)
+    return out
+
+
+def test_new_tools_end_to_end(tmp_path: Path) -> None:
+    """get_dependencies, find_external_references, get_named_ranges return expected shapes."""
+    db_path = tmp_path / "tools_test.sqlite3"
+    store = Store(db_path)
+    registry = ToolRegistry(store)
+
+    xlsx_path = _build_enriched_xlsx(tmp_path)
+    wb = parse_xlsx(xlsx_path)
+    store.save_workbook(wb)
+
+    # get_dependencies — C1 depends on A1 and B1
+    dep_result = registry.call("get_dependencies", {"workbook_id": wb.id, "cell": "Forecast!C1"})
+    assert dep_result["cell"] == "Forecast!C1"
+    assert isinstance(dep_result["depends_on"], list)
+    assert "Forecast!A1" in dep_result["depends_on"]
+    assert "Forecast!B1" in dep_result["depends_on"]
+
+    # get_dependencies — unknown cell returns empty list
+    dep_none = registry.call("get_dependencies", {"workbook_id": wb.id, "cell": "Forecast!Z99"})
+    assert dep_none["depends_on"] == []
+
+    # find_external_references — D1 has an external ref
+    ext_result = registry.call("find_external_references", {"workbook_id": wb.id})
+    assert isinstance(ext_result, list)
+    assert len(ext_result) >= 1
+    sheets_returned = {e["sheet"] for e in ext_result}
+    assert "Forecast" in sheets_returned
+
+    # get_named_ranges — MyRange should be present
+    nr_result = registry.call("get_named_ranges", {"workbook_id": wb.id})
+    assert isinstance(nr_result, list)
+    assert len(nr_result) >= 1
+    names = {nr["name"] for nr in nr_result}
+    assert "MyRange" in names
+    my_range = next(nr for nr in nr_result if nr["name"] == "MyRange")
+    assert "reference" in my_range
+    assert "name" in my_range
+    assert "sheet_name" in my_range
+
+
 def test_config_loads(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SPREADBREAD_DATA_DIR", str(tmp_path))
     cfg = Config.load()

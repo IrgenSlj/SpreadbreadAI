@@ -148,6 +148,45 @@ class ToolRegistry:
                 write=True,
             )
         )
+        self._add(
+            Tool(
+                name="get_dependencies",
+                description="Return the cells that the formula at a given cell address depends on.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "workbook_id": {"type": "string"},
+                        "cell": {"type": "string", "description": "Fully-qualified address, e.g. Forecast!C7"},
+                    },
+                    "required": ["workbook_id", "cell"],
+                },
+                handler=self._get_dependencies,
+            )
+        )
+        self._add(
+            Tool(
+                name="find_external_references",
+                description="List every cell that references an external workbook file.",
+                parameters={
+                    "type": "object",
+                    "properties": {"workbook_id": {"type": "string"}},
+                    "required": ["workbook_id"],
+                },
+                handler=self._find_external_references,
+            )
+        )
+        self._add(
+            Tool(
+                name="get_named_ranges",
+                description="Return all defined named ranges in the workbook.",
+                parameters={
+                    "type": "object",
+                    "properties": {"workbook_id": {"type": "string"}},
+                    "required": ["workbook_id"],
+                },
+                handler=self._get_named_ranges,
+            )
+        )
 
     # --- handlers ------------------------------------------------------
     def _list_workbooks(self) -> list[dict[str, Any]]:
@@ -228,3 +267,25 @@ class ToolRegistry:
         return self._propose_diff(
             workbook_id=workbook_id, cell=cell, kind="comment", after=body, rationale="Reviewer commentary"
         )
+
+    def _get_dependencies(self, workbook_id: str, cell: str) -> dict[str, Any]:
+        wb = self.store.get_workbook(workbook_id)
+        if not wb:
+            raise KeyError(f"workbook {workbook_id} not found")
+        return {"cell": cell, "depends_on": wb.dependencies.get(cell, [])}
+
+    def _find_external_references(self, workbook_id: str) -> list[dict[str, Any]]:
+        wb = self.store.get_workbook(workbook_id)
+        if not wb:
+            raise KeyError(f"workbook {workbook_id} not found")
+        result: list[dict[str, Any]] = []
+        for sheet in wb.sheets:
+            for cell_addr in sheet.external_references:
+                result.append({"sheet": sheet.name, "cell": cell_addr})
+        return result
+
+    def _get_named_ranges(self, workbook_id: str) -> list[dict[str, Any]]:
+        wb = self.store.get_workbook(workbook_id)
+        if not wb:
+            raise KeyError(f"workbook {workbook_id} not found")
+        return [nr.model_dump() for nr in wb.named_ranges]
