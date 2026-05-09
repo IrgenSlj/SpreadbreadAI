@@ -233,22 +233,31 @@ with three concrete implementations:
 Provider selection lives in `~/.config/spreadbreadai/config.toml` with
 the API key in a separate `credentials` file (`chmod 600`).
 
-### Phase 8 — Real installer
+### Phase 8 — Real installer (status: scaffolded)
 
-`scripts/install.sh` today only installs the daemon. A real installer
-should:
+`scripts/install.sh` only installs the daemon and assumes the user is a
+developer. A real installer ships a native bundle per OS so end users
+download one file and run it.
 
-1. Detect OS (macOS, Linux, WSL).
-2. Install Python via Homebrew / apt / dnf if missing.
-3. Ask the user: local LLM (Ollama) or cloud API.
-4. If local: install Ollama via the official one-liner and pull the
-   chosen model.
-5. If cloud: prompt for provider and API key; write to
-   `~/.config/spreadbreadai/credentials`.
-6. `pipx install` the daemon from the latest release.
-7. Download the `.oxt` and print the `unopkg add` command.
-
-Windows installer is a follow-up.
+- (landed) `packaging/` directory with a Briefcase project. Briefcase
+  produces `.dmg` (macOS), `.msi` (Windows), and `.AppImage` (Linux)
+  from a single Python codebase.
+- (landed) `packaging/src/spreadbreadai_launcher/` is a tray app that
+  supervises the daemon as a subprocess: starts it, restarts on crash,
+  shuts it down on quit. End users never see a terminal.
+- (landed) `bootstrap.py` runs first-time setup on each launch
+  (idempotent): downloads + installs Ollama if absent, pulls
+  `gemma4:e2b`, and registers the bundled `.oxt` with LibreOffice via
+  `unopkg add`.
+- (landed) `.github/workflows/release.yml` builds the native bundle on
+  macOS, Windows, and Linux runners on every tag push and attaches the
+  artifacts to the GitHub Release.
+- (in progress) Real tray icon artwork (`resources/spreadbreadai.icns`,
+  `.ico`, `.png`).
+- (in progress) Code signing on Windows and notarization on macOS so
+  Gatekeeper / SmartScreen don't warn the user.
+- (planned) Homebrew formula in a tap repo for `brew install
+  spreadbreadai` on macOS / Linux.
 
 ### Phase 9 — Schema normalization and concurrency
 

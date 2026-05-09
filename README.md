@@ -65,14 +65,24 @@ phased plan.
 
 ## Install
 
-### Prerequisites
+### Recommended — native installer (in development)
+
+A native installer per OS is being wired up in `packaging/`. Once
+released it is the simplest path: download one file, double-click, the
+launcher takes care of the rest (Ollama, model pull, LibreOffice
+extension registration, daemon supervision via a tray icon).
+
+Until the first signed release lands, use one of the developer paths
+below.
+
+### Prerequisites for the developer paths
 
 - **Python 3.11+** (3.13/3.14 also tested)
 - **[Ollama](https://ollama.com)** running locally
 - The default model: `ollama pull gemma4:e2b` (≈7 GB on disk)
 - **LibreOffice 7+** (only needed for the Calc plugin path)
 
-### Option A — Recommended (clone + editable install)
+### Option A — Clone + editable install
 
 This is the path I have actually verified end-to-end, including the
 real Gemma 4 review loop. Use this for the first test.

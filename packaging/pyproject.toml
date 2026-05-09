@@ -1,0 +1,69 @@
+# Briefcase project configuration.
+#
+# Briefcase is BeeWare's tool for packaging a Python application as a
+# native installer for each OS. It produces:
+#   - macOS:   .dmg (and signed/notarized .app)
+#   - Windows: .msi
+#   - Linux:   .AppImage / .deb / .rpm depending on which template you pick
+#
+# The bundle includes a private Python interpreter, our daemon code, the
+# launcher (this package), and any bundled resources (e.g. spreadbreadai.oxt).
+# End users do not need pip, venv, or even Python installed.
+#
+# Build flow (per platform, run on a CI matrix):
+#   1. briefcase create   — scaffold platform-specific project files
+#   2. briefcase build    — compile / freeze
+#   3. briefcase package  — produce the installer artifact
+
+[build-system]
+requires = ["briefcase>=0.3.20"]
+
+[tool.briefcase]
+project_name = "SpreadbreadAI"
+bundle = "ai.spreadbread"
+version = "0.1.2"
+url = "https://github.com/IrgenSlj/SpreadbreadAI"
+license.file = "../LICENSE"
+author = "SpreadbreadAI contributors"
+author_email = "noreply@github.com"
+
+[tool.briefcase.app.spreadbreadai]
+formal_name = "SpreadbreadAI"
+description = "Open-source spreadsheet AI assistant with human-in-the-loop controls."
+long_description = """
+SpreadbreadAI runs locally on free LLMs. It pairs agentic LLM tool
+calling with explicit approval, immutable workbook versioning, and an
+append-only audit trail. Ships as a tray app that runs the local
+daemon, plus a LibreOffice Calc plugin for in-place editing.
+"""
+sources = ["src/spreadbreadai_launcher"]
+test_sources = []
+icon = "resources/spreadbreadai"
+
+# The launcher pulls the daemon in as a normal Python dependency. The
+# daemon itself comes from the sibling core/ directory at packaging
+# time — for local development we point at it directly.
+requires = [
+    "spreadbread-core @ file:../core",
+    "pystray>=0.19",
+    "Pillow>=10.0",
+]
+
+# --- macOS --------------------------------------------------------------
+[tool.briefcase.app.spreadbreadai.macOS]
+universal_build = true
+requires = []
+
+# --- Linux --------------------------------------------------------------
+[tool.briefcase.app.spreadbreadai.linux]
+requires = []
+
+[tool.briefcase.app.spreadbreadai.linux.system.debian]
+system_requires = []
+
+[tool.briefcase.app.spreadbreadai.linux.appimage]
+manylinux = "manylinux_2_28"
+
+# --- Windows ------------------------------------------------------------
+[tool.briefcase.app.spreadbreadai.windows]
+requires = []
