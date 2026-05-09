@@ -25,14 +25,16 @@ it cannot apply.
 
 ## Project status
 
-- ✅ **Core daemon** — domain model, SQLite store, xlsx parser, tool
-  registry, Ollama tool-calling loop, FastAPI HTTP API, apply pipeline.
-- ✅ **LibreOffice extension v0.1** — Python UNO plugin with daemon
-  client, Calc bridge, and `.oxt` build script.
-- ✅ **Apply pipeline** — approved diffs commit a new canonical `.xlsx`
-  version, idempotent and audited.
-- 🚧 **Real sidebar UI** — replacing the v0.1 message-box review surface.
-- 📚 **Development plan:** [`docs/development-plan.md`](docs/development-plan.md).
+- **Core daemon (landed)** — domain model, SQLite store, xlsx parser,
+  tool registry, Ollama tool-calling loop, FastAPI HTTP API, apply
+  pipeline.
+- **LibreOffice extension v0.1 (landed)** — Python UNO plugin with
+  daemon client, Calc bridge, and `.oxt` build script.
+- **Apply pipeline (landed)** — approved diffs commit a new canonical
+  `.xlsx` version, idempotent and audited.
+- **In progress** — real sidebar UI to replace the v0.1 message-box
+  review surface; conflict detection; multi-LLM adapter.
+- **Development plan**: [`docs/development-plan.md`](docs/development-plan.md).
 
 ## Install
 

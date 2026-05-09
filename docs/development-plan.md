@@ -103,85 +103,206 @@ Loop:
 
 ## Phased Plan
 
-### Phase 1 — Core Daemon (status: ✅ landed)
+### Phase 1 — Core Daemon (status: landed)
 
 - Python package, Pydantic domain model, SQLite store.
 - Parser via openpyxl (formula counts, sample rows, seeded risks).
 - Tool registry with the v0.1 catalog.
-- Ollama tool-calling loop (default `gemma4:e2b`).
+- Ollama tool-calling loop.
 - FastAPI HTTP daemon with healthz, upload, review, chat, decision.
 - Unit + live integration tests.
 
-### Phase 2 — LibreOffice Extension (status: ✅ scaffold landed; UI pending)
+### Phase 2 — LibreOffice Extension (status: scaffold landed; UI pending)
 
-- ✅ Manifest scaffold (`META-INF/manifest.xml`, `description.xml`).
-- ✅ Calc menu entry (`Addons.xcu`) and protocol handler (`ProtocolHandler.xcu`).
-- ✅ Python UNO component — review action uploads workbook, asks Gemma 4
-  to draft proposals, shows snapshot.
-- ✅ `build.sh` packages `.oxt` cleanly (no `__pycache__`).
-- 🚧 Real sidebar `.ui` panel with per-item approve / reject (replaces
-  the v0.1 message-box UI).
+- (landed) Manifest scaffold (`META-INF/manifest.xml`, `description.xml`).
+- (landed) Calc menu entry (`Addons.xcu`) and protocol handler (`ProtocolHandler.xcu`).
+- (landed) Python UNO component — review action uploads the workbook,
+  asks the local LLM to draft proposals, shows snapshot.
+- (landed) `build.sh` packages `.oxt` cleanly (no `__pycache__`).
+- (in progress) Real sidebar `.ui` panel with per-item approve / reject
+  (replaces the v0.1 message-box UI).
 
-### Phase 2.5 — End-to-end user-test affordances (status: ✅ landed)
+### Phase 2.5 — End-to-end user-test affordances (status: landed)
 
-- ✅ `POST /api/proposals/{id}/approve-all` flips all pending items to
-  approved with a single reviewer name (still HITL: an approver clicks
-  the button).
-- ✅ Three-step LibreOffice menu (Review → Approve all → Apply) so the
-  full loop works without curl.
-- ✅ Confirmation dialog with item preview before bulk approval.
-- ✅ HTTP-level pytest coverage to guard against the FastAPI / Pydantic
-  forward-ref body-resolution trap (`test_http.py`).
+- (landed) `POST /api/proposals/{id}/approve-all` flips all pending
+  items to approved with a single reviewer name. Still HITL — an
+  approver clicks the button.
+- (landed) Three-step LibreOffice menu (Review → Approve all → Apply)
+  so the full loop works without curl.
+- (landed) Confirmation dialog with item preview before bulk approval.
+- (landed) HTTP-level pytest coverage to guard against the
+  FastAPI / Pydantic forward-ref body-resolution trap (`test_http.py`).
 
-### Phase 3 — Apply Pipeline (status: ✅ landed)
+### Phase 3 — Apply Pipeline (status: landed)
 
-- ✅ Daemon endpoint `POST /api/proposals/{id}/apply` produces a new
-  workbook version (`.xlsx` bytes written to the data dir).
-- ✅ Idempotent: a proposal in `applied` state returns its existing
-  version.
-- ✅ Guards: pending items block apply; zero approved items blocks
-  apply.
-- ✅ Audit events written: `proposal.applied` + `version.created`.
-- ✅ Extension `spreadbread:apply` writes approved cells into the
+- (landed) Daemon endpoint `POST /api/proposals/{id}/apply` produces a
+  new workbook version (`.xlsx` bytes written to the data dir).
+- (landed) Idempotent: a proposal in `applied` state returns its
+  existing version.
+- (landed) Guards: pending items block apply; zero approved items
+  blocks apply.
+- (landed) Audit events written: `proposal.applied` and
+  `version.created`.
+- (landed) Extension `spreadbread:apply` writes approved cells into the
   active Calc document via the Calc bridge, then asks the daemon to
   commit the canonical version.
-- 🚧 Conflict detection when the active workbook diverges from the
-  version the proposal was generated against.
+- (in progress) Conflict detection when the active workbook diverges
+  from the version the proposal was generated against.
 
-### Phase 4 — Smarter Review
+### Phase 3.5 — Hardening (next, prioritized from peer review)
+
+- **Conflict detection on apply.** Track `source_version_id` and a
+  SHA-256 checksum of the base xlsx on the proposal at creation time.
+  Refuse `apply` if the workbook's latest version no longer matches.
+  Without this, applying a stale proposal silently overwrites the
+  user's later edits.
+- **Reorder extension apply.** Daemon commits the canonical version
+  first; only on success does the extension write to the active Calc
+  document as a UX courtesy. Daemon is the source of truth.
+- **Larger default model.** Switch from Gemma 4 E2B (2.3B) to Qwen 3
+  8B / Llama 3.3 8B for reliable cell-reference and formula reasoning.
+  Gemma stays supported for users who need a smaller footprint.
+- **Dedupe cell-ref parsing.** Single shared module covers absolute
+  refs (`$A$1`), ranges (`A1:B2`), and named ranges; fails loudly on
+  unsupported inputs instead of producing garbage.
+
+### Phase 4 — Trust modes (planned)
+
+The current pipeline always stages every change for explicit approval.
+That is correct as the *default for non-owners and for autonomous
+agent runs*, but it is friction for the workbook owner who is actively
+driving the LLM. Trust modes:
+
+- `direct` (default for the workbook owner): the LLM applies tool
+  results immediately. Audit trail and versioning still capture every
+  change; the user can undo via the version history.
+- `review` (default for non-owners and scheduled agent runs): the
+  current Review → Approve → Apply pipeline.
+- `locked` (per-workbook setting): explicit approval required even
+  from owners. For compliance / regulated contexts.
+
+Apply remains one code path; only the trigger differs. The HITL
+guarantee is preserved through immutable versioning + audit, not
+through a forced per-action click.
+
+### Phase 5 — MCP server (promoted from Phase 6)
+
+For an AI-first product, MCP is not a "later" feature. Without it,
+users' existing AI tools (Claude Desktop, Cursor, VS Code agents)
+cannot drive SpreadbreadAI. With it, those tools become free
+distribution channels. New work:
+
+- `spreadbread-mcp` stdio entry point exposing the existing tool
+  registry.
+- Tool calls from external clients flow through the same approval
+  pipeline as the local LLM.
+- Documented connection recipes for each major MCP client.
+
+### Phase 6 — Smarter Review
 
 - Formula dependency graph (cell → cell references).
 - Stale-input detection (values not updated since last version).
 - External reference drift detection.
 - Named-range awareness in the parser and diffs.
-- LLM gets richer context tools: `get_dependencies(cell)`, `find_similar_cells`.
+- LLM gets richer context tools: `get_dependencies(cell)`,
+  `find_similar_cells`.
+- Replace the placeholder "X formula cells need review" risk with
+  real signal — currently the risk system is a notification dressed
+  as insight.
 
-### Phase 5 — Packaging & Distribution
+### Phase 7 — Multi-LLM adapter
 
-- `pipx install spreadbread-core` for the daemon.
-- `spreadbreadai.oxt` published on the LibreOffice extension marketplace
-  and as a GitHub release asset.
-- One-line installer that pulls Ollama + Gemma 4 E2B if missing.
-- Signed releases.
+The LLM layer is already isolated in `core/spreadbread_core/llm.py`
+behind one client class. Generalize it into an `LLMAdapter` interface
+with three concrete implementations:
 
-### Phase 6 — MCP and Agent Clients
+- `OllamaAdapter` (current; covers Gemma 4, Qwen 2.5/3, Llama 3.3,
+  Mistral Nemo).
+- `GeminiAdapter` (Google function-calling API).
+- `OpenAIAdapter` (covers gpt-4o / o-series; Anthropic later).
 
-- Daemon exposes the same tool catalog over MCP stdio.
-- Claude Code, Codex, and other MCP clients can connect.
-- Tool calls from external clients go through the same approval pipeline.
+Provider selection lives in `~/.config/spreadbreadai/config.toml` with
+the API key in a separate `credentials` file (`chmod 600`).
 
-### Phase 7 — Optional Web Review UI
+### Phase 8 — Real installer
 
-- Small focused single-page app (deliberately not the 5k-line monolith).
+`scripts/install.sh` today only installs the daemon. A real installer
+should:
+
+1. Detect OS (macOS, Linux, WSL).
+2. Install Python via Homebrew / apt / dnf if missing.
+3. Ask the user: local LLM (Ollama) or cloud API.
+4. If local: install Ollama via the official one-liner and pull the
+   chosen model.
+5. If cloud: prompt for provider and API key; write to
+   `~/.config/spreadbreadai/credentials`.
+6. `pipx install` the daemon from the latest release.
+7. Download the `.oxt` and print the `unopkg add` command.
+
+Windows installer is a follow-up.
+
+### Phase 9 — Schema normalization and concurrency
+
+JSON-blob storage of full proposals in a `payload` column was fine for
+the prototype but does not scale:
+
+- Cannot query "pending proposals across all workbooks" without
+  loading and deserializing every row.
+- No referential integrity on proposal items (nested in JSON).
+- No interlock against two clients editing the same proposal.
+
+Migration:
+
+- Promote `proposal_items` to its own table with indexed `status` and
+  `proposal_id`.
+- Add an optimistic-concurrency token (`updated_at` or a row version)
+  on `proposals` and check it on every write.
+- Postgres driver behind the same `Store` interface for shared-daemon
+  deployments.
+
+### Phase 10 — Test coverage gaps
+
+Currently missing:
+
+- Dedicated parser tests.
+- Tests for `ToolRegistry._ensure_proposal` when the latest proposal
+  is already applied (does the model start a new one?).
+- Property-based tests for cell-reference parsing.
+- Extension-side tests for sidebar dispatch and the upload flow.
+
+### Phase 11 — Optional web review UI
+
+- Small focused single-page app (deliberately not the 5k-line
+  monolith of the original prototype).
 - Hits the same daemon on `127.0.0.1:8765`.
 - For users who want review without LibreOffice.
 
-### Phase 8 — Multi-User & Cloud Sync (post-MVP)
+### Phase 12 — Multi-user and cloud sync (post-MVP)
 
 - Optional shared-daemon deployment for small teams.
-- Postgres driver behind the same store interface.
+- Postgres driver (lands earlier in Phase 9 for normalization
+  reasons; team mode reuses it).
 - Reviewer profiles, RBAC, scoped access.
 - Notification feed.
+
+## Known issues, scheduled
+
+The peer-review notes that drove Phases 3.5 / 4 / 5 / 7 / 8 / 9 / 10
+also surfaced these specific issues — each is now tracked as part of
+the phases above. Cross-reference for future contributors:
+
+| Issue | Phase |
+|---|---|
+| No conflict detection on apply (data-loss risk) | 3.5 |
+| Extension apply writes to Calc before committing canonical version | 3.5 |
+| JSON-blob storage of proposals will not scale | 9 |
+| Parser "risks" are placeholders, not insight | 6 |
+| Duplicated, incomplete cell-reference parsing in apply.py and calc_bridge.py | 3.5 |
+| 2.3B default model is the weakest link in cell reasoning | 3.5 |
+| Config is ENV-only with a fragile path default that breaks pipx installs | 7/8 |
+| No MCP server yet — users' AI tools cannot drive the daemon | 5 |
+| Test coverage gaps in parser, `_ensure_proposal`, sidebar dispatch | 10 |
+| No concurrency control beyond SQLite's default locking | 9 |
 
 ## Non-Goals (for the MVP)
 

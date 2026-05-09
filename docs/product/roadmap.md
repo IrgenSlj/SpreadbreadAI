@@ -5,17 +5,40 @@ This is a high-level view of phases. Detail and rationale live in
 
 ## Now (May 2026)
 
-- ✅ Core daemon scaffold: domain, store, parser, tools, Ollama loop, FastAPI.
-- ✅ Tool-calling integration with Gemma 4 E2B verified end-to-end.
-- ✅ LibreOffice extension scaffold (manifest, daemon client, Calc bridge, `.oxt` build).
-- ✅ Apply pipeline: approved diffs commit a new canonical `.xlsx` version, idempotent, audited.
+- Core daemon: domain, store, parser, tools, Ollama loop, FastAPI — landed.
+- Tool-calling integration with a local LLM verified end-to-end.
+- LibreOffice extension v0.1 (manifest, daemon client, Calc bridge,
+  `.oxt` build) — landed.
+- Apply pipeline: approved diffs commit a new canonical `.xlsx`
+  version, idempotent, audited — landed.
 
-## Next
+## Next (hardening)
 
-- Real sidebar UI (replace the v0.1 message-box review surface).
-- Conflict detection when the active workbook diverges from the version a proposal was generated against.
-- Richer parser: dependency graph, stale inputs, named ranges, external reference detection.
-- Packaging: `pipx` distribution for the daemon, signed `.oxt` releases.
+- Conflict detection on apply (refuse when workbook has moved since
+  proposal was generated).
+- Reorder extension apply so the daemon commits before the Calc bridge
+  writes.
+- Switch default model to a 7B / 8B class (Qwen 3 8B / Llama 3.3 8B);
+  Gemma 4 E2B remains supported.
+- Dedupe cell-reference parsing into a single shared module.
+- MCP stdio server so external AI tools (Claude Desktop, Cursor) can
+  drive the daemon.
+- Trust modes (direct / review / locked) so the workbook owner is not
+  forced through staged approval for changes they themselves asked for.
+
+## Later
+
+- Multi-LLM adapter (Gemini, OpenAI, Anthropic) behind one interface.
+- Real installer that pulls Python, Ollama, and the chosen model on a
+  fresh machine.
+- Real sidebar `.ui` panel replacing the v0.1 message-box surface.
+- Schema normalization (promote `proposal_items` to its own table;
+  Postgres driver) and optimistic concurrency.
+- Smarter review: dependency graph, stale-input detection, external
+  reference drift, named-range awareness.
+- Optional small web review UI for users without LibreOffice.
+- Shared-daemon deployment for small teams; reviewer profiles, RBAC,
+  scoped access.
 
 ## Later
 
