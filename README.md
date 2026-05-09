@@ -36,40 +36,64 @@ it cannot apply.
 
 ## Install
 
-The fastest path — bootstrap script handles `pipx`, the daemon, and the
-default model:
+### Prerequisites
+
+- **Python 3.11+** (3.13/3.14 also tested)
+- **[Ollama](https://ollama.com)** running locally
+- The default model: `ollama pull gemma4:e2b` (≈7 GB on disk)
+- **LibreOffice 7+** (only needed for the Calc plugin path)
+
+### Option A — Recommended (clone + editable install)
+
+This is the path I have actually verified end-to-end, including the
+real Gemma 4 review loop. Use this for the first test.
+
+```bash
+git clone https://github.com/IrgenSlj/SpreadbreadAI.git
+cd SpreadbreadAI/core
+python3 -m venv .venv
+.venv/bin/pip install -e . --config-settings editable_mode=compat
+.venv/bin/spreadbread-core            # daemon: http://127.0.0.1:8765
+```
+
+Sanity-check in another terminal:
+
+```bash
+curl http://127.0.0.1:8765/healthz
+```
+
+Build and install the LibreOffice extension:
+
+```bash
+cd ../extension
+./build.sh
+unopkg add spreadbreadai.oxt          # restart LibreOffice afterward
+```
+
+### Option B — Install from a published release
+
+Grab the artifacts from the
+[latest release](https://github.com/IrgenSlj/SpreadbreadAI/releases/latest):
+
+```bash
+# daemon (recommend pipx so it lives in its own env)
+pipx install https://github.com/IrgenSlj/SpreadbreadAI/releases/download/v0.1.1/spreadbread_core-0.1.1-py3-none-any.whl
+
+# extension
+curl -L -o spreadbreadai.oxt \
+  https://github.com/IrgenSlj/SpreadbreadAI/releases/download/v0.1.1/spreadbreadai.oxt
+unopkg add spreadbreadai.oxt
+```
+
+### Option C — Bootstrap script (less tested)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/IrgenSlj/SpreadbreadAI/main/scripts/install.sh | bash
 ```
 
-Then grab the LibreOffice extension from the
-[latest release](https://github.com/IrgenSlj/SpreadbreadAI/releases/latest)
-(`spreadbreadai.oxt`) and add it via Tools → Extension Manager (or
-`unopkg add spreadbreadai.oxt`).
-
-### Manual install (from a clone)
-
-Prereqs: Python 3.11+, [Ollama](https://ollama.com), and
-`ollama pull gemma4:e2b` (≈7 GB).
-
-```bash
-cd core
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/spreadbread-core            # serves on 127.0.0.1:8765
-```
-
-Build the LibreOffice extension:
-
-```bash
-cd extension && ./build.sh             # produces spreadbreadai.oxt
-unopkg add spreadbreadai.oxt
-```
-
-> If `pip install -e .` ever produces a non-editable install (rare; depends
-> on your pip / setuptools combo), force editable mode:
-> `pip install -e . --config-settings editable_mode=compat`.
+It installs `pipx` if missing, installs the daemon from this repo,
+ensures Ollama, and pulls `gemma4:e2b`. You still install the `.oxt`
+manually after.
 
 ## Your first test (5 minutes)
 

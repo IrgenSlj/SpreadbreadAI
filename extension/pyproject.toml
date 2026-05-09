@@ -1,6 +1,6 @@
 [project]
 name = "spreadbreadai-extension"
-version = "0.1.0"
+version = "0.1.1"
 description = "LibreOffice Calc extension for SpreadbreadAI (Python UNO)"
 readme = "README.md"
 requires-python = ">=3.8"

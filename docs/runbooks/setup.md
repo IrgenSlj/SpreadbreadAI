@@ -11,9 +11,15 @@
 ```bash
 cd core
 python3 -m venv .venv
-.venv/bin/pip install -e .[dev]
+.venv/bin/pip install -e .[dev] --config-settings editable_mode=compat
 .venv/bin/spreadbread-core
 ```
+
+The `--config-settings editable_mode=compat` flag works around a pip /
+setuptools combo that can produce a non-editable static copy in
+`site-packages`. Verify by checking that
+`.venv/lib/python*/site-packages/spreadbread_core-*.dist-info/direct_url.json`
+contains `"editable": true`.
 
 The daemon listens on `127.0.0.1:8765`. Verify:
 
