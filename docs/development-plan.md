@@ -188,18 +188,22 @@ Apply remains one code path; only the trigger differs. The HITL
 guarantee is preserved through immutable versioning + audit, not
 through a forced per-action click.
 
-### Phase 5 — MCP server (promoted from Phase 6)
+### Phase 5 — MCP server (status: landed)
 
 For an AI-first product, MCP is not a "later" feature. Without it,
 users' existing AI tools (Claude Desktop, Cursor, VS Code agents)
 cannot drive SpreadbreadAI. With it, those tools become free
-distribution channels. New work:
+distribution channels.
 
-- `spreadbread-mcp` stdio entry point exposing the existing tool
-  registry.
-- Tool calls from external clients flow through the same approval
-  pipeline as the local LLM.
-- Documented connection recipes for each major MCP client.
+- (landed) `spreadbread-mcp` stdio entry point exposing the existing
+  tool registry. Same six tools, same registry, same approval
+  pipeline — write tools stage items, apply requires approved items.
+- (landed) External MCP invocations write a distinct
+  `mcp.tool.<name>` audit event so traffic is traceable separately
+  from the local-LLM loop.
+- (in progress) Documented connection recipes for each major MCP
+  client (Claude Desktop config landed in README; Cursor and VS Code
+  to follow).
 
 ### Phase 6 — Smarter Review
 

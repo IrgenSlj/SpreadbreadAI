@@ -48,3 +48,34 @@ jobs:
           python-version: "3.12"
       - run: pip install ruff
       - run: ruff check core/spreadbread_core extension/python
+
+  cell_ref_in_sync:
+    name: cell_ref vendored copy in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare implementations
+        run: |
+          # Vendored extension copy intentionally drops the docstring header
+          # because it's self-contained; core file has a longer docstring.
+          # We compare everything from the first import onward.
+          python - <<'PY'
+          from pathlib import Path
+          a = Path("core/spreadbread_core/cell_ref.py").read_text()
+          b = Path("extension/python/spreadbreadai/cell_ref.py").read_text()
+          # Anchor at the first re.compile — implementations must match below it.
+          marker = "_A1 = "
+          ai = a.index(marker); bi = b.index(marker)
+          if a[ai:].rstrip() != b[bi:].rstrip().replace(
+              "Union[CellRef, RangeRef, NamedRef]", "CellRef | RangeRef | NamedRef"
+          ).rstrip():
+              # The Python 3.8-compatible Union annotation is the only allowed drift.
+              import difflib
+              for line in difflib.unified_diff(
+                  a[ai:].splitlines(), b[bi:].splitlines(),
+                  fromfile="core", tofile="extension", lineterm=""
+              ):
+                  print(line)
+              raise SystemExit("cell_ref implementations have diverged")
+          print("cell_ref vendored copy is in sync")
+          PY

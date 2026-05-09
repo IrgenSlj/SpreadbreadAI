@@ -1,6 +1,6 @@
 [project]
 name = "spreadbread-core"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local human-in-the-loop spreadsheet review daemon for SpreadbreadAI"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,7 @@ dependencies = [
     "httpx>=0.27",
     "openpyxl>=3.1",
     "python-multipart>=0.0.9",
+    "mcp>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,7 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 spreadbread-core = "spreadbread_core.http:main"
+spreadbread-mcp = "spreadbread_core.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/IrgenSlj/SpreadbreadAI"

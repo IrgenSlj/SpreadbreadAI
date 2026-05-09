@@ -20,16 +20,14 @@ Rules:
 from __future__ import annotations
 
 import io
-import re
 from dataclasses import dataclass
 
 from openpyxl import load_workbook as _load
 from openpyxl.comments import Comment
 
+from .cell_ref import parse_cell
 from .domain import AuditEvent, Proposal, ProposalItem, WorkbookVersion, _now, _id
 from .store import Store
-
-CELL_REF = re.compile(r"^(?:'?(?P<sheet>[^'!]+)'?!)?(?P<col>[A-Z]+)(?P<row>\d+)$")
 
 
 class ApplyError(Exception):
@@ -43,14 +41,6 @@ class ApplyResult:
     applied_item_ids: list[str]
 
 
-def _parse_cell(ref: str) -> tuple[str | None, str]:
-    """Return (sheet_name, A1_address). Sheet may be None for default sheet."""
-    match = CELL_REF.match(ref.strip())
-    if not match:
-        raise ApplyError(f"invalid cell reference: {ref!r}")
-    return match.group("sheet"), f"{match.group('col')}{match.group('row')}"
-
-
 def _select_sheet(book, sheet_name: str | None):
     if sheet_name is None:
         return book.active
@@ -60,9 +50,12 @@ def _select_sheet(book, sheet_name: str | None):
 
 
 def _write_item(book, item: ProposalItem) -> None:
-    sheet_name, address = _parse_cell(item.cell)
-    sheet = _select_sheet(book, sheet_name)
-    cell = sheet[address]
+    try:
+        ref = parse_cell(item.cell)
+    except ValueError as exc:
+        raise ApplyError(str(exc)) from exc
+    sheet = _select_sheet(book, ref.sheet)
+    cell = sheet[ref.address]
     if item.kind == "comment":
         cell.comment = Comment(item.after or item.rationale, "spreadbreadai")
         return

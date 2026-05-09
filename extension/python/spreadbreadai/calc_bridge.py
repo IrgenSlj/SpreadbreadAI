@@ -5,27 +5,19 @@ LibreOffice (the `uno` module only exists inside the LO Python).
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Optional
 
-CELL_REF = re.compile(r"^(?:'?(?P<sheet>[^'!]+)'?!)?(?P<col>[A-Z]+)(?P<row>\d+)$")
+from .cell_ref import parse_cell
 
 
 def parse_cell_ref(ref: str) -> tuple[Optional[str], int, int]:
-    """Convert "Sheet!C7" into (sheet_name, column_index, row_index).
+    """Compatibility wrapper for the historical (sheet, col, row) tuple shape.
 
-    Both indices are zero-based as expected by UNO's getCellByPosition.
+    New code should call cell_ref.parse_cell directly to also handle
+    absolute markers, ranges, and named ranges.
     """
-    match = CELL_REF.match(ref.strip())
-    if not match:
-        raise ValueError(f"invalid cell reference: {ref!r}")
-    sheet = match.group("sheet")
-    col_letters = match.group("col")
-    row_number = int(match.group("row"))
-    col = 0
-    for ch in col_letters:
-        col = col * 26 + (ord(ch) - ord("A") + 1)
-    return sheet, col - 1, row_number - 1
+    parsed = parse_cell(ref)
+    return parsed.sheet, parsed.column, parsed.row
 
 
 class ActiveCalc:
@@ -49,7 +41,8 @@ class ActiveCalc:
         return doc.getURL() if doc and doc.getURL() else None
 
     def write_cell(self, ref: str, value: str) -> None:  # pragma: no cover - requires UNO
-        sheet_name, col, row = parse_cell_ref(ref)
+        parsed = parse_cell(ref)
+        sheet_name, col, row = parsed.sheet, parsed.column, parsed.row
         doc = self._document()
         if sheet_name:
             sheet = doc.getSheets().getByName(sheet_name)

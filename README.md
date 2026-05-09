@@ -72,6 +72,27 @@ cd ../extension
 unopkg add spreadbreadai.oxt          # restart LibreOffice afterward
 ```
 
+### Connect from an external AI tool (MCP)
+
+The same tool catalog the local LLM uses is also exposed over MCP
+stdio, so Claude Desktop, Cursor, or VS Code agents can drive
+SpreadbreadAI directly. Add an entry like this to your client's MCP
+config:
+
+```json
+{
+  "mcpServers": {
+    "spreadbreadai": {
+      "command": "spreadbread-mcp"
+    }
+  }
+}
+```
+
+External tool calls flow through the same registry — write tools
+stage proposal items; nothing touches a workbook without an
+approval going through `apply`.
+
 ### Option B — Install from a published release
 
 Grab the artifacts from the

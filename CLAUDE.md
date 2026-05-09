@@ -100,9 +100,11 @@ The registry enforces this split. The model has no path to a real write.
 From repo root:
 
 - Install core deps:
-  `cd core && python3 -m venv .venv && .venv/bin/pip install -e .[dev]`
+  `cd core && python3 -m venv .venv && .venv/bin/pip install -e .[dev] --config-settings editable_mode=compat`
 - Run daemon:
   `cd core && .venv/bin/spreadbread-core`
+- Run MCP stdio server (for external AI clients):
+  `cd core && .venv/bin/spreadbread-mcp`
 - Run tests:
   `cd core && .venv/bin/python -m pytest -q`
 - Health check:
