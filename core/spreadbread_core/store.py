@@ -70,6 +70,12 @@ class Store:
     def has_version_bytes(self, workbook_id: str, version_id: str) -> bool:
         return self._version_path(workbook_id, version_id).exists()
 
+    def version_sha256(self, workbook_id: str, version_id: str) -> Optional[str]:
+        if not self.has_version_bytes(workbook_id, version_id):
+            return None
+        import hashlib
+        return hashlib.sha256(self.load_version_bytes(workbook_id, version_id)).hexdigest()
+
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
         cx = sqlite3.connect(self.db_path)
@@ -83,9 +89,21 @@ class Store:
 
     # --- workbooks -----------------------------------------------------
     def save_workbook(self, wb: Workbook) -> None:
+        # IMPORTANT: do NOT use INSERT OR REPLACE here. REPLACE deletes the
+        # existing row first, which cascades through ON DELETE CASCADE on
+        # proposals(workbook_id) — silently wiping every proposal attached
+        # to the workbook. Use INSERT ... ON CONFLICT DO UPDATE instead.
         with self._conn() as cx:
             cx.execute(
-                "INSERT OR REPLACE INTO workbooks(id, name, owner, created_at, payload) VALUES(?,?,?,?,?)",
+                """
+                INSERT INTO workbooks(id, name, owner, created_at, payload)
+                VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    owner = excluded.owner,
+                    created_at = excluded.created_at,
+                    payload = excluded.payload
+                """,
                 (wb.id, wb.name, wb.owner, wb.created_at, wb.model_dump_json()),
             )
 
@@ -101,9 +119,18 @@ class Store:
 
     # --- proposals -----------------------------------------------------
     def save_proposal(self, proposal: Proposal) -> None:
+        # See save_workbook for why this is INSERT...ON CONFLICT, not REPLACE.
         with self._conn() as cx:
             cx.execute(
-                "INSERT OR REPLACE INTO proposals(id, workbook_id, status, created_at, payload) VALUES(?,?,?,?,?)",
+                """
+                INSERT INTO proposals(id, workbook_id, status, created_at, payload)
+                VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    workbook_id = excluded.workbook_id,
+                    status = excluded.status,
+                    created_at = excluded.created_at,
+                    payload = excluded.payload
+                """,
                 (proposal.id, proposal.workbook_id, proposal.status, proposal.created_at, proposal.model_dump_json()),
             )
 

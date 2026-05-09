@@ -18,8 +18,6 @@ This is a high-level view of phases. Detail and rationale live in
   proposal was generated).
 - Reorder extension apply so the daemon commits before the Calc bridge
   writes.
-- Switch default model to a 7B / 8B class (Qwen 3 8B / Llama 3.3 8B);
-  Gemma 4 E2B remains supported.
 - Dedupe cell-reference parsing into a single shared module.
 - MCP stdio server so external AI tools (Claude Desktop, Cursor) can
   drive the daemon.

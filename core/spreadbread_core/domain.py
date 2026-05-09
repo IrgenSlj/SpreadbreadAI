@@ -85,6 +85,8 @@ class Proposal(BaseModel):
     applied_version_id: Optional[str] = None
     applied_at: Optional[str] = None
     applied_by: Optional[str] = None
+    source_version_id: Optional[str] = None
+    source_version_sha256: Optional[str] = None
 
 
 class AuditEvent(BaseModel):
@@ -116,7 +118,14 @@ def new_workbook(name: str, owner: str = "user") -> Workbook:
     )
 
 
-def new_proposal(workbook_id: str, title: str, summary: str, requested_by: str) -> Proposal:
+def new_proposal(
+    workbook_id: str,
+    title: str,
+    summary: str,
+    requested_by: str,
+    source_version_id: Optional[str] = None,
+    source_version_sha256: Optional[str] = None,
+) -> Proposal:
     return Proposal(
         id=_id("prop"),
         workbook_id=workbook_id,
@@ -124,4 +133,6 @@ def new_proposal(workbook_id: str, title: str, summary: str, requested_by: str) 
         summary=summary,
         requested_by=requested_by,
         created_at=_now(),
+        source_version_id=source_version_id,
+        source_version_sha256=source_version_sha256,
     )

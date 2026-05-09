@@ -177,9 +177,26 @@ def handle_apply(ctx: Any, client: DaemonClient) -> None:  # pragma: no cover - 
         )
         return
 
-    # Write approved cells into the active document for immediate UX.
+    # Order matters: the daemon is the source of truth, so we commit the
+    # canonical version FIRST. Only on success do we write to the active
+    # Calc document as a UX courtesy. If the Calc write fails afterwards,
+    # the user can re-open the canonical version from disk; if we wrote
+    # to Calc first and the daemon then refused (conflict, sha mismatch),
+    # the user would see ghost cells with no audit trail.
+    try:
+        result = client.apply(proposal["id"])
+    except DaemonError as exc:
+        _show_message(
+            ctx,
+            "SpreadbreadAI",
+            f"Daemon refused to apply.\n\n{exc}\n\n"
+            "Nothing was written to the active sheet.",
+        )
+        return
+
     calc = ActiveCalc(ctx)
     written: list[str] = []
+    failed: list[tuple[str, str]] = []
     for item in approved:
         if item.get("kind") == "comment":
             continue
@@ -190,26 +207,25 @@ def handle_apply(ctx: Any, client: DaemonClient) -> None:  # pragma: no cover - 
             calc.write_cell(item["cell"], "" if item.get("kind") == "remove" else str(value))
             written.append(item["cell"])
         except Exception as exc:
-            _show_message(ctx, "SpreadbreadAI", f"Could not write {item['cell']}: {exc}")
-            return
-
-    # Ask the daemon to commit a new canonical version.
-    try:
-        result = client.apply(proposal["id"])
-    except DaemonError as exc:
-        _show_message(
-            ctx,
-            "SpreadbreadAI",
-            f"Cells written to active sheet but daemon apply failed.\n\n{exc}",
-        )
-        return
+            failed.append((item["cell"], str(exc)))
 
     version = result.get("version", {})
-    _show_message(
-        ctx,
-        "SpreadbreadAI",
-        f"Applied {len(approved)} item(s).\n"
-        f"Wrote into active sheet: {', '.join(written) or '(none)'}\n"
-        f"New canonical version: {version.get('id')}\n"
+    msg = [
+        f"Applied {len(approved)} item(s) on the daemon.",
+        f"New canonical version: {version.get('id')}",
         f"Note: {version.get('note')}",
-    )
+        "",
+    ]
+    if written:
+        msg.append(f"Mirrored into the active sheet: {', '.join(written)}")
+    if failed:
+        msg.append(
+            f"Could not mirror {len(failed)} cell(s) into the active sheet "
+            "(canonical version is correct on disk):"
+        )
+        for cell, err in failed:
+            msg.append(f"  {cell}: {err}")
+        msg.append(
+            f"Re-open {version.get('id')}.xlsx from the data directory to see the canonical state."
+        )
+    _show_message(ctx, "SpreadbreadAI", "\n".join(msg))

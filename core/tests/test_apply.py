@@ -32,7 +32,11 @@ def _seed(tmp_path: Path) -> tuple[Store, str, str]:
     store.save_workbook(wb)
     store.save_version_bytes(wb.id, wb.latest_version_id, raw)
 
-    proposal = new_proposal(wb.id, "test", "test", "llm")
+    proposal = new_proposal(
+        wb.id, "test", "test", "llm",
+        source_version_id=wb.latest_version_id,
+        source_version_sha256=store.version_sha256(wb.id, wb.latest_version_id),
+    )
     proposal.items = [
         ProposalItem(kind="update", cell="Forecast!C3", before="=B3*1.05",
                      after="=B3*1.08", rationale="growth", status="approved"),
@@ -102,6 +106,28 @@ def test_apply_rejects_when_no_approved_items(tmp_path: Path) -> None:
         item.status = "rejected"
     store.save_proposal(proposal)
     with pytest.raises(ApplyError, match="no approved"):
+        apply_proposal(store, prop_id)
+
+
+def test_apply_refuses_when_workbook_moved(tmp_path: Path) -> None:
+    store, wb_id, prop_id = _seed(tmp_path)
+    # Simulate the workbook having advanced to a new version after the
+    # proposal was created (e.g. user re-uploaded).
+    workbook = store.get_workbook(wb_id)
+    assert workbook is not None
+    workbook.latest_version_id = "wbv_someone_else"
+    store.save_workbook(workbook)
+    with pytest.raises(ApplyError, match="moved"):
+        apply_proposal(store, prop_id)
+
+
+def test_apply_refuses_when_base_bytes_tampered(tmp_path: Path) -> None:
+    store, wb_id, prop_id = _seed(tmp_path)
+    workbook = store.get_workbook(wb_id)
+    assert workbook is not None
+    # Same version id but different bytes.
+    store.save_version_bytes(wb_id, workbook.latest_version_id, b"tampered")
+    with pytest.raises(ApplyError, match="sha256"):
         apply_proposal(store, prop_id)
 
 

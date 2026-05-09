@@ -104,10 +104,29 @@ def apply_proposal(store: Store, proposal_id: str, reviewer: str = "system") -> 
     if not approved:
         raise ApplyError("no approved items to apply")
 
-    if not store.has_version_bytes(workbook.id, workbook.latest_version_id):
+    # Conflict detection: refuse if the workbook has moved since the
+    # proposal was generated. source_version_id is set by _ensure_proposal
+    # at proposal-creation time. If unset (legacy proposals), fall back
+    # to the current latest version, but log it so the audit trail shows
+    # we trusted the workbook implicitly.
+    base_version_id = proposal.source_version_id or workbook.latest_version_id
+    if proposal.source_version_id and proposal.source_version_id != workbook.latest_version_id:
+        raise ApplyError(
+            f"workbook has moved since proposal was created "
+            f"(proposal source: {proposal.source_version_id}, workbook latest: {workbook.latest_version_id}) "
+            f"— regenerate the proposal against the current version"
+        )
+    if not store.has_version_bytes(workbook.id, base_version_id):
         raise ApplyError("base workbook bytes missing — workbook was not uploaded")
+    if proposal.source_version_sha256:
+        actual_sha = store.version_sha256(workbook.id, base_version_id)
+        if actual_sha != proposal.source_version_sha256:
+            raise ApplyError(
+                "base workbook bytes have been modified since the proposal "
+                "was created (sha256 mismatch)"
+            )
 
-    base_bytes = store.load_version_bytes(workbook.id, workbook.latest_version_id)
+    base_bytes = store.load_version_bytes(workbook.id, base_version_id)
     book = _load(io.BytesIO(base_bytes), data_only=False, read_only=False)
 
     for item in approved:

@@ -181,11 +181,15 @@ class ToolRegistry:
         proposal = self.store.latest_proposal_for(workbook_id)
         if proposal and proposal.status in ("draft", "pending_approval"):
             return proposal
+        wb = self.store.get_workbook(workbook_id)
+        sha = self.store.version_sha256(workbook_id, wb.latest_version_id) if wb else None
         proposal = new_proposal(
             workbook_id=workbook_id,
             title="AI review draft",
             summary="Automated review proposal pending human approval.",
             requested_by="llm",
+            source_version_id=wb.latest_version_id if wb else None,
+            source_version_sha256=sha,
         )
         self.store.save_proposal(proposal)
         self.store.append_audit(

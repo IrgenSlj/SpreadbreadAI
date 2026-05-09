@@ -159,12 +159,15 @@ Loop:
 - **Reorder extension apply.** Daemon commits the canonical version
   first; only on success does the extension write to the active Calc
   document as a UX courtesy. Daemon is the source of truth.
-- **Larger default model.** Switch from Gemma 4 E2B (2.3B) to Qwen 3
-  8B / Llama 3.3 8B for reliable cell-reference and formula reasoning.
-  Gemma stays supported for users who need a smaller footprint.
 - **Dedupe cell-ref parsing.** Single shared module covers absolute
   refs (`$A$1`), ranges (`A1:B2`), and named ranges; fails loudly on
   unsupported inputs instead of producing garbage.
+
+The default model stays `gemma4:e2b` deliberately. The smallest viable
+local model keeps the install footprint and laptop-RAM bar low. Users
+who want stronger cell reasoning can swap to Qwen 3 8B or a cloud
+provider through the multi-LLM adapter (Phase 7) — but the default
+will not change before the rest of the platform is fast and stable.
 
 ### Phase 4 — Trust modes (planned)
 
