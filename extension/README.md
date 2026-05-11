@@ -11,17 +11,19 @@ v0.1 scaffold landed. See [`docs/development-plan.md`](../docs/development-plan.
 What works:
 
 - protocol handler `spreadbread:review` and `spreadbread:apply`
-- "SpreadbreadAI" menu in Calc with two entries
+- "SpreadbreadAI" menu in Calc with three entries:
+  Review, Approve all pending items, Apply approved diffs
 - daemon client (stdlib only — no third-party deps inside LO Python)
 - workbook upload + review request triggers a Gemma 4 review and shows
   results in a message box
-- cell-reference parser and Calc bridge for the upcoming apply flow
+- cell-reference parser and Calc bridge for mirroring approved diffs
+  into the active workbook after daemon apply succeeds
 
 What is next (Phase 2.5):
 
 - replace the temporary message box with a real sidebar `.ui` panel
 - per-item approve / reject buttons inside the sidebar
-- wire `spreadbread:apply` to the daemon's apply endpoint (Phase 3)
+- trust-mode controls inside the sidebar
 
 ## Layout
 

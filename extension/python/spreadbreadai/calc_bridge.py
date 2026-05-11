@@ -40,7 +40,12 @@ class ActiveCalc:
         doc = self._document()
         return doc.getURL() if doc and doc.getURL() else None
 
-    def write_cell(self, ref: str, value: str) -> None:  # pragma: no cover - requires UNO
+    def write_cell(
+        self,
+        ref: str,
+        value: str | None,
+        value_type: str | None = None,
+    ) -> None:  # pragma: no cover - requires UNO
         parsed = parse_cell(ref)
         sheet_name, col, row = parsed.sheet, parsed.column, parsed.row
         doc = self._document()
@@ -49,10 +54,20 @@ class ActiveCalc:
         else:
             sheet = doc.getSheets().getByIndex(0)
         cell = sheet.getCellByPosition(col, row)
-        if value.startswith("="):
+        if value is None or value_type == "blank":
+            # VALUE | DATETIME | STRING | ANNOTATION | FORMULA
+            cell.clearContents(31)
+        elif value_type == "formula" or (value_type is None and value.startswith("=")):
             cell.setFormula(value)
+        elif value_type == "number":
+            cell.setValue(float(value))
+        elif value_type == "boolean":
+            normalized = value.strip().lower()
+            if normalized in ("true", "1", "yes"):
+                cell.setValue(1.0)
+            elif normalized in ("false", "0", "no"):
+                cell.setValue(0.0)
+            else:
+                raise ValueError(f"invalid boolean cell value: {value!r}")
         else:
-            try:
-                cell.setValue(float(value))
-            except ValueError:
-                cell.setString(value)
+            cell.setString(value)

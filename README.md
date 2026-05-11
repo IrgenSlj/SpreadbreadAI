@@ -18,18 +18,18 @@ toolset over MCP.
 
 - Parses uploaded `.xlsx` workbooks and surfaces structural risks.
 - Lets a local LLM read sheets, list risks, and stage proposed edits.
-- Routes every write through an explicit approval and an immutable,
-  versioned `.xlsx` snapshot.
+- Routes writes through explicit approval by default, then creates an
+  immutable, versioned `.xlsx` snapshot.
 - Records an append-only audit trail of every tool call, decision,
   and applied change.
 - Runs fully offline by default; cloud LLMs are opt-in.
 
-Trust modes per workbook control how directly the LLM acts: `direct`
-(default for the uploader) lets the model apply tool results immediately
-while still producing immutable versions and audit events; `review`
-requires explicit approval before apply; `locked` requires per-item
-approval and refuses bulk operations. The mode can be changed via the
-API at any time.
+Trust modes per workbook control how directly the LLM acts: `review`
+is the default and requires explicit approval before apply; `locked`
+requires per-item approval and refuses bulk operations; `direct` is an
+opt-in mode that can auto-approve and apply staged items while still
+producing immutable versions and audit events. The mode can be changed
+via the API at any time.
 
 ## Architecture
 
@@ -46,10 +46,11 @@ API at any time.
 ## Tool catalog
 
 Read tools (no side effects): `list_workbooks`, `get_review_snapshot`,
-`inspect_sheet`, `list_risks`. Write-staging tools (create pending
-proposal items, never mutate workbooks directly): `propose_diff`,
-`add_comment`. The registry enforces this split — there is no tool
-the LLM can call that bypasses the approval pipeline.
+`inspect_sheet`, `list_risks`, `get_dependencies`,
+`find_external_references`, `get_named_ranges`. Write-staging tools
+(create pending proposal items, never mutate workbooks directly):
+`propose_diff`, `add_comment`. The registry enforces this split —
+there is no tool the LLM can call that writes directly to a workbook.
 
 ## Status
 
@@ -65,10 +66,9 @@ Landed in `v0.1.2`:
   quoted sheet names, and named-range identifiers.
 
 In progress: real sidebar UI to replace the message-box review
-surface, multi-LLM adapter (Gemini / OpenAI / Anthropic), expanded
-parser intelligence (dependency graphs, stale-input detection).
-See [`docs/development-plan.md`](docs/development-plan.md) for the
-phased plan.
+surface, multi-LLM adapter (Gemini / OpenAI / Anthropic), and native
+installer hardening. See [`docs/development-plan.md`](docs/development-plan.md)
+for the phased plan.
 
 ## Install
 
@@ -144,11 +144,11 @@ Grab the artifacts from the
 
 ```bash
 # daemon (recommend pipx so it lives in its own env)
-pipx install https://github.com/IrgenSlj/SpreadbreadAI/releases/download/v0.1.1/spreadbread_core-0.1.1-py3-none-any.whl
+pipx install https://github.com/IrgenSlj/SpreadbreadAI/releases/download/v0.1.2/spreadbread_core-0.1.2-py3-none-any.whl
 
 # extension
 curl -L -o spreadbreadai.oxt \
-  https://github.com/IrgenSlj/SpreadbreadAI/releases/download/v0.1.1/spreadbreadai.oxt
+  https://github.com/IrgenSlj/SpreadbreadAI/releases/download/v0.1.2/spreadbreadai.oxt
 unopkg add spreadbreadai.oxt
 ```
 
@@ -177,9 +177,8 @@ three menu clicks:
    has touched your workbook yet.)
 4. **SpreadbreadAI → 3. Apply approved diffs**
    The extension writes the approved cells into the active sheet and
-   the daemon commits a new canonical `.xlsx` version under
-   `core/.data/workbooks/<workbook_id>/`. The audit trail records every
-   step.
+   the daemon commits a new canonical `.xlsx` version under the
+   configured data directory. The audit trail records every step.
 
 If you prefer to drive it from a terminal instead of LibreOffice, use
 the [HTTP API](docs/architecture/system-architecture.md#api-surface):

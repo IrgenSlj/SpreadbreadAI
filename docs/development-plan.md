@@ -52,9 +52,9 @@ plus local daemon is the canonical shape.
 
 ### Component responsibilities
 
-- **LibreOffice extension** (`extension/`) — sidebar UI, "Open in
-  SpreadbreadAI" command, diff renderer, approve/reject actions, write
-  approved diffs back to the active workbook. No business logic.
+- **LibreOffice extension** (`extension/`) — Calc menu actions today,
+  sidebar UI next, diff renderer, approve/reject actions, and active
+  workbook mirroring after daemon apply. No business logic.
 - **Core daemon** (`core/`) — single Python process, single SQLite file,
   owns every domain object and every state transition. Exposes a
   localhost HTTP API and an MCP stdio server.
@@ -91,6 +91,9 @@ Tool catalog (v0.1):
 - `get_review_snapshot(workbook_id)` — read
 - `inspect_sheet(workbook_id, sheet_name)` — read
 - `list_risks(workbook_id)` — read
+- `get_dependencies(workbook_id, cell)` — read
+- `find_external_references(workbook_id)` — read
+- `get_named_ranges(workbook_id)` — read
 - `propose_diff(workbook_id, cell, kind, before?, after?, rationale)` — stages a pending item
 - `add_comment(workbook_id, cell, body)` — stages a pending comment item
 
@@ -145,13 +148,13 @@ Loop:
   blocks apply.
 - (landed) Audit events written: `proposal.applied` and
   `version.created`.
-- (landed) Extension `spreadbread:apply` writes approved cells into the
-  active Calc document via the Calc bridge, then asks the daemon to
-  commit the canonical version.
-- (in progress) Conflict detection when the active workbook diverges
+- (landed) Extension `spreadbread:apply` asks the daemon to commit the
+  canonical version first, then mirrors approved cells into the active
+  Calc document as a UX courtesy.
+- (landed) Conflict detection when the stored workbook version diverges
   from the version the proposal was generated against.
 
-### Phase 3.5 — Hardening (next, prioritized from peer review)
+### Phase 3.5 — Hardening (status: landed)
 
 - **Conflict detection on apply.** Track `source_version_id` and a
   SHA-256 checksum of the base xlsx on the proposal at creation time.
@@ -174,7 +177,7 @@ will not change before the rest of the platform is fast and stable.
 ### Phase 4 — Trust modes (status: landed in daemon; extension follow-up pending)
 
 - (landed) `TrustMode = Literal["direct", "review", "locked"]` added to
-  the domain model; `Workbook` carries `trust_mode: TrustMode = "direct"`.
+  the domain model; `Workbook` carries `trust_mode: TrustMode = "review"`.
 - (landed) `POST /api/workbooks/{workbook_id}/trust-mode` validates the
   mode, updates the workbook, and writes a `workbook.trust_mode_changed`
   audit event.
@@ -182,9 +185,10 @@ will not change before the rest of the platform is fast and stable.
   approves all pending items on the latest proposal and calls apply in the
   same request. Every direct-mode change still produces an immutable
   workbook version and an audit event with actor `"user (direct mode)"`.
-  The HITL guarantee is preserved through versioning and audit, not through
-  a forced per-action click. If auto-apply fails (e.g. conflict detection),
-  the error is surfaced in `auto_apply_error` without failing the chat call.
+  This mode is opt-in; the default `review` mode requires an explicit
+  approval click before apply. If auto-apply fails (e.g. conflict
+  detection), the error is surfaced in `auto_apply_error` without
+  failing the chat call.
 - (landed) `/chat` response shape extended with `auto_applied: bool`,
   `applied_version_id: str | None`, and `auto_apply_error: str | None`.
 - (landed) `review` mode: existing behavior — items stage as pending,
@@ -209,7 +213,7 @@ cannot drive SpreadbreadAI. With it, those tools become free
 distribution channels.
 
 - (landed) `spreadbread-mcp` stdio entry point exposing the existing
-  tool registry. Same six tools, same registry, same approval
+  tool registry. Same registry, same approval
   pipeline — write tools stage items, apply requires approved items.
 - (landed) External MCP invocations write a distinct
   `mcp.tool.<name>` audit event so traffic is traceable separately
@@ -316,7 +320,6 @@ Migration:
 
 Currently missing:
 
-- Dedicated parser tests.
 - Tests for `ToolRegistry._ensure_proposal` when the latest proposal
   is already applied (does the model start a new one?).
 - Property-based tests for cell-reference parsing.
@@ -345,15 +348,10 @@ the phases above. Cross-reference for future contributors:
 
 | Issue | Phase |
 |---|---|
-| No conflict detection on apply (data-loss risk) | 3.5 |
-| Extension apply writes to Calc before committing canonical version | 3.5 |
-| JSON-blob storage of proposals will not scale | 9 |
-| Parser "risks" are placeholders, not insight | 6 |
-| Duplicated, incomplete cell-reference parsing in apply.py and calc_bridge.py | 3.5 |
-| 2.3B default model is the weakest link in cell reasoning | 3.5 |
 | Config is ENV-only with a fragile path default that breaks pipx installs | 7/8 |
-| No MCP server yet — users' AI tools cannot drive the daemon | 5 |
-| Test coverage gaps in parser, `_ensure_proposal`, sidebar dispatch | 10 |
+| JSON-blob storage of proposals will not scale | 9 |
+| 2.3B default model is the weakest link in cell reasoning | 3.5 |
+| Test coverage gaps in `_ensure_proposal`, property-based cell parsing, and sidebar dispatch | 10 |
 | No concurrency control beyond SQLite's default locking | 9 |
 
 ## Non-Goals (for the MVP)
@@ -380,9 +378,11 @@ the phases above. Cross-reference for future contributors:
 - **Daemon, not embedded.** Keeps the extension thin, lets us reuse the
   daemon from a future web UI / VS Code addin / Excel addin without a
   second backend.
-- **Human-in-the-loop is non-negotiable.** No tool path can mutate a
-  workbook without a human approval. This is enforced in the registry,
-  not in the prompt.
+- **Human-in-the-loop is the default.** No tool path can write directly
+  to a workbook; write tools stage proposals. The default `review` mode
+  requires human approval before apply. The opt-in `direct` mode still
+  routes through the daemon apply pipeline, immutable versions, and
+  audit events.
 
 ## Risks and Mitigations
 
@@ -394,7 +394,7 @@ the phases above. Cross-reference for future contributors:
 - **Distribution doubles the surface (.oxt, pipx, Ollama, model
   downloads).** Mitigation: a single bootstrap command and clear docs.
 - **Excel parity will be requested immediately.** Mitigation: the
-  daemon is workbook-format-agnostic from day one; the LO sidebar is
+  daemon is workbook-format-agnostic from day one; the LO extension is
   the only LO-specific component.
 
 ## Validation Plan
@@ -406,9 +406,9 @@ the phases above. Cross-reference for future contributors:
 - **End-to-end demo (the bar for MVP):**
   1. Install the extension and run `spreadbread-core`.
   2. Open an FP&A workbook in Calc.
-  3. Click "Review with SpreadbreadAI" — sidebar shows risks and
-     three staged proposals from Gemma 4.
-  4. Approve one diff.
+  3. Click "Review with SpreadbreadAI" — the extension shows risks and
+     staged proposals from Gemma 4.
+  4. Approve the staged diff.
   5. Click "Apply approved" — Calc cell updates; daemon writes the new
      version; audit trail shows every step.
 - All of the above must work fully offline.

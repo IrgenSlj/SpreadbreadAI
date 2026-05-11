@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from openpyxl import load_workbook as _load
 from openpyxl.comments import Comment
@@ -49,6 +51,33 @@ def _select_sheet(book, sheet_name: str | None):
     return book[sheet_name]
 
 
+def _typed_value(item: ProposalItem) -> Any:
+    value = item.after
+    value_type = item.after_type
+    if value_type == "blank":
+        return None
+    if value is None:
+        return None
+    if value_type == "formula" or (value_type is None and value.startswith("=")):
+        return value
+    if value_type == "number":
+        try:
+            number = Decimal(value)
+        except InvalidOperation as exc:
+            raise ApplyError(f"invalid number for {item.cell}: {value!r}") from exc
+        if number == number.to_integral_value():
+            return int(number)
+        return float(number)
+    if value_type == "boolean":
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes"):
+            return True
+        if normalized in ("false", "0", "no"):
+            return False
+        raise ApplyError(f"invalid boolean for {item.cell}: {value!r}")
+    return value
+
+
 def _write_item(book, item: ProposalItem) -> None:
     try:
         ref = parse_cell(item.cell)
@@ -62,16 +91,7 @@ def _write_item(book, item: ProposalItem) -> None:
     if item.kind == "remove":
         cell.value = None
         return
-    value = item.after
-    if value is None:
-        return
-    if value.startswith("="):
-        cell.value = value
-    else:
-        try:
-            cell.value = float(value)
-        except ValueError:
-            cell.value = value
+    cell.value = _typed_value(item)
 
 
 def apply_proposal(store: Store, proposal_id: str, reviewer: str = "system") -> ApplyResult:

@@ -37,11 +37,14 @@ Out of scope (report upstream):
 
 ## Security model reminders
 
-SpreadbreadAI is designed so the LLM cannot mutate workbooks. Write
-tools stage proposal items; only an explicit human approval can apply
-them, and apply is performed by the daemon, not the model. If you find
-a path that lets an LLM bypass that boundary, treat it as a security
-issue and report it through the channel above.
+SpreadbreadAI is designed so the LLM cannot write directly to
+workbooks. Write tools stage proposal items; in the default `review`
+mode, only an explicit human approval can apply them. The opt-in
+`direct` mode can auto-approve staged items, but apply is still
+performed by the daemon and recorded as a versioned, audited change.
+If you find a path that lets an LLM bypass the tool registry or apply
+pipeline, treat it as a security issue and report it through the
+channel above.
 
 ## Local trust assumptions
 

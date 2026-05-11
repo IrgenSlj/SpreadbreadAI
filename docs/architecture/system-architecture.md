@@ -11,10 +11,10 @@ A Python UNO extension installed as `spreadbreadai.oxt`.
 
 Responsibilities:
 
-- register a sidebar in Calc
+- register Calc menu actions for Review, Approve all, and Apply
 - show workbook risks and staged proposal items
-- render diff cards with approve / reject buttons
-- write approved cell diffs into the active sheet
+- mirror approved cell diffs into the active sheet after daemon apply
+- track the uploaded workbook id for the active Calc document
 - talk to the local daemon over `127.0.0.1:8765`
 
 The extension contains no business logic. Everything authoritative
@@ -31,9 +31,9 @@ Responsibilities:
 - parse `.xlsx` uploads (openpyxl)
 - expose the tool registry to the LLM
 - run the LLM tool-calling loop (Ollama by default)
-- enforce the human-in-the-loop guarantee — write tools stage items;
+- enforce the default human-in-the-loop flow — write tools stage items;
   apply requires approved items only
-- expose the same tool catalog over MCP stdio (planned)
+- expose the same tool catalog over MCP stdio
 
 ### LLM adapter (`core/spreadbread_core/llm.py`)
 
@@ -57,7 +57,7 @@ These live in `core/spreadbread_core/domain.py`:
 - `WorkbookRisk` — id, label, severity, location, summary
 - `WorkbookVersion` — id, created_at, created_by, note
 - `Proposal` — id, workbook_id, status, items, applied_*
-- `ProposalItem` — id, kind, cell, before, after, rationale, status
+- `ProposalItem` — id, kind, cell, before, after, after_type, rationale, status
 - `AuditEvent` — id, workbook_id, actor, action, detail, created_at
 - `ReviewSnapshot` — Workbook + latest Proposal + audit list
 
@@ -81,17 +81,20 @@ Local HTTP (FastAPI), `127.0.0.1:8765`:
 - `GET  /api/workbooks`
 - `POST /api/workbooks/upload`
 - `GET  /api/workbooks/{id}/review`
+- `POST /api/workbooks/{id}/trust-mode`
 - `POST /api/workbooks/{id}/chat`
 - `POST /api/proposals/{proposal_id}/items/{item_id}/decision`
+- `POST /api/proposals/{proposal_id}/approve-all`
 - `POST /api/proposals/{proposal_id}/apply`
 - `GET  /api/tools`
 
-MCP stdio: planned, will mirror the tool catalog.
+MCP stdio: `spreadbread-mcp`, mirrors the tool catalog.
 
 ## Design constraints
 
-- The LLM cannot mutate a workbook. Period. Write tools stage; apply
-  needs approved items.
+- The LLM cannot write directly to a workbook. Write tools stage; apply
+  needs approved items. `direct` mode may auto-approve staged items,
+  but still goes through daemon apply, versioning, and audit.
 - Every state transition writes an audit event.
 - Workbook versions are immutable; new versions are created, never
   edited.
@@ -102,6 +105,6 @@ MCP stdio: planned, will mirror the tool catalog.
 
 ## What is not here
 
-The full apply pipeline (Phase 3), the dependency graph (Phase 4), the
-MCP surface (Phase 6), and the optional web review UI (Phase 7) are
-documented in the development plan and tracked there.
+The native installer, multi-LLM adapter, normalized storage, and the
+optional web review UI are documented in the development plan and
+tracked there.

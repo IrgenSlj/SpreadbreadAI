@@ -52,7 +52,7 @@ if Ollama is not reachable.
 
 Environment variables, all optional:
 
-- `SPREADBREAD_DATA_DIR` — where SQLite + uploads live (default `core/.data/`)
+- `SPREADBREAD_DATA_DIR` — where SQLite + uploads live (default: OS user-data directory)
 - `SPREADBREAD_MODEL` — Ollama model tag (default `gemma4:e2b`)
 - `OLLAMA_HOST` — Ollama URL (default `http://127.0.0.1:11434`)
 - `SPREADBREAD_HOST` / `SPREADBREAD_PORT` — daemon bind (default `127.0.0.1:8765`)
@@ -82,6 +82,7 @@ launch environment if you need a non-default address.
 
 ## Resetting local state
 
-Delete `core/.data/` to wipe the SQLite database and uploaded workbooks.
-The directory is gitignored.
-
+Delete the configured `SPREADBREAD_DATA_DIR` to wipe the SQLite
+database and uploaded workbooks. If unset, the default is your OS
+user-data directory, such as `~/Library/Application Support/SpreadbreadAI/data`
+on macOS or `~/.local/share/spreadbreadai/data` on Linux.

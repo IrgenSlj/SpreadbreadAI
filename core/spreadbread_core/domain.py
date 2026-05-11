@@ -21,6 +21,7 @@ DiffKind = Literal["add", "remove", "update", "comment"]
 RiskSeverity = Literal["low", "medium", "high"]
 WorkbookAccessRole = Literal["owner", "approver", "reviewer", "editor"]
 TrustMode = Literal["direct", "review", "locked"]
+CellValueType = Literal["string", "number", "boolean", "blank", "formula"]
 
 
 class WorkbookNamedRange(BaseModel):
@@ -67,7 +68,7 @@ class Workbook(BaseModel):
     versions: list[WorkbookVersion] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     status: Literal["healthy", "needs_review"] = "needs_review"
-    trust_mode: TrustMode = "direct"
+    trust_mode: TrustMode = "review"
     named_ranges: list[WorkbookNamedRange] = Field(default_factory=list)
     dependencies: dict[str, list[str]] = Field(default_factory=dict)
 
@@ -78,6 +79,7 @@ class ProposalItem(BaseModel):
     cell: str
     before: Optional[str] = None
     after: Optional[str] = None
+    after_type: Optional[CellValueType] = None
     rationale: str
     status: ProposalItemStatus = "pending"
     reviewer: Optional[str] = None

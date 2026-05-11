@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from openpyxl import Workbook as XlsxWorkbook
 
 from spreadbread_core.config import Config
@@ -55,6 +56,7 @@ def test_end_to_end(tmp_path: Path) -> None:
             "kind": "update",
             "before": "=B3*1.05",
             "after": "=B3*1.08",
+            "after_type": "formula",
             "rationale": "Aligns May forecast with revised growth assumption.",
         },
     )
@@ -67,6 +69,7 @@ def test_end_to_end(tmp_path: Path) -> None:
     item = snap.proposal.items[0]
     assert item.status == "pending"  # human approval still required
     assert item.cell == "Forecast!C3"
+    assert item.after_type == "formula"
 
     # decision: approve
     proposal = store.decide_item(snap.proposal.id, item.id, "approve", reviewer="finance_manager")
@@ -139,6 +142,29 @@ def test_new_tools_end_to_end(tmp_path: Path) -> None:
     assert "reference" in my_range
     assert "name" in my_range
     assert "sheet_name" in my_range
+
+
+def test_propose_diff_rejects_missing_sheet(tmp_path: Path) -> None:
+    db_path = tmp_path / "validate_target.sqlite3"
+    store = Store(db_path)
+    registry = ToolRegistry(store)
+
+    xlsx_path = _build_sample_xlsx(tmp_path)
+    wb = parse_xlsx(xlsx_path)
+    store.save_workbook(wb)
+
+    with pytest.raises(ValueError, match="sheet 'Missing' not found"):
+        registry.call(
+            "propose_diff",
+            {
+                "workbook_id": wb.id,
+                "cell": "Missing!A1",
+                "kind": "update",
+                "after": "100",
+                "after_type": "number",
+                "rationale": "test",
+            },
+        )
 
 
 def test_config_loads(tmp_path: Path, monkeypatch) -> None:

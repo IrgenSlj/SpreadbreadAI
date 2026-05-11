@@ -1,8 +1,21 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _default_data_dir() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "SpreadbreadAI" / "data"
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", Path.home())) / "SpreadbreadAI" / "data"
+    return (
+        Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        / "spreadbreadai"
+        / "data"
+    )
 
 
 @dataclass(frozen=True)
@@ -16,7 +29,7 @@ class Config:
 
     @classmethod
     def load(cls) -> "Config":
-        root = Path(os.environ.get("SPREADBREAD_DATA_DIR", Path(__file__).resolve().parents[2] / "core" / ".data"))
+        root = Path(os.environ.get("SPREADBREAD_DATA_DIR", _default_data_dir()))
         root.mkdir(parents=True, exist_ok=True)
         return cls(
             data_dir=root,

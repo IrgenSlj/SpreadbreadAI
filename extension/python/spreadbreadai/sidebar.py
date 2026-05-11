@@ -9,9 +9,32 @@ panels. Phase 2.5 will replace this with a real .ui-defined panel.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from .calc_bridge import ActiveCalc
 from .client import DaemonClient, DaemonError
+
+_WORKBOOK_IDS_BY_FILE_URL: dict[str, str] = {}
+
+
+def _file_url_to_path(file_url: str) -> str | None:
+    parsed = urlparse(file_url)
+    if parsed.scheme != "file":
+        return None
+    path = unquote(parsed.path)
+    if parsed.netloc:
+        path = f"//{parsed.netloc}{path}"
+    if len(path) >= 3 and path[0] == "/" and path[2] == ":":
+        path = path[1:]
+    return path
+
+
+def _remember_workbook(file_url: str, workbook_id: str) -> None:
+    _WORKBOOK_IDS_BY_FILE_URL[file_url] = workbook_id
+
+
+def _remembered_workbook(file_url: str) -> str | None:
+    return _WORKBOOK_IDS_BY_FILE_URL.get(file_url)
 
 
 def _show_message(ctx: Any, title: str, body: str) -> None:  # pragma: no cover - requires UNO
@@ -76,11 +99,15 @@ def handle_review(ctx: Any, client: DaemonClient) -> None:  # pragma: no cover -
     if not file_url or not file_url.startswith("file://"):
         _show_message(ctx, "SpreadbreadAI", "Save the workbook to disk before review.")
         return
-    file_path = file_url.replace("file://", "")
+    file_path = _file_url_to_path(file_url)
+    if not file_path:
+        _show_message(ctx, "SpreadbreadAI", "Could not resolve the workbook file path.")
+        return
 
     try:
         workbook = client.upload_workbook(file_path)
         wb_id = workbook["id"]
+        _remember_workbook(file_url, wb_id)
         client.chat(wb_id, "Inspect the workbook and stage any proposals you'd recommend.")
         snapshot = client.review_snapshot(wb_id)
     except DaemonError as exc:
@@ -92,17 +119,22 @@ def handle_review(ctx: Any, client: DaemonClient) -> None:  # pragma: no cover -
 
 def handle_approve_all(ctx: Any, client: DaemonClient) -> None:  # pragma: no cover - requires UNO
     try:
-        workbooks = client.list_workbooks()
+        client.healthz()
     except DaemonError as exc:
         _show_message(ctx, "SpreadbreadAI", f"Daemon not reachable.\n\n{exc}")
         return
-    if not workbooks:
-        _show_message(ctx, "SpreadbreadAI", "No workbooks. Run Review first.")
+
+    file_url = ActiveCalc(ctx).file_url()
+    if not file_url:
+        _show_message(ctx, "SpreadbreadAI", "Save and review this workbook before approving.")
+        return
+    wb_id = _remembered_workbook(file_url)
+    if not wb_id:
+        _show_message(ctx, "SpreadbreadAI", "Run Review for this workbook before approving.")
         return
 
-    wb = workbooks[0]
     try:
-        snapshot = client.review_snapshot(wb["id"])
+        snapshot = client.review_snapshot(wb_id)
     except DaemonError as exc:
         _show_message(ctx, "SpreadbreadAI", f"Could not load review.\n\n{exc}")
         return
@@ -147,18 +179,22 @@ def handle_approve_all(ctx: Any, client: DaemonClient) -> None:  # pragma: no co
 
 def handle_apply(ctx: Any, client: DaemonClient) -> None:  # pragma: no cover - requires UNO
     try:
-        workbooks = client.list_workbooks()
+        client.healthz()
     except DaemonError as exc:
         _show_message(ctx, "SpreadbreadAI", f"Daemon not reachable.\n\n{exc}")
         return
-    if not workbooks:
-        _show_message(ctx, "SpreadbreadAI", "No workbooks. Run Review first.")
+
+    file_url = ActiveCalc(ctx).file_url()
+    if not file_url:
+        _show_message(ctx, "SpreadbreadAI", "Save and review this workbook before applying.")
+        return
+    wb_id = _remembered_workbook(file_url)
+    if not wb_id:
+        _show_message(ctx, "SpreadbreadAI", "Run Review for this workbook before applying.")
         return
 
-    # Most recent workbook owns the active proposal in v0.1
-    wb = workbooks[0]
     try:
-        snapshot = client.review_snapshot(wb["id"])
+        snapshot = client.review_snapshot(wb_id)
     except DaemonError as exc:
         _show_message(ctx, "SpreadbreadAI", f"Could not load review.\n\n{exc}")
         return
@@ -204,7 +240,12 @@ def handle_apply(ctx: Any, client: DaemonClient) -> None:  # pragma: no cover - 
             value = item.get("after")
             if value is None and item.get("kind") != "remove":
                 continue
-            calc.write_cell(item["cell"], "" if item.get("kind") == "remove" else str(value))
+            value_type = "blank" if item.get("kind") == "remove" else item.get("after_type")
+            calc.write_cell(
+                item["cell"],
+                None if item.get("kind") == "remove" else str(value),
+                value_type=value_type,
+            )
             written.append(item["cell"])
         except Exception as exc:
             failed.append((item["cell"], str(exc)))

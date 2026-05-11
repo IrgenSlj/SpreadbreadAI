@@ -19,7 +19,7 @@ python3 -m venv .venv
 
 All optional, all environment variables:
 
-- `SPREADBREAD_DATA_DIR` — SQLite + workbook bytes (default `./.data/`)
+- `SPREADBREAD_DATA_DIR` — SQLite + workbook bytes (default: OS user-data directory)
 - `SPREADBREAD_MODEL` — Ollama model tag (default `gemma4:e2b`)
 - `OLLAMA_HOST` — Ollama URL (default `http://127.0.0.1:11434`)
 - `SPREADBREAD_HOST` / `SPREADBREAD_PORT` — bind (default `127.0.0.1:8765`)

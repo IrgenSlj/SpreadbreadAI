@@ -9,8 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .cell_ref import parse_cell
 from .domain import (
     AuditEvent,
+    CellValueType,
     DiffKind,
     Proposal,
     ProposalItem,
@@ -122,6 +124,14 @@ class ToolRegistry:
                         "cell": {"type": "string", "description": "e.g. Forecast!G18"},
                         "kind": {"type": "string", "enum": ["add", "remove", "update", "comment"]},
                         "after": {"type": "string"},
+                        "after_type": {
+                            "type": "string",
+                            "enum": ["string", "number", "boolean", "blank", "formula"],
+                            "description": (
+                                "Type of the proposed after value. Use string for IDs, codes, "
+                                "and leading-zero values; number only for real numeric cells."
+                            ),
+                        },
                         "before": {"type": "string"},
                         "rationale": {"type": "string"},
                     },
@@ -216,6 +226,14 @@ class ToolRegistry:
             raise KeyError(f"workbook {workbook_id} not found")
         return [r.model_dump() for r in wb.risks]
 
+    def _validate_target_cell(self, workbook_id: str, cell: str) -> None:
+        wb = self.store.get_workbook(workbook_id)
+        if not wb:
+            raise KeyError(f"workbook {workbook_id} not found")
+        ref = parse_cell(cell)
+        if ref.sheet and ref.sheet not in {sheet.name for sheet in wb.sheets}:
+            raise ValueError(f"sheet {ref.sheet!r} not found in workbook {workbook_id}")
+
     def _ensure_proposal(self, workbook_id: str) -> Proposal:
         proposal = self.store.latest_proposal_for(workbook_id)
         if proposal and proposal.status in ("draft", "pending_approval"):
@@ -248,10 +266,19 @@ class ToolRegistry:
         kind: DiffKind,
         rationale: str,
         after: str | None = None,
+        after_type: CellValueType | None = None,
         before: str | None = None,
     ) -> dict[str, Any]:
+        self._validate_target_cell(workbook_id, cell)
         proposal = self._ensure_proposal(workbook_id)
-        item = ProposalItem(kind=kind, cell=cell, before=before, after=after, rationale=rationale)
+        item = ProposalItem(
+            kind=kind,
+            cell=cell,
+            before=before,
+            after=after,
+            after_type=after_type,
+            rationale=rationale,
+        )
         self.store.append_proposal_item(proposal.id, item)
         self.store.append_audit(
             AuditEvent(

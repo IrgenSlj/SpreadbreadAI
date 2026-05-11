@@ -4,7 +4,7 @@ version = "0.1.2"
 description = "LibreOffice Calc extension for SpreadbreadAI (Python UNO)"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 authors = [{ name = "SpreadbreadAI contributors" }]
 keywords = ["libreoffice", "calc", "uno", "extension", "spreadsheet", "ai"]
 dependencies = []
@@ -22,5 +22,5 @@ pythonpath = ["python"]
 testpaths = ["tests"]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"

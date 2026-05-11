@@ -14,10 +14,11 @@ LibreOffice Calc plugin backed by a local Python daemon.
 
 ## Decisions
 
-1. Human-in-the-loop approval is enforced at the tool registry, not
-   in the prompt. Write tools stage proposal items only; `apply` is
-   the single code path that mutates workbook state and requires
-   approved items.
+1. Human-in-the-loop approval is the default and is enforced in the
+   daemon, not in the prompt. Write tools stage proposal items only;
+   `apply` is the single code path that mutates workbook state and
+   requires approved items. Opt-in `direct` mode can auto-approve, but
+   it still routes through apply, versioning, and audit.
 2. The platform owns policy, audit, and versioning. Models are
    replaceable; the platform is the system of record.
 3. Local-first by default. The default install runs fully offline

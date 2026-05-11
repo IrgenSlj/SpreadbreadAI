@@ -4,7 +4,7 @@ version = "0.1.2"
 description = "Local human-in-the-loop spreadsheet review daemon for SpreadbreadAI"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 authors = [{ name = "SpreadbreadAI contributors" }]
 keywords = [
     "spreadsheet", "libreoffice", "calc", "ai", "llm",
@@ -15,7 +15,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -49,7 +48,7 @@ Changelog = "https://github.com/IrgenSlj/SpreadbreadAI/releases"
 "Development plan" = "https://github.com/IrgenSlj/SpreadbreadAI/blob/main/docs/development-plan.md"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

@@ -51,6 +51,7 @@ def test_upload_and_review(client: TestClient) -> None:
     assert upload.status_code == 200, upload.text
     wb = upload.json()
     assert wb["sheets"][0]["name"] == "Forecast"
+    assert wb["trust_mode"] == "review"
 
     review = client.get(f"/api/workbooks/{wb['id']}/review")
     assert review.status_code == 200
@@ -94,7 +95,12 @@ def test_direct_mode_auto_applies_after_chat(client: TestClient, monkeypatch) ->
     files = {"file": ("sample.xlsx", _sample_xlsx(),
                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
     wb_resp = client.post("/api/workbooks/upload", files=files).json()
-    assert wb_resp["trust_mode"] == "direct"
+    trust_resp = client.post(
+        f"/api/workbooks/{wb_resp['id']}/trust-mode",
+        json={"mode": "direct"},
+    )
+    assert trust_resp.status_code == 200, trust_resp.text
+    assert trust_resp.json()["trust_mode"] == "direct"
 
     # Pre-seed a proposal with two pending items before calling /chat.
     cfg = Config.load()

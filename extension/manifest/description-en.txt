@@ -1,8 +1,8 @@
 SpreadbreadAI Review brings human-in-the-loop AI review to LibreOffice Calc.
 
 It connects to a local SpreadbreadAI daemon (default: http://127.0.0.1:8765)
-and shows AI-drafted proposals as approvable diffs in a sidebar. The model
-can read your workbook and stage proposals — it cannot write to your
-spreadsheet without your approval.
+and shows AI-drafted proposals as approvable diffs. The model can read
+your workbook and stage proposals; default review mode requires approval
+before anything is applied.
 
 Default LLM: Gemma 4 E2B via Ollama, fully offline.

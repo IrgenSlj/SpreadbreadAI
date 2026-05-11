@@ -131,6 +131,60 @@ def test_apply_refuses_when_base_bytes_tampered(tmp_path: Path) -> None:
         apply_proposal(store, prop_id)
 
 
+def test_apply_preserves_string_codes_and_typed_numbers(tmp_path: Path) -> None:
+    store, wb_id, prop_id = _seed(tmp_path)
+    proposal = store.get_proposal(prop_id)
+    assert proposal is not None
+    proposal.items = [
+        ProposalItem(
+            kind="update",
+            cell="Forecast!A2",
+            before="Apr",
+            after="00123",
+            rationale="preserve leading-zero code",
+            status="approved",
+        ),
+        ProposalItem(
+            kind="update",
+            cell="Forecast!B2",
+            before="500000",
+            after="510000",
+            after_type="number",
+            rationale="quota update",
+            status="approved",
+        ),
+    ]
+    store.save_proposal(proposal)
+
+    result = apply_proposal(store, prop_id, reviewer="finance")
+    raw_new = store.load_version_bytes(wb_id, result.version.id)
+    book = load_workbook(io.BytesIO(raw_new), data_only=False)
+    sheet = book["Forecast"]
+    assert sheet["A2"].value == "00123"
+    assert sheet["B2"].value == 510000
+
+
+def test_apply_remove_clears_cell(tmp_path: Path) -> None:
+    store, wb_id, prop_id = _seed(tmp_path)
+    proposal = store.get_proposal(prop_id)
+    assert proposal is not None
+    proposal.items = [
+        ProposalItem(
+            kind="remove",
+            cell="Forecast!B2",
+            before="500000",
+            rationale="remove stale input",
+            status="approved",
+        )
+    ]
+    store.save_proposal(proposal)
+
+    result = apply_proposal(store, prop_id, reviewer="finance")
+    raw_new = store.load_version_bytes(wb_id, result.version.id)
+    book = load_workbook(io.BytesIO(raw_new), data_only=False)
+    assert book["Forecast"]["B2"].value is None
+
+
 def test_decide_all_pending_flips_only_pending(tmp_path: Path) -> None:
     store, _, prop_id = _seed(tmp_path)
     proposal = store.get_proposal(prop_id)

@@ -19,9 +19,9 @@ The first end-to-end demo (the MVP target) is:
 
 1. Install the LibreOffice extension and run `spreadbread-core`.
 2. Open an FP&A workbook in Calc.
-3. Click "Review with SpreadbreadAI"; the sidebar shows risks and
+3. Click "Review with SpreadbreadAI"; the extension shows risks and
    staged proposals from Gemma 4 E2B.
-4. Approve one diff.
+4. Approve the staged diff.
 5. Click "Apply approved"; Calc updates the cell, the daemon writes a
    new workbook version, the audit trail records every step.
 

@@ -6,8 +6,6 @@ dispatcher that produces the same results the registry would.
 """
 from __future__ import annotations
 
-import asyncio
-import json
 from pathlib import Path
 
 import pytest

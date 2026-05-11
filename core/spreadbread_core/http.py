@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from . import __version__
 from .apply import ApplyError, apply_proposal
 from .config import Config
 from .domain import AuditEvent
@@ -51,7 +52,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     registry = ToolRegistry(store)
     llm = OllamaClient(cfg.ollama_host, cfg.model, registry)
 
-    app = FastAPI(title="SpreadbreadAI Core", version="0.1.0")
+    app = FastAPI(title="SpreadbreadAI Core", version=__version__)
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
