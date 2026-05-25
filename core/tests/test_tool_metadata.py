@@ -34,3 +34,35 @@ def test_ollama_schema_does_not_leak_internal_metadata(tmp_path) -> None:
     assert "parameters" in propose_schema["function"]
     assert "side_effect" not in propose_schema["function"]
     assert "required_capability" not in propose_schema["function"]
+
+
+def test_tool_policy_filters_by_mode(tmp_path) -> None:
+    registry = ToolRegistry(Store(tmp_path / "tools.sqlite3"))
+
+    inspect_names = {tool.name for tool in registry.list_tools(mode="inspect")}
+    propose_names = {tool.name for tool in registry.list_tools(mode="propose")}
+    locked_names = {tool.name for tool in registry.list_tools(mode="locked")}
+
+    assert "inspect_sheet" in inspect_names
+    assert "propose_diff" not in inspect_names
+    assert "propose_diff" in propose_names
+    assert "add_comment" in propose_names
+    assert "propose_diff" not in locked_names
+
+
+def test_tool_policy_explains_denied_mode(tmp_path) -> None:
+    registry = ToolRegistry(Store(tmp_path / "tools.sqlite3"))
+
+    decision = registry.policy_decision("propose_diff", mode="inspect")
+
+    assert decision.action == "deny"
+    assert "inspect" in decision.reason
+
+
+def test_default_tool_listing_remains_unfiltered(tmp_path) -> None:
+    registry = ToolRegistry(Store(tmp_path / "tools.sqlite3"))
+
+    names = {tool.name for tool in registry.list_tools()}
+
+    assert "inspect_sheet" in names
+    assert "propose_diff" in names

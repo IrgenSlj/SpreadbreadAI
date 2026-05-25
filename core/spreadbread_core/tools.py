@@ -20,10 +20,10 @@ from .domain import (
     ResourceKind,
     new_proposal,
 )
+from .policy import AgentMode, PermissionDecision, evaluate_tool_metadata
 from .store import Store
 
 ToolSideEffect = Literal["read", "stage", "apply_request", "provider_write"]
-ToolMode = Literal["inspect", "plan", "propose", "apply", "direct", "locked"]
 
 
 @dataclass
@@ -36,7 +36,7 @@ class Tool:
     resource_kind: ResourceKind | None = None
     required_capability: str | None = None
     side_effect: ToolSideEffect = "read"
-    allowed_modes: tuple[ToolMode, ...] = ("inspect", "plan", "propose", "direct", "locked")
+    allowed_modes: tuple[AgentMode, ...] = ("inspect", "plan", "propose", "direct", "locked")
     risk: OperationRisk = "low"
     mcp_exposed: bool = True
     skill_exposed: bool = True
@@ -60,10 +60,13 @@ class ToolRegistry:
         self._register_builtins()
 
     # --- public API ----------------------------------------------------
-    def list_tools(self) -> list[Tool]:
-        return list(self._tools.values())
+    def list_tools(self, mode: AgentMode | None = None) -> list[Tool]:
+        tools = list(self._tools.values())
+        if mode is None:
+            return tools
+        return [tool for tool in tools if self.policy_decision(tool.name, mode).action != "deny"]
 
-    def to_ollama_schema(self) -> list[dict[str, Any]]:
+    def to_ollama_schema(self, mode: AgentMode | None = None) -> list[dict[str, Any]]:
         return [
             {
                 "type": "function",
@@ -73,8 +76,13 @@ class ToolRegistry:
                     "parameters": t.parameters,
                 },
             }
-            for t in self._tools.values()
+            for t in self.list_tools(mode)
         ]
+
+    def policy_decision(self, name: str, mode: AgentMode) -> PermissionDecision:
+        if name not in self._tools:
+            raise KeyError(f"unknown tool: {name}")
+        return evaluate_tool_metadata(self._tools[name].metadata(), mode)
 
     def call(self, name: str, arguments: dict[str, Any]) -> Any:
         if name not in self._tools:
