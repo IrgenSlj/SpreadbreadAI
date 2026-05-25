@@ -7,18 +7,23 @@ approval — they never mutate workbooks directly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from .cell_ref import parse_cell
 from .domain import (
     AuditEvent,
     CellValueType,
     DiffKind,
+    OperationRisk,
     Proposal,
     ProposalItem,
+    ResourceKind,
     new_proposal,
 )
 from .store import Store
+
+ToolSideEffect = Literal["read", "stage", "apply_request", "provider_write"]
+ToolMode = Literal["inspect", "plan", "propose", "apply", "direct", "locked"]
 
 
 @dataclass
@@ -28,6 +33,24 @@ class Tool:
     parameters: dict[str, Any]
     handler: Callable[..., Any]
     write: bool = False
+    resource_kind: ResourceKind | None = None
+    required_capability: str | None = None
+    side_effect: ToolSideEffect = "read"
+    allowed_modes: tuple[ToolMode, ...] = ("inspect", "plan", "propose", "direct", "locked")
+    risk: OperationRisk = "low"
+    mcp_exposed: bool = True
+    skill_exposed: bool = True
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "resource_kind": self.resource_kind,
+            "required_capability": self.required_capability,
+            "side_effect": self.side_effect,
+            "allowed_modes": list(self.allowed_modes),
+            "risk": self.risk,
+            "mcp_exposed": self.mcp_exposed,
+            "skill_exposed": self.skill_exposed,
+        }
 
 
 class ToolRegistry:
@@ -69,6 +92,7 @@ class ToolRegistry:
                 description="List every workbook the user has uploaded. Returns id, name, owner, status.",
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self._list_workbooks,
+                side_effect="read",
             )
         )
         self._add(
@@ -81,6 +105,8 @@ class ToolRegistry:
                     "required": ["workbook_id"],
                 },
                 handler=self._get_review_snapshot,
+                resource_kind="spreadsheet",
+                required_capability="spreadsheet.read",
             )
         )
         self._add(
@@ -96,6 +122,8 @@ class ToolRegistry:
                     "required": ["workbook_id", "sheet_name"],
                 },
                 handler=self._inspect_sheet,
+                resource_kind="spreadsheet",
+                required_capability="spreadsheet.read",
             )
         )
         self._add(
@@ -108,6 +136,8 @@ class ToolRegistry:
                     "required": ["workbook_id"],
                 },
                 handler=self._list_risks,
+                resource_kind="spreadsheet",
+                required_capability="spreadsheet.read",
             )
         )
         self._add(
@@ -139,6 +169,11 @@ class ToolRegistry:
                 },
                 handler=self._propose_diff,
                 write=True,
+                resource_kind="spreadsheet",
+                required_capability="spreadsheet.write_cell",
+                side_effect="stage",
+                allowed_modes=("propose", "direct"),
+                risk="medium",
             )
         )
         self._add(
@@ -156,6 +191,11 @@ class ToolRegistry:
                 },
                 handler=self._add_comment,
                 write=True,
+                resource_kind="spreadsheet",
+                required_capability="spreadsheet.comment",
+                side_effect="stage",
+                allowed_modes=("propose", "direct"),
+                risk="low",
             )
         )
         self._add(
@@ -171,6 +211,8 @@ class ToolRegistry:
                     "required": ["workbook_id", "cell"],
                 },
                 handler=self._get_dependencies,
+                resource_kind="spreadsheet",
+                required_capability="spreadsheet.read",
             )
         )
         self._add(
@@ -183,6 +225,8 @@ class ToolRegistry:
                     "required": ["workbook_id"],
                 },
                 handler=self._find_external_references,
+                resource_kind="spreadsheet",
+                required_capability="spreadsheet.read",
             )
         )
         self._add(
@@ -195,6 +239,8 @@ class ToolRegistry:
                     "required": ["workbook_id"],
                 },
                 handler=self._get_named_ranges,
+                resource_kind="spreadsheet",
+                required_capability="spreadsheet.read",
             )
         )
 
