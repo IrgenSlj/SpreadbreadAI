@@ -96,6 +96,19 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             raise HTTPException(404, "workbook not found")
         return snap.model_dump()
 
+    @app.get("/api/workbooks/{workbook_id}/runs")
+    def list_runs(workbook_id: str) -> list[dict[str, Any]]:
+        if not store.get_workbook(workbook_id):
+            raise HTTPException(404, "workbook not found")
+        return [run.model_dump() for run in store.list_agent_runs(workbook_id)]
+
+    @app.get("/api/runs/{run_id}")
+    def get_run(run_id: str) -> dict[str, Any]:
+        run = store.get_agent_run(run_id)
+        if not run:
+            raise HTTPException(404, "run not found")
+        return run.model_dump()
+
     @app.post("/api/workbooks/{workbook_id}/trust-mode")
     def set_trust_mode(workbook_id: str, req: TrustModeRequest) -> dict[str, Any]:
         valid_modes = ("direct", "review", "locked")

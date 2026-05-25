@@ -235,8 +235,10 @@ Current HTTP API:
 - `GET  /api/workbooks`
 - `POST /api/workbooks/upload`
 - `GET  /api/workbooks/{id}/review`
+- `GET  /api/workbooks/{id}/runs`
 - `POST /api/workbooks/{id}/trust-mode`
 - `POST /api/workbooks/{id}/chat`
+- `GET  /api/runs/{run_id}`
 - `POST /api/proposals/{proposal_id}/items/{item_id}/decision`
 - `POST /api/proposals/{proposal_id}/approve-all`
 - `POST /api/proposals/{proposal_id}/apply`

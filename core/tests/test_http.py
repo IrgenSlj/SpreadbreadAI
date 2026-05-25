@@ -117,6 +117,22 @@ def test_chat_endpoint_accepts_json_body(client: TestClient, monkeypatch) -> Non
     assert "agent.run.started" in actions
     assert "agent.run.completed" in actions
 
+    runs = client.get(f"/api/workbooks/{wb['id']}/runs")
+    assert runs.status_code == 200, runs.text
+    assert [run["id"] for run in runs.json()] == [payload["run_id"]]
+
+    run_lookup = client.get(f"/api/runs/{payload['run_id']}")
+    assert run_lookup.status_code == 200, run_lookup.text
+    assert run_lookup.json()["id"] == payload["run_id"]
+
+
+def test_run_endpoints_return_404_for_missing_records(client: TestClient) -> None:
+    missing_runs = client.get("/api/workbooks/wb_missing/runs")
+    assert missing_runs.status_code == 404
+
+    missing_run = client.get("/api/runs/run_missing")
+    assert missing_run.status_code == 404
+
 
 def test_chat_endpoint_rejects_invalid_mode(client: TestClient) -> None:
     files = {"file": ("sample.xlsx", _sample_xlsx(),

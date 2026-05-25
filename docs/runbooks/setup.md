@@ -126,6 +126,13 @@ The chat response includes `run_id`. The daemon also records
 `agent.run.started` and `agent.run.completed` audit events for that
 run.
 
+Fetch run history:
+
+```bash
+curl "http://127.0.0.1:8765/api/workbooks/$WB/runs"
+curl "http://127.0.0.1:8765/api/runs/$RUN_ID"
+```
+
 ## Configuration
 
 Environment variables, all optional:

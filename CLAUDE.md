@@ -82,7 +82,8 @@ packaging/              native bundle/launcher scaffold
   inspect/plan/propose/apply/direct/locked mode. Default chat mode is
   `propose`.
 - Minimal `AgentRun` persistence: `/chat` returns `run_id` and writes
-  run started/completed audit events.
+  run started/completed audit events. Run history is exposed at
+  `/api/workbooks/{id}/runs` and `/api/runs/{run_id}`.
 
 ### LibreOffice extension
 
