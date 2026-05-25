@@ -78,6 +78,9 @@ packaging/              native bundle/launcher scaffold
 - MCP stdio server.
 - Apply pipeline with conflict detection, base checksum guard,
   idempotence, immutable versions, and audit events.
+- Mode-aware tool policy: `/chat` and `/api/tools` can filter tools by
+  inspect/plan/propose/apply/direct/locked mode. Default chat mode is
+  `propose`.
 
 ### LibreOffice extension
 

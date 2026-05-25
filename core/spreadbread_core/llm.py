@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from .policy import AgentMode
 from .tools import ToolRegistry
 
 SYSTEM_PROMPT = """You are SpreadbreadAI, a careful spreadsheet review assistant.
@@ -33,6 +34,16 @@ Be concise. Cite cells like `Sheet!A1`. Never claim a change has been
 applied — you only stage proposals."""
 
 
+MODE_PROMPTS: dict[AgentMode, str] = {
+    "inspect": "Current mode: inspect. Only read tools are available. Return findings; do not stage changes.",
+    "plan": "Current mode: plan. Use read tools to produce a plan and impact estimate; do not stage changes.",
+    "propose": "Current mode: propose. Read tools and write-staging tools are available; stage proposals only.",
+    "apply": "Current mode: apply. Do not invent new changes; focus on approved-operation apply context.",
+    "direct": "Current mode: direct. Stage only bounded, requested operations; the platform may auto-apply after validation.",
+    "locked": "Current mode: locked. Only read tools are available; write proposals require separate explicit review.",
+}
+
+
 @dataclass
 class ChatResult:
     final_message: str
@@ -51,12 +62,14 @@ class OllamaClient:
     def close(self) -> None:
         self._http.close()
 
-    def chat(self, user_message: str, system: str = SYSTEM_PROMPT) -> ChatResult:
+    def chat(self, user_message: str, system: str = SYSTEM_PROMPT, mode: AgentMode | None = None) -> ChatResult:
+        if mode is not None:
+            system = f"{system}\n\n{MODE_PROMPTS[mode]}"
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
             {"role": "user", "content": user_message},
         ]
-        tools = self.registry.to_ollama_schema()
+        tools = self.registry.to_ollama_schema(mode)
         all_calls: list[dict[str, Any]] = []
 
         for round_idx in range(self.max_rounds):
@@ -86,6 +99,10 @@ class OllamaClient:
                 raw_args = fn.get("arguments", {})
                 args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
                 try:
+                    if mode is not None:
+                        decision = self.registry.policy_decision(name, mode)
+                        if decision.action == "deny":
+                            raise PermissionError(decision.reason)
                     result = self.registry.call(name, args)
                     result_text = json.dumps(result, default=str)
                 except Exception as exc:  # surface tool errors to the model

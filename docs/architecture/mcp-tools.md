@@ -113,6 +113,16 @@ The model should only see tools that survive policy filtering. If a
 tool is denied, it should not appear in the model/tool schema for that
 run.
 
+Current implementation status:
+
+- `ToolRegistry.list_tools(mode=...)` and `to_ollama_schema(mode=...)`
+  can filter tools by mode.
+- `/api/workbooks/{id}/chat` accepts optional `mode`, defaulting to
+  `propose`.
+- The Ollama loop denies disallowed tool calls even if a model requests
+  one that was not exposed.
+- `/api/tools?mode=...` exposes the mode-filtered schema.
+
 ## MCP Rules
 
 MCP is an integration boundary, not a bypass.

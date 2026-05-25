@@ -106,6 +106,22 @@ MCP tools use the same daemon tool registry and policy model. Write
 tools stage proposal items/operations; provider mutation still goes
 through apply.
 
+## Agent modes over HTTP
+
+The chat endpoint accepts an optional mode. Default is `propose`.
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"message":"inspect this workbook only","mode":"inspect"}' \
+  "http://127.0.0.1:8765/api/workbooks/$WB/chat"
+```
+
+Inspect the filtered tool schema:
+
+```bash
+curl "http://127.0.0.1:8765/api/tools?mode=inspect"
+```
+
 ## Configuration
 
 Environment variables, all optional:

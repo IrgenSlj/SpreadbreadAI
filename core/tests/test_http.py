@@ -44,6 +44,23 @@ def test_healthz(client: TestClient) -> None:
     assert "list_workbooks" in body["tools"]
 
 
+def test_tools_endpoint_filters_by_mode(client: TestClient) -> None:
+    response = client.get("/api/tools", params={"mode": "inspect"})
+    assert response.status_code == 200, response.text
+
+    names = {tool["function"]["name"] for tool in response.json()}
+
+    assert "inspect_sheet" in names
+    assert "propose_diff" not in names
+
+
+def test_tools_endpoint_rejects_invalid_mode(client: TestClient) -> None:
+    response = client.get("/api/tools", params={"mode": "bogus"})
+
+    assert response.status_code == 400
+    assert "mode must be one of" in response.text
+
+
 def test_upload_and_review(client: TestClient) -> None:
     files = {"file": ("sample.xlsx", _sample_xlsx(),
                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
@@ -70,18 +87,32 @@ def test_chat_endpoint_accepts_json_body(client: TestClient, monkeypatch) -> Non
 
     captured: dict = {}
 
-    def fake_chat(self, message: str, system: str = "") -> ChatResult:  # noqa: ARG001
+    def fake_chat(self, message: str, system: str = "", mode=None) -> ChatResult:  # noqa: ANN001, ARG001
         captured["message"] = message
+        captured["mode"] = mode
         return ChatResult(final_message="ok", tool_calls=[], rounds=1)
 
     monkeypatch.setattr(http_module.OllamaClient, "chat", fake_chat)
 
-    response = client.post(f"/api/workbooks/{wb['id']}/chat", json={"message": "review"})
+    response = client.post(f"/api/workbooks/{wb['id']}/chat", json={"message": "review", "mode": "inspect"})
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["reply"] == "ok"
     assert payload["rounds"] == 1
+    assert payload["mode"] == "inspect"
     assert "review" in captured["message"]
+    assert captured["mode"] == "inspect"
+
+
+def test_chat_endpoint_rejects_invalid_mode(client: TestClient) -> None:
+    files = {"file": ("sample.xlsx", _sample_xlsx(),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    wb = client.post("/api/workbooks/upload", files=files).json()
+
+    response = client.post(f"/api/workbooks/{wb['id']}/chat", json={"message": "review", "mode": "bogus"})
+
+    assert response.status_code == 400
+    assert "mode must be one of" in response.text
 
 
 def test_direct_mode_auto_applies_after_chat(client: TestClient, monkeypatch) -> None:
@@ -114,7 +145,7 @@ def test_direct_mode_auto_applies_after_chat(client: TestClient, monkeypatch) ->
     ]
     store.save_proposal(proposal)
 
-    def fake_chat(self, message: str, system: str = "") -> ChatResult:  # noqa: ARG001
+    def fake_chat(self, message: str, system: str = "", mode=None) -> ChatResult:  # noqa: ANN001, ARG001
         return ChatResult(final_message="done", tool_calls=[], rounds=1)
 
     monkeypatch.setattr(http_module.OllamaClient, "chat", fake_chat)
@@ -122,11 +153,52 @@ def test_direct_mode_auto_applies_after_chat(client: TestClient, monkeypatch) ->
     response = client.post(f"/api/workbooks/{wb_resp['id']}/chat", json={"message": "review"})
     assert response.status_code == 200, response.text
     payload = response.json()
+    assert payload["mode"] == "propose"
     assert payload["auto_applied"] is True
     assert payload["applied_version_id"] is not None
 
     snap = client.get(f"/api/workbooks/{wb_resp['id']}/review").json()
     assert snap["proposal"]["status"] == "applied"
+
+
+def test_direct_trust_does_not_auto_apply_in_inspect_mode(client: TestClient, monkeypatch) -> None:
+    from spreadbread_core import http as http_module
+    from spreadbread_core.config import Config
+    from spreadbread_core.domain import ProposalItem, new_proposal
+    from spreadbread_core.llm import ChatResult
+    from spreadbread_core.store import Store
+
+    files = {"file": ("sample.xlsx", _sample_xlsx(),
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    wb_resp = client.post("/api/workbooks/upload", files=files).json()
+    trust_resp = client.post(f"/api/workbooks/{wb_resp['id']}/trust-mode", json={"mode": "direct"})
+    assert trust_resp.status_code == 200, trust_resp.text
+
+    cfg = Config.load()
+    store = Store(cfg.db_path)
+    proposal = new_proposal(wb_resp["id"], "inspect test", "inspect", "llm")
+    proposal.items = [
+        ProposalItem(kind="update", cell="Forecast!C3", before="=B3*1.05",
+                     after="=B3*1.08", rationale="growth"),
+    ]
+    store.save_proposal(proposal)
+
+    def fake_chat(self, message: str, system: str = "", mode=None) -> ChatResult:  # noqa: ANN001, ARG001
+        return ChatResult(final_message="done", tool_calls=[], rounds=1)
+
+    monkeypatch.setattr(http_module.OllamaClient, "chat", fake_chat)
+
+    response = client.post(
+        f"/api/workbooks/{wb_resp['id']}/chat",
+        json={"message": "inspect only", "mode": "inspect"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["mode"] == "inspect"
+    assert payload["auto_applied"] is False
+    snap = client.get(f"/api/workbooks/{wb_resp['id']}/review").json()
+    assert snap["proposal"]["status"] == "pending_approval"
 
 
 def test_review_mode_does_not_auto_apply(client: TestClient, monkeypatch) -> None:
@@ -157,7 +229,7 @@ def test_review_mode_does_not_auto_apply(client: TestClient, monkeypatch) -> Non
     ]
     store.save_proposal(proposal)
 
-    def fake_chat(self, message: str, system: str = "") -> ChatResult:  # noqa: ARG001
+    def fake_chat(self, message: str, system: str = "", mode=None) -> ChatResult:  # noqa: ANN001, ARG001
         return ChatResult(final_message="done", tool_calls=[], rounds=1)
 
     monkeypatch.setattr(http_module.OllamaClient, "chat", fake_chat)
@@ -165,6 +237,7 @@ def test_review_mode_does_not_auto_apply(client: TestClient, monkeypatch) -> Non
     response = client.post(f"/api/workbooks/{wb_resp['id']}/chat", json={"message": "review"})
     assert response.status_code == 200, response.text
     payload = response.json()
+    assert payload["mode"] == "propose"
     assert payload["auto_applied"] is False
     assert payload["applied_version_id"] is None
 

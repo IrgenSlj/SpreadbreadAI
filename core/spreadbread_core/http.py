@@ -18,12 +18,14 @@ from .config import Config
 from .domain import AuditEvent
 from .llm import OllamaClient
 from .parser import parse_xlsx
+from .policy import parse_agent_mode
 from .store import Store
 from .tools import ToolRegistry
 
 
 class ChatRequest(BaseModel):
     message: str
+    mode: Optional[str] = None
 
 
 class DecisionRequest(BaseModel):
@@ -119,14 +121,18 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         wb = store.get_workbook(workbook_id)
         if not wb:
             raise HTTPException(404, "workbook not found")
+        try:
+            mode = parse_agent_mode(req.mode, default="propose")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         message = f"Workbook id: {workbook_id}\nUser request: {req.message}"
-        result = llm.chat(message)
+        result = llm.chat(message, mode=mode)
 
         auto_applied = False
         applied_version_id = None
         auto_apply_error = None
 
-        if wb.trust_mode == "direct":
+        if wb.trust_mode == "direct" and mode in ("propose", "direct"):
             proposal = store.latest_proposal_for(workbook_id)
             if proposal and any(item.status == "pending" for item in proposal.items):
                 try:
@@ -141,6 +147,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             "reply": result.final_message,
             "rounds": result.rounds,
             "tool_calls": result.tool_calls,
+            "mode": mode,
             "auto_applied": auto_applied,
             "applied_version_id": applied_version_id,
             "auto_apply_error": auto_apply_error,
@@ -203,8 +210,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         }
 
     @app.get("/api/tools")
-    def tools() -> list[dict[str, Any]]:
-        return registry.to_ollama_schema()
+    def tools(mode: Optional[str] = None) -> list[dict[str, Any]]:
+        try:
+            agent_mode = parse_agent_mode(mode)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return registry.to_ollama_schema(agent_mode)
 
     return app
 

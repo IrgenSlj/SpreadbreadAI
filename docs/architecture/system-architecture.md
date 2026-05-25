@@ -242,6 +242,10 @@ Current HTTP API:
 - `POST /api/proposals/{proposal_id}/apply`
 - `GET  /api/tools`
 
+`/chat` accepts an optional `mode` field. Default is `propose` to
+preserve the current review flow. `/api/tools?mode=inspect` and other
+mode-filtered requests expose only tools allowed by the policy layer.
+
 Planned additive API:
 
 - workspace/resource discovery

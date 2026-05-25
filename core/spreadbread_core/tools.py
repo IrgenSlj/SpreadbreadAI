@@ -36,7 +36,7 @@ class Tool:
     resource_kind: ResourceKind | None = None
     required_capability: str | None = None
     side_effect: ToolSideEffect = "read"
-    allowed_modes: tuple[AgentMode, ...] = ("inspect", "plan", "propose", "direct", "locked")
+    allowed_modes: tuple[AgentMode, ...] = ("inspect", "plan", "propose", "apply", "direct", "locked")
     risk: OperationRisk = "low"
     mcp_exposed: bool = True
     skill_exposed: bool = True
