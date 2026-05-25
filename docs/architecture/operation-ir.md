@@ -78,6 +78,7 @@ Only the daemon apply pipeline can execute them.
 | `set_cell_value` | `spreadsheet.write_cell` | Writes a scalar value. |
 | `set_cell_formula` | `spreadsheet.write_formula` | Writes a formula string. |
 | `add_cell_comment` | `spreadsheet.comment` | Adds a review/comment artifact. |
+| `clear_cell` | `spreadsheet.write_cell` | Clears a cell value. |
 | `replace_range_values` | `spreadsheet.batch_update` | Batch operation; higher risk by default. |
 | `create_sheet` | `spreadsheet.structure` | Requires provider support and explicit approval. |
 | `rename_sheet` | `spreadsheet.structure` | Requires dependency validation. |

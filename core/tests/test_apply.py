@@ -51,6 +51,10 @@ def _seed(tmp_path: Path) -> tuple[Store, str, str]:
 
 def test_apply_writes_new_version(tmp_path: Path) -> None:
     store, wb_id, prop_id = _seed(tmp_path)
+    proposal = store.get_proposal(prop_id)
+    assert proposal is not None
+    proposal.items[0].ensure_operation(resource_id=wb_id, validation_status="valid")
+    store.save_proposal(proposal)
 
     result = apply_proposal(store, prop_id, reviewer="finance")
 
@@ -58,6 +62,8 @@ def test_apply_writes_new_version(tmp_path: Path) -> None:
     assert result.proposal.status == "applied"
     assert result.proposal.applied_version_id == result.version.id
     assert len(result.applied_item_ids) == 2  # rejected item not applied
+    assert result.proposal.items[0].operation is not None
+    assert result.proposal.items[0].operation.status == "applied"
 
     # workbook has new version, latest_version_id updated
     workbook = store.get_workbook(wb_id)

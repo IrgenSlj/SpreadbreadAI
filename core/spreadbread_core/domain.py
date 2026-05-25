@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -22,6 +22,59 @@ RiskSeverity = Literal["low", "medium", "high"]
 WorkbookAccessRole = Literal["owner", "approver", "reviewer", "editor"]
 TrustMode = Literal["direct", "review", "locked"]
 CellValueType = Literal["string", "number", "boolean", "blank", "formula"]
+ResourceKind = Literal["spreadsheet", "text_document"]
+OperationKind = Literal[
+    "set_cell_value",
+    "set_cell_formula",
+    "add_cell_comment",
+    "clear_cell",
+    "replace_range_values",
+    "create_sheet",
+    "rename_sheet",
+    "add_document_comment",
+    "replace_document_text",
+    "insert_document_section",
+]
+OperationRisk = Literal["low", "medium", "high", "critical"]
+OperationStatus = Literal["draft", "valid", "invalid", "pending", "approved", "rejected", "applied", "failed"]
+OperationValidationStatus = Literal["not_validated", "valid", "invalid"]
+
+
+class OperationTarget(BaseModel):
+    sheet: Optional[str] = None
+    cell: Optional[str] = None
+    range: Optional[str] = None
+    path: Optional[str] = None
+
+    @classmethod
+    def from_cell(cls, cell: str) -> "OperationTarget":
+        if "!" not in cell:
+            return cls(cell=cell)
+        sheet, address = cell.rsplit("!", 1)
+        return cls(sheet=sheet.strip("'"), cell=address)
+
+
+class OperationValidation(BaseModel):
+    status: OperationValidationStatus = "not_validated"
+    messages: list[str] = Field(default_factory=list)
+
+
+class Operation(BaseModel):
+    id: str = Field(default_factory=lambda: _id("op"))
+    resource_id: Optional[str] = None
+    provider_id: str = "local_xlsx"
+    resource_kind: ResourceKind = "spreadsheet"
+    kind: OperationKind
+    target: OperationTarget
+    before: dict[str, Any] = Field(default_factory=dict)
+    after: dict[str, Any] = Field(default_factory=dict)
+    rationale: str
+    risk: OperationRisk
+    required_capability: str
+    validation: OperationValidation = Field(default_factory=OperationValidation)
+    source_run_id: Optional[str] = None
+    status: OperationStatus = "pending"
+    approval_status: ProposalItemStatus = "pending"
 
 
 class WorkbookNamedRange(BaseModel):
@@ -85,6 +138,55 @@ class ProposalItem(BaseModel):
     reviewer: Optional[str] = None
     reviewed_at: Optional[str] = None
     review_comment: Optional[str] = None
+    operation: Optional[Operation] = None
+
+    def to_operation(
+        self,
+        resource_id: Optional[str] = None,
+        provider_id: str = "local_xlsx",
+        validation_status: OperationValidationStatus = "not_validated",
+        validation_messages: Optional[list[str]] = None,
+        source_run_id: Optional[str] = None,
+    ) -> Operation:
+        operation_kind = _operation_kind_for_item(self)
+        return Operation(
+            id=_operation_id_for_item(self.id),
+            resource_id=resource_id,
+            provider_id=provider_id,
+            resource_kind="spreadsheet",
+            kind=operation_kind,
+            target=OperationTarget.from_cell(self.cell),
+            before=_operation_payload(self.before, self.after_type, operation_kind, is_before=True),
+            after=_operation_payload(self.after, self.after_type, operation_kind, is_before=False),
+            rationale=self.rationale,
+            risk=_operation_risk_for_item(self),
+            required_capability=_required_capability_for_operation(operation_kind),
+            validation=OperationValidation(
+                status=validation_status,
+                messages=validation_messages or [],
+            ),
+            source_run_id=source_run_id,
+            status=self.status,
+            approval_status=self.status,
+        )
+
+    def ensure_operation(
+        self,
+        resource_id: Optional[str] = None,
+        provider_id: str = "local_xlsx",
+        validation_status: OperationValidationStatus = "not_validated",
+        validation_messages: Optional[list[str]] = None,
+        source_run_id: Optional[str] = None,
+    ) -> Operation:
+        if self.operation is None:
+            self.operation = self.to_operation(
+                resource_id=resource_id,
+                provider_id=provider_id,
+                validation_status=validation_status,
+                validation_messages=validation_messages,
+                source_run_id=source_run_id,
+            )
+        return self.operation
 
 
 class Proposal(BaseModel):
@@ -117,6 +219,80 @@ class ReviewSnapshot(BaseModel):
     workbook: Workbook
     proposal: Optional[Proposal] = None
     audit_events: list[AuditEvent] = Field(default_factory=list)
+
+
+def sync_item_operation_status(item: ProposalItem) -> None:
+    if item.operation is None:
+        return
+    if item.status in ("pending", "approved", "rejected"):
+        item.operation.status = item.status
+        item.operation.approval_status = item.status
+
+
+def mark_item_operation_applied(item: ProposalItem) -> None:
+    if item.operation is not None:
+        item.operation.status = "applied"
+
+
+def _operation_id_for_item(item_id: str) -> str:
+    suffix = item_id.split("_", 1)[-1]
+    return f"op_{suffix}"
+
+
+def _operation_kind_for_item(item: ProposalItem) -> OperationKind:
+    if item.kind == "comment":
+        return "add_cell_comment"
+    if item.kind == "remove":
+        return "clear_cell"
+    if item.after_type == "formula" or (item.after_type is None and item.after and item.after.startswith("=")):
+        return "set_cell_formula"
+    return "set_cell_value"
+
+
+def _operation_payload(
+    value: Optional[str],
+    value_type: Optional[CellValueType],
+    operation_kind: OperationKind,
+    *,
+    is_before: bool,
+) -> dict[str, Any]:
+    if operation_kind == "add_cell_comment":
+        return {} if is_before else {"comment": value}
+    if operation_kind == "clear_cell":
+        return {"value": value} if is_before else {"value": None, "value_type": "blank"}
+    if operation_kind == "set_cell_formula":
+        return {"formula": value}
+    return {"value": value, "value_type": value_type}
+
+
+def _operation_risk_for_item(item: ProposalItem) -> OperationRisk:
+    if item.kind == "comment":
+        return "low"
+    if item.after_type == "formula" or (item.after_type is None and item.after and item.after.startswith("=")):
+        return "medium"
+    if item.kind == "remove":
+        return "medium"
+    return "medium"
+
+
+def _required_capability_for_operation(operation_kind: OperationKind) -> str:
+    if operation_kind == "add_cell_comment":
+        return "spreadsheet.comment"
+    if operation_kind == "set_cell_formula":
+        return "spreadsheet.write_formula"
+    if operation_kind in ("set_cell_value", "clear_cell"):
+        return "spreadsheet.write_cell"
+    if operation_kind in ("replace_range_values",):
+        return "spreadsheet.batch_update"
+    if operation_kind in ("create_sheet", "rename_sheet"):
+        return "spreadsheet.structure"
+    if operation_kind == "add_document_comment":
+        return "document.comment"
+    if operation_kind == "replace_document_text":
+        return "document.replace_text"
+    if operation_kind == "insert_document_section":
+        return "document.insert_section"
+    return "provider.write"
 
 
 def new_workbook(name: str, owner: str = "user") -> Workbook:

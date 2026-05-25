@@ -279,6 +279,7 @@ class ToolRegistry:
             after_type=after_type,
             rationale=rationale,
         )
+        item.ensure_operation(resource_id=workbook_id, validation_status="valid")
         self.store.append_proposal_item(proposal.id, item)
         self.store.append_audit(
             AuditEvent(

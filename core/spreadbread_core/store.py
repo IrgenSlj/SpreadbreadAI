@@ -12,6 +12,7 @@ from .domain import (
     ReviewSnapshot,
     Workbook,
     _now,
+    sync_item_operation_status,
 )
 
 SCHEMA = """
@@ -174,6 +175,7 @@ class Store:
                 item.reviewer = reviewer
                 item.reviewed_at = _now()
                 item.review_comment = comment
+                sync_item_operation_status(item)
                 break
         else:
             raise KeyError(f"item {item_id} not found in proposal {proposal_id}")
@@ -201,6 +203,7 @@ class Store:
                 item.reviewer = reviewer
                 item.reviewed_at = now
                 item.review_comment = comment
+                sync_item_operation_status(item)
                 flipped.append(item.id)
         self.save_proposal(proposal)
         return proposal, flipped

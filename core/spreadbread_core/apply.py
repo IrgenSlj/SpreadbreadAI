@@ -28,7 +28,7 @@ from openpyxl import load_workbook as _load
 from openpyxl.comments import Comment
 
 from .cell_ref import parse_cell
-from .domain import AuditEvent, Proposal, ProposalItem, WorkbookVersion, _now, _id
+from .domain import AuditEvent, Proposal, ProposalItem, WorkbookVersion, _now, _id, mark_item_operation_applied
 from .store import Store
 
 
@@ -167,6 +167,8 @@ def apply_proposal(store: Store, proposal_id: str, reviewer: str = "system") -> 
     proposal.applied_version_id = new_version_id
     proposal.applied_at = now
     proposal.applied_by = reviewer
+    for item in approved:
+        mark_item_operation_applied(item)
     store.save_proposal(proposal)
 
     store.append_audit(

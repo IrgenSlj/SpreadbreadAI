@@ -113,6 +113,7 @@ Initial operation kinds:
 - `set_cell_value`
 - `set_cell_formula`
 - `add_cell_comment`
+- `clear_cell`
 - `replace_range_values`
 - `create_sheet`
 - `rename_sheet`

@@ -70,10 +70,18 @@ def test_end_to_end(tmp_path: Path) -> None:
     assert item.status == "pending"  # human approval still required
     assert item.cell == "Forecast!C3"
     assert item.after_type == "formula"
+    assert item.operation is not None
+    assert item.operation.resource_id == wb.id
+    assert item.operation.kind == "set_cell_formula"
+    assert item.operation.target.sheet == "Forecast"
+    assert item.operation.target.cell == "C3"
+    assert item.operation.validation.status == "valid"
 
     # decision: approve
     proposal = store.decide_item(snap.proposal.id, item.id, "approve", reviewer="finance_manager")
     assert proposal.items[0].status == "approved"
+    assert proposal.items[0].operation is not None
+    assert proposal.items[0].operation.status == "approved"
 
     # audit accreted: upload? no — parser only writes via http path.
     # but tool flow appended proposal.created + proposal.item.added
