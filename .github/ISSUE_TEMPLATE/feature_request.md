@@ -14,12 +14,19 @@ The user pain or workflow gap this addresses.
 How you imagine it working. Cite files or components if you have a
 specific shape in mind.
 
+## Product surface
+
+- UI/artifact workspace:
+- Agent mode affected: inspect / plan / propose / apply / autopilot
+- Provider affected: LibreOffice / local xlsx / Google Sheets / Google Docs / other
+- Skill, MCP tool, or native provider adapter:
+
 ## Alternatives considered
 
 What else you weighed and why this option is better.
 
-## Interaction with the human-in-the-loop guarantee
+## Interaction with operation policy
 
-Confirm the proposal does not introduce a path where the LLM can mutate
-a workbook without human approval. If it changes the approval pipeline,
-explain how.
+Confirm the proposal does not introduce a path where an agent, skill,
+or MCP tool can bypass provider capability checks, approval policy,
+versioning, or audit. If it changes the approval pipeline, explain how.

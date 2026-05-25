@@ -1,10 +1,15 @@
 # Local Setup
 
+This runbook covers the low-cost development path: local daemon,
+SQLite, Ollama, and the LibreOffice extension. No cloud account or paid
+API is required for the default workflow.
+
 ## Prereqs
 
-- Python 3.11+ (3.14 tested)
+- Python 3.11+
 - [Ollama](https://ollama.com) running locally
-- A pulled model: `ollama pull gemma4:e2b` (≈7 GB)
+- A pulled model: `ollama pull gemma4:e2b`
+- LibreOffice 7+ for the Calc extension path
 
 ## Install and run the core daemon
 
@@ -27,42 +32,49 @@ The daemon listens on `127.0.0.1:8765`. Verify:
 curl http://127.0.0.1:8765/healthz
 ```
 
-You should see something like:
+Expected shape:
 
 ```json
 {
   "ok": true,
   "model": "gemma4:e2b",
-  "tools": ["list_workbooks", "get_review_snapshot", "inspect_sheet",
-            "list_risks", "propose_diff", "add_comment"]
+  "tools": [
+    "list_workbooks",
+    "get_review_snapshot",
+    "inspect_sheet",
+    "list_risks",
+    "get_dependencies",
+    "find_external_references",
+    "get_named_ranges",
+    "propose_diff",
+    "add_comment"
+  ]
 }
 ```
 
-## Run the tests
+## Run tests
 
 ```bash
 cd core
 .venv/bin/python -m pytest -q
+
+cd ../extension
+../core/.venv/bin/python -m pytest -q -c pyproject.toml
 ```
 
-The live LLM test (`tests/test_llm_live.py`) is skipped automatically
-if Ollama is not reachable.
+The live LLM test is skipped automatically if Ollama is not reachable.
 
-## Configuration
-
-Environment variables, all optional:
-
-- `SPREADBREAD_DATA_DIR` — where SQLite + uploads live (default: OS user-data directory)
-- `SPREADBREAD_MODEL` — Ollama model tag (default `gemma4:e2b`)
-- `OLLAMA_HOST` — Ollama URL (default `http://127.0.0.1:11434`)
-- `SPREADBREAD_HOST` / `SPREADBREAD_PORT` — daemon bind (default `127.0.0.1:8765`)
-
-## LibreOffice extension
-
-Build the `.oxt`:
+## Run lint
 
 ```bash
-cd extension && ./build.sh
+./core/.venv/bin/python -m ruff check core/spreadbread_core extension/python
+```
+
+## Build the LibreOffice extension
+
+```bash
+cd extension
+./build.sh
 unopkg add spreadbreadai.oxt
 ```
 
@@ -70,19 +82,71 @@ After restarting LibreOffice, the **SpreadbreadAI** menu appears in
 Calc with three numbered actions:
 
 1. *Review with SpreadbreadAI* — uploads the active workbook and asks
-   Gemma 4 to draft proposal items.
+   the local agent to inspect it.
 2. *Approve all pending items* — opens a confirmation dialog listing
-   the staged diffs. This is the human-in-the-loop step.
-3. *Apply approved diffs* — writes approved cells into the active sheet
-   and commits a new canonical version on the daemon side.
+   staged diffs.
+3. *Apply approved diffs* — commits approved operations through the
+   daemon and mirrors approved cells into the active sheet.
 
 The extension expects the daemon at `http://127.0.0.1:8765`. Override
 with the `SPREADBREAD_DAEMON` environment variable in LibreOffice's
 launch environment if you need a non-default address.
 
-## Resetting local state
+## MCP server
+
+Run the MCP stdio server for clients such as Claude Desktop, Cursor, VS
+Code, or Codex:
+
+```bash
+cd core
+.venv/bin/spreadbread-mcp
+```
+
+MCP tools use the same daemon tool registry and policy model. Write
+tools stage proposal items/operations; provider mutation still goes
+through apply.
+
+## Configuration
+
+Environment variables, all optional:
+
+- `SPREADBREAD_DATA_DIR` — where SQLite and uploads live
+- `SPREADBREAD_MODEL` — Ollama model tag, default `gemma4:e2b`
+- `OLLAMA_HOST` — Ollama URL, default `http://127.0.0.1:11434`
+- `SPREADBREAD_HOST` / `SPREADBREAD_PORT` — daemon bind, default
+  `127.0.0.1:8765`
+
+Future cloud and Google provider credentials should live outside the
+repo in user config/credential files. They must not be required for
+default tests or local demo runs.
+
+## Reset local state
 
 Delete the configured `SPREADBREAD_DATA_DIR` to wipe the SQLite
 database and uploaded workbooks. If unset, the default is your OS
-user-data directory, such as `~/Library/Application Support/SpreadbreadAI/data`
-on macOS or `~/.local/share/spreadbreadai/data` on Linux.
+user-data directory, such as:
+
+- macOS: `~/Library/Application Support/SpreadbreadAI/data`
+- Linux: `~/.local/share/spreadbreadai/data`
+
+## Baseline verification before architecture work
+
+Run this before large refactors:
+
+```bash
+cd core
+.venv/bin/python -m pytest -q
+
+cd ../extension
+../core/.venv/bin/python -m pytest -q -c pyproject.toml
+
+cd ..
+./core/.venv/bin/python -m ruff check core/spreadbread_core extension/python
+```
+
+If a future sprint touches packaging, also run:
+
+```bash
+cd extension
+./build.sh
+```

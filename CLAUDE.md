@@ -2,156 +2,220 @@
 
 ## Project summary
 
-SpreadbreadAI is an open-source spreadsheet AI assistant for
-enterprise and professional use. It combines agentic LLM tool calling
-with human-in-the-loop approval, immutable workbook versioning, and an
-append-only audit trail. The current implementation ships as a
-LibreOffice Calc plugin and a local Python daemon. External AI clients
-(Claude Desktop, Cursor, VS Code, Codex) can also drive the same tool
-catalog over MCP.
-
-Default LLM is `gemma4:e2b` via Ollama; the adapter is pluggable so
-larger local models or cloud providers can be added without changing
-the rest of the stack.
+SpreadbreadAI is an open-source, local-first agentic workspace for
+complex spreadsheet and document work. The current implementation is a
+LibreOffice Calc extension backed by a local Python daemon. The target
+architecture generalizes that local loop into a provider-neutral engine
+with typed operations, provider adapters, skills, MCP integrations,
+agent modes, artifact-centered UI, and audited apply.
 
 Read [`docs/development-plan.md`](docs/development-plan.md) before
-starting work. It is the source of truth for phases, decisions, and
-the target architecture.
+starting work. It is the execution source of truth.
 
-## Repository Layout
+## Current direction
+
+The product is moving from:
 
 ```text
-core/                   Python daemon (FastAPI + SQLite + Ollama)
-  spreadbread_core/
-    domain.py           Pydantic models — Workbook, Proposal, Item, Audit
-    store.py            SQLite repository + xlsx version bytes
-    parser.py           openpyxl-based .xlsx parser
-    tools.py            tool registry exposed to the LLM
-    llm.py              Ollama tool-calling loop
-    apply.py            apply pipeline (approved diffs → new version)
-    http.py             FastAPI app + uvicorn entry
-    config.py
-  tests/                pytest suites (unit + live LLM)
-  pyproject.toml
-extension/              LibreOffice .oxt plugin (Python UNO)
-  manifest/             META-INF, description, Addons.xcu, ProtocolHandler.xcu
-  python/               main.py + spreadbreadai/ (client, sidebar, calc_bridge)
-  tests/                pytest tests for the client and cell parser
-  build.sh              packages → spreadbreadai.oxt
-docs/                   product, architecture, ADRs, runbooks, plan
+LibreOffice spreadsheet assistant with review/apply
 ```
 
-## What Exists Today
+to:
 
-### Core daemon (`core/`)
+```text
+local-first agentic workspace for spreadsheet/document operations
+```
 
-- **Domain model** in Pydantic — `Workbook`, `Proposal`, `ProposalItem`, `AuditEvent`.
-- **SQLite store** — single backend, no Postgres, no dual-store split.
-- **xlsx parser** with openpyxl: sheet metadata, formula counts, sample
-  rows, seeded risks.
-- **Tool registry** with the v0.1 catalog the LLM can call.
-- **Ollama loop** wired to `gemma4:e2b`, capped at 8 tool-call rounds.
-- **FastAPI daemon** with `/healthz`, upload, review, chat, item decisions.
-- **Tests**: `tests/test_smoke.py` (unit) and `tests/test_llm_live.py`
-  (live, skipped automatically if Ollama is down).
+Important principles:
 
-### LLM tool catalog (read vs write boundary)
+- local-first and low-cost by default
+- Ollama/local model default
+- SQLite/local files default
+- no required cloud service during development/beta
+- provider adapters at the edge
+- typed operations before provider mutation
+- policy enforced in code, not prompts
+- MCP and skills do not bypass policy
+- artifact-centered UX, not chat-only and not review-only
 
-Read tools (no side effects):
+## Repository layout
+
+```text
+core/                   Python daemon/gateway
+  spreadbread_core/
+    domain.py           Pydantic models: Workbook, Proposal, Item, Audit
+    store.py            SQLite repository + xlsx version bytes
+    parser.py           openpyxl-based .xlsx parser
+    tools.py            tool registry exposed to LLM/MCP
+    llm.py              Ollama tool-calling loop
+    apply.py            apply pipeline
+    http.py             FastAPI app + uvicorn entry
+    config.py
+  tests/                pytest suites
+  pyproject.toml
+extension/              LibreOffice .oxt extension
+  manifest/             META-INF, description, Addons.xcu, ProtocolHandler.xcu
+  python/               main.py + spreadbreadai package
+  tests/                pytest tests
+  build.sh              packages spreadbreadai.oxt
+docs/                   product, architecture, ADRs, runbooks, plan
+packaging/              native bundle/launcher scaffold
+```
+
+## What exists today
+
+### Core daemon
+
+- Domain model in Pydantic.
+- SQLite store.
+- xlsx parser with openpyxl.
+- Workbook risks for external refs, broken sheet refs, stale markers,
+  named ranges, and dependencies.
+- Tool registry with read tools and write-staging tools.
+- Ollama loop wired to local model default.
+- FastAPI daemon with workbook, proposal, trust mode, chat, apply, and
+  tool endpoints.
+- MCP stdio server.
+- Apply pipeline with conflict detection, base checksum guard,
+  idempotence, immutable versions, and audit events.
+
+### LibreOffice extension
+
+- `spreadbread:review`, approve-all, and `spreadbread:apply` actions.
+- Workbook upload and daemon review request.
+- Confirmation dialog for staged diffs.
+- Calc bridge for mirroring approved diffs after daemon apply succeeds.
+- Current UI is still too thin; artifact/sidebar work is the next UX
+  slice.
+
+### Tool catalog
+
+Read tools:
 
 - `list_workbooks`
 - `get_review_snapshot(workbook_id)`
 - `inspect_sheet(workbook_id, sheet_name)`
 - `list_risks(workbook_id)`
+- `get_dependencies(workbook_id, cell)`
+- `find_external_references(workbook_id)`
+- `get_named_ranges(workbook_id)`
 
-Write tools (stage a pending proposal item; never mutate a workbook):
+Write-staging tools:
 
-- `propose_diff(workbook_id, cell, kind, before?, after?, rationale)`
+- `propose_diff(workbook_id, cell, kind, before?, after?, after_type?, rationale)`
 - `add_comment(workbook_id, cell, body)`
 
-The registry enforces this split. The model has no path to a real write.
+There is no model-exposed direct provider write tool. Do not add one.
 
-### Known traps
+## Next architecture contracts
 
-- **Do not add `from __future__ import annotations` to
-  `core/spreadbread_core/http.py`.** FastAPI / Pydantic build schemas
-  eagerly from the route signatures; stringified ForwardRef annotations
-  break body-model resolution (Pydantic raises class-not-fully-defined
-  and FastAPI silently falls back to treating the body as a query
-  param). `tests/test_http.py` guards against this regression.
-- **`pip install -e .` may install non-editable on some pip /
-  setuptools combos.** If your edits to `core/spreadbread_core/*.py`
-  don't take effect when running the daemon, check
-  `.venv/lib/python3.X/site-packages/spreadbread_core-0.1.0.dist-info/direct_url.json`
-  for `"editable": true`. If missing, reinstall with
-  `pip install -e . --config-settings editable_mode=compat`.
+Add these incrementally:
 
-## Working Rules For Future Agents
+1. Operation IR mapped from current proposal items.
+2. Provider capability model.
+3. Explicit agent modes: inspect, plan, propose, apply, direct, locked.
+4. Run/session tracing across prompt, tools, proposal, decisions, apply,
+   versions, and audit.
+5. Permission policy returning `allow`, `ask`, or `deny`.
+6. Local skills registry using `skills/<name>/SKILL.md`.
+7. Artifact API/UI for findings, operations, validation, impact, and timeline.
+8. Google Sheets provider adapter only after the operation/policy
+   contracts are stable.
 
-- Read [`docs/development-plan.md`](docs/development-plan.md) first.
-- Never add an LLM-driven write path that bypasses approval. Write tools
-  must only stage proposal items.
-- Keep the platform model-agnostic. Gemma 4 is the default; the LLM
-  adapter must support swapping models.
-- Prefer extending the Pydantic domain model in `core/spreadbread_core/domain.py`
-  before adding ad-hoc shapes elsewhere.
-- Keep runtime data out of git. `core/.data/` and `core/.venv/` are
-  ignored.
-- One language across the stack: Python in `core/` and `extension/`.
+## Working rules for agents
 
-## Useful Verification Commands
+- Start by reading [`docs/development-plan.md`](docs/development-plan.md).
+- Keep changes in the right layer: daemon owns behavior; provider UI
+  shells stay thin.
+- Never add agent, skill, MCP, or provider code that bypasses operation
+  policy, validation, apply, versioning, or audit.
+- Prefer additive migrations over rewrites.
+- Prefer deterministic spreadsheet tools and validators before relying
+  on larger models.
+- Do not introduce required paid APIs, hosted infrastructure, Postgres,
+  vector DBs, or plugin runtimes during development/beta.
+- Use skills/config before Python plugin code when possible.
+- Keep runtime data out of git. `core/.data/`, virtualenvs, and caches
+  are ignored.
+
+## Known traps
+
+- Do not add `from __future__ import annotations` to
+  `core/spreadbread_core/http.py`. FastAPI/Pydantic schema resolution
+  can break body-model handling; `tests/test_http.py` guards this.
+- If editable installs do not reflect source changes, reinstall core
+  with:
+
+```bash
+cd core
+.venv/bin/pip install -e .[dev] --config-settings editable_mode=compat
+```
+
+- The local API trusts localhost by default. Do not bind to a network
+  interface without auth.
+
+## Useful verification commands
 
 From repo root:
 
-- Install core deps:
-  `cd core && python3 -m venv .venv && .venv/bin/pip install -e .[dev] --config-settings editable_mode=compat`
-- Run daemon:
-  `cd core && .venv/bin/spreadbread-core`
-- Run MCP stdio server (for external AI clients):
-  `cd core && .venv/bin/spreadbread-mcp`
-- Run tests:
-  `cd core && .venv/bin/python -m pytest -q`
-- Health check:
-  `curl http://127.0.0.1:8765/healthz`
-- List Ollama models:
-  `ollama list`
+```bash
+cd core
+.venv/bin/python -m pytest -q
+```
 
-## Current Technical Constraints
+```bash
+cd extension
+../core/.venv/bin/python -m pytest -q -c pyproject.toml
+```
 
-- Persistence is SQLite only. Postgres is a future option behind the
-  same store interface.
-- Workbook parsing is structural: formula counts, sample rows, no
-  evaluation. LibreOffice / Excel evaluate formulas.
-- Apply pipeline lives in `core/spreadbread_core/apply.py` and is wired
-  to `POST /api/proposals/{id}/apply`. Idempotent, guarded against
-  pending items, writes a new `.xlsx` version under
-  `core/.data/workbooks/<workbook_id>/<version_id>.xlsx` and emits
-  `proposal.applied` + `version.created` audit events.
-- LibreOffice extension v0.1 UI is a message box; the real `.ui` sidebar
-  with per-item approve / reject is the next slice (development plan
-  Phase 2.5).
-- No auth, no tenancy. Single-user local install.
+```bash
+./core/.venv/bin/python -m ruff check core/spreadbread_core extension/python
+```
 
-## Recommended Next Steps
+```bash
+cd extension
+./build.sh
+```
 
-In order:
+Run daemon:
 
-1. Replace the v0.1 message-box sidebar with a real `.ui`-defined panel
-   that renders diff cards with per-item approve / reject buttons.
-2. Add conflict detection: if the active workbook diverges from the
-   version a proposal was generated against, refuse apply with a clear
-   error.
-3. Enrich the parser (dependency graph, stale inputs, named ranges,
-   external reference drift).
-4. Expose the tool catalog over MCP stdio for external agent clients.
-5. Package: `pipx`-installable daemon, signed `.oxt` releases.
+```bash
+cd core
+.venv/bin/spreadbread-core
+```
 
-## Current Git State Expectation
+Run MCP server:
 
-Branch: `main`. Remote: `origin`. Before starting work:
+```bash
+cd core
+.venv/bin/spreadbread-mcp
+```
 
-- `git status --short --branch`
-- `git remote -v`
-- `gh auth status`
+Health check:
 
-Prefer small commits after each validated slice.
+```bash
+curl http://127.0.0.1:8765/healthz
+```
+
+## Recommended next work
+
+Follow the sprint plan in [`docs/development-plan.md`](docs/development-plan.md):
+
+1. Finish documentation/baseline verification.
+2. Replace the message-box Calc review with artifact/sidebar UI.
+3. Add operation IR while preserving current proposal behavior.
+4. Add run/session tracing and explicit permission policy.
+5. Add modes/resources/workspace spine.
+6. Add local skills registry.
+7. Add Google Sheets adapter after the core contracts are stable.
+
+## Current git state expectation
+
+Before starting substantial work:
+
+```bash
+git status --short --branch
+git remote -v
+```
+
+Work in small, validated slices. Do not revert unrelated user changes.

@@ -5,7 +5,12 @@ What this PR changes and why. One short paragraph.
 ## Affected components
 
 - [ ] `core/` (daemon)
+- [ ] agent runtime / modes / permissions
+- [ ] operation IR / apply pipeline
+- [ ] provider adapter
+- [ ] skills / MCP tools
 - [ ] `extension/` (LibreOffice plugin)
+- [ ] UI / artifact workspace
 - [ ] `docs/`
 - [ ] CI / release workflow
 - [ ] other:
@@ -18,11 +23,14 @@ What this PR changes and why. One short paragraph.
 
 ## Human-in-the-loop guarantee
 
-- [ ] no new path lets the LLM mutate a workbook without human approval
+- [ ] no new path lets an agent, skill, or MCP tool bypass operation policy
 - [ ] every state transition still emits an audit event
-- [ ] apply remains idempotent per proposal
+- [ ] apply remains idempotent per proposal or operation batch
+- [ ] provider adapters expose capabilities instead of hidden side effects
+- [ ] direct/autopilot behavior is opt-in, bounded, and auditable
 
 ## Docs
 
 - [ ] `docs/development-plan.md` updated if a phase changed
 - [ ] `CLAUDE.md` updated if layout, commands, or constraints changed
+- [ ] architecture/product docs updated for new providers, skills, or modes

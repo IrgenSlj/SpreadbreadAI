@@ -1,20 +1,23 @@
 # Contributing
 
 Thanks for considering a contribution. SpreadbreadAI is an
-open-source spreadsheet AI assistant intended for professional and
-enterprise use; the bar is correctness, traceability, and
-predictability.
+open-source, local-first agentic workspace for spreadsheet and document
+work. The bar is correctness, traceability, predictability, and clear
+policy boundaries between agents and document providers.
 
-## Approval and audit guarantees
+## Operation policy guarantees
 
 Every change must preserve these:
 
-1. The LLM has read tools and write-staging tools only. There is no
-   tool path that mutates a workbook directly.
-2. `apply` is the single code path that produces a new workbook
-   version, and it requires approved items.
-3. Every state transition writes an audit event.
-4. Workbook versions are immutable; updates create new versions.
+1. Agents, skills, and MCP tools operate through declared tools and
+   provider capabilities. They do not receive hidden write channels.
+2. Write-capable tools produce typed operations or proposal items
+   first. Provider mutation happens only through the apply pipeline.
+3. `apply` is the single code path that commits approved or explicitly
+   trusted operations to a provider-backed document version.
+4. Every state transition writes an audit event.
+5. Workbook/document versions are immutable where the provider allows
+   it; updates create new versions or auditable provider revisions.
 
 If a change weakens any of these, it does not ship.
 
@@ -28,12 +31,17 @@ If a change weakens any of these, it does not ship.
    gracefully when Ollama is unreachable.
 5. Update `CLAUDE.md` when the layout, commands, or constraints
    change.
+6. Prefer skill/config changes over Python plugin code when a workflow
+   can be expressed declaratively.
 
 ## Where work lives
 
 - `core/` — Python daemon. Domain types, tools, store, apply, MCP.
 - `extension/` — LibreOffice Calc plugin. UNO component and sidebar.
 - `docs/` — product, architecture, ADRs, runbooks, development plan.
+- future provider adapters — Google Sheets, Google Docs, Excel, and
+  local files should depend on the shared operation model, not bespoke
+  agent logic.
 
 ## Commit guidance
 
@@ -48,7 +56,7 @@ If a change weakens any of these, it does not ship.
 - Tests cover the new behavior and the risk areas it touches.
 - `README.md`, `CLAUDE.md`, and the development plan are updated when
   the change affects layout, commands, or constraints.
-- Approval and audit guarantees remain intact.
+- Operation policy and audit guarantees remain intact.
 
 ## Security
 

@@ -26,6 +26,8 @@ In scope:
 
 - the core daemon (`core/`)
 - the LibreOffice extension (`extension/`)
+- provider adapters and local gateway surfaces as they are added
+- skills, MCP tool bridges, and permission policy enforcement
 - packaged release artifacts (`.oxt`, PyPI distributions when published)
 
 Out of scope (report upstream):
@@ -37,14 +39,18 @@ Out of scope (report upstream):
 
 ## Security model reminders
 
-SpreadbreadAI is designed so the LLM cannot write directly to
-workbooks. Write tools stage proposal items; in the default `review`
-mode, only an explicit human approval can apply them. The opt-in
-`direct` mode can auto-approve staged items, but apply is still
-performed by the daemon and recorded as a versioned, audited change.
-If you find a path that lets an LLM bypass the tool registry or apply
-pipeline, treat it as a security issue and report it through the
-channel above.
+SpreadbreadAI is designed so agents cannot write directly to
+workbooks or documents. Tools stage typed operations or proposal
+items; provider mutation happens through the apply pipeline. In the
+default review policy, explicit approval is required before apply. The
+opt-in direct/autopilot paths can auto-approve only within configured
+policy boundaries, and still route through apply, versioning, and
+audit.
+
+If you find a path that lets an LLM, skill, MCP tool, or provider
+adapter bypass the tool registry, permission policy, capability
+checks, or apply pipeline, treat it as a security issue and report it
+through the channel above.
 
 ## Local trust assumptions
 
@@ -53,3 +59,12 @@ process on the local machine to call its API. If you change this — for
 example by binding to a non-loopback interface — you must add your own
 authentication. Doing so without auth is a configuration vulnerability
 on your install.
+
+The development architecture is intentionally single-user and
+local-first. Do not expose the daemon, MCP bridge, or future Google
+connector to a network without adding authentication, authorization,
+and per-user trust boundaries.
+
+Third-party skills and MCP servers are untrusted input. They must be
+listed, permission-gated, and auditable before they can influence
+write-capable operations.

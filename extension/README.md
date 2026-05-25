@@ -1,12 +1,14 @@
 # SpreadbreadAI LibreOffice Extension
 
 A Python UNO extension that surfaces SpreadbreadAI inside LibreOffice
-Calc. The extension is a thin client; all logic lives in the daemon
-at `127.0.0.1:8765`.
+Calc. The extension is the first provider-specific UI shell; all
+policy, agent, proposal, operation, and audit logic lives in the
+daemon at `127.0.0.1:8765`.
 
 ## Status
 
-v0.1 scaffold landed. See [`docs/development-plan.md`](../docs/development-plan.md) Phase 2.
+v0.1 scaffold landed. See [`docs/development-plan.md`](../docs/development-plan.md)
+for the current sprint plan.
 
 What works:
 
@@ -19,11 +21,15 @@ What works:
 - cell-reference parser and Calc bridge for mirroring approved diffs
   into the active workbook after daemon apply succeeds
 
-What is next (Phase 2.5):
+What is next:
 
-- replace the temporary message box with a real sidebar `.ui` panel
-- per-item approve / reject buttons inside the sidebar
-- trust-mode controls inside the sidebar
+- replace the temporary message box with an artifact-centered sidebar
+- render findings, proposed operations, validation results, and audit
+  timeline
+- expose mode and trust controls: inspect, plan, propose, apply,
+  direct, locked
+- keep LibreOffice-specific code limited to provider synchronization
+  and UI plumbing
 
 ## Layout
 

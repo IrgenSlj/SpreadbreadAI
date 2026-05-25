@@ -1,414 +1,376 @@
 # SpreadbreadAI Development Plan
 
-This document is the source of truth for what we are building, why, and in
-what order. It supersedes the earlier `docs/architecture/implementation-plan.md`
-and `docs/product/roadmap.md` for execution detail.
+Last updated: 2026-05-25.
 
-## Project summary
+This document is the source of truth for implementation sequencing.
+The product is moving from a LibreOffice-only spreadsheet assistant
+toward a local-first, modular agentic workspace for spreadsheet and
+document work. The implementation must move from the specific to the
+general: finish and harden the current local Calc loop first, then add
+provider-neutral contracts, then expand to Google and other providers.
 
-SpreadbreadAI is an open-source spreadsheet AI assistant for enterprise
-and professional use. The product combines agentic LLM tool calling
-with human-in-the-loop approval, immutable workbook versioning, and an
-append-only audit trail. The LLM works through a fixed tool catalog
-that separates read access from write-staging; the daemon owns every
-state transition.
+Supporting contracts:
 
-## Current shape (May 2026)
+- [`architecture/operation-ir.md`](architecture/operation-ir.md)
+- [`architecture/skills-and-policy.md`](architecture/skills-and-policy.md)
+- [`product/ux-principles.md`](product/ux-principles.md)
 
-The implementation ships as a LibreOffice Calc plugin and a local
-Python daemon. External AI clients (Claude Desktop, Cursor, VS Code,
-Codex) drive the same tool catalog over MCP. Default model is Gemma 4
-E2B via Ollama; the LLM adapter is pluggable.
+## Current Product Shape
 
-An earlier Node + React prototype proved the domain model but lived
-outside the spreadsheet. It has been retired; the LibreOffice plugin
-plus local daemon is the canonical shape.
+SpreadbreadAI currently ships as:
 
-## Target Architecture
+- a local Python daemon using FastAPI, SQLite, openpyxl, Ollama, and MCP
+- a LibreOffice Calc extension that uploads workbooks, requests review,
+  approves staged proposal items, and applies approved diffs
+- a tool registry with read tools and write-staging tools
+- an apply pipeline with conflict detection, immutable workbook
+  versions, idempotence, and audit events
+- trust modes: `review`, `locked`, and opt-in `direct`
 
-```
-┌─ LibreOffice Calc ────────────────────────────────┐
-│  ┌─ Sidebar (Python UNO extension, .oxt) ───────┐ │
-│  │  Proposals · Diffs · Risks · Audit · Approve │ │
-│  └────────────────┬─────────────────────────────┘ │
-└───────────────────┼───────────────────────────────┘
-                    │ localhost JSON over HTTP (8765)
-┌───────────────────▼───────────────────────────────┐
-│  Core daemon (Python, FastAPI, SQLite)            │
-│  · workbook parsing (openpyxl)                    │
-│  · proposal state machine                         │
-│  · diff / apply engine                            │
-│  · audit log                                      │
-│  · tool registry exposed to the LLM               │
-│  · MCP server (later)                             │
-└───────────────────┬───────────────────────────────┘
-                    │ pluggable LLM adapter
-        ┌───────────┴───────────┐
-        ▼                       ▼
-   Ollama (local)         Cloud (optional)
-   Gemma 4 E2B (default)  Claude / GPT / Gemini
-   Qwen 2.5 / Llama 3.3   via API key
-```
+This is the first provider implementation. It should not be discarded.
+It is the proving ground for the provider-neutral engine.
 
-### Component responsibilities
+## Product Direction
 
-- **LibreOffice extension** (`extension/`) — Calc menu actions today,
-  sidebar UI next, diff renderer, approve/reject actions, and active
-  workbook mirroring after daemon apply. No business logic.
-- **Core daemon** (`core/`) — single Python process, single SQLite file,
-  owns every domain object and every state transition. Exposes a
-  localhost HTTP API and an MCP stdio server.
-- **LLM adapter** (`core/spreadbread_core/llm.py`) — Ollama-first
-  tool-calling loop. Pluggable so cloud models can be swapped in.
-- **Web review UI** (deferred) — a small optional review surface for
-  users who do not run LibreOffice. Will reuse the same daemon.
+The target product is:
 
-### Repository layout
+**a local-first agentic workspace for complex spreadsheet and document
+work, with provider adapters, typed operations, skills, MCP
+integrations, and auditable apply.**
+
+The UX principle is:
+
+**conversation-led, artifact-centered, policy-gated.**
+
+- Chat or command prompts start work.
+- Findings, proposed operations, diffs, validation results, dependency
+  impact, and audit events hold the work.
+- Policy decides whether an operation is read-only, staged, blocked,
+  review-required, or eligible for bounded auto-apply.
+
+## Non-Negotiables
+
+- Local-first and low-cost by default.
+- No hosted service, paid API, Postgres server, vector database, or
+  plugin marketplace may become required during development/beta.
+- SQLite/local files remain the default store.
+- Ollama/local models remain the default model path.
+- Cloud LLMs and Google/Office connectors are opt-in and use
+  user-supplied credentials during development.
+- Agents, skills, MCP tools, and provider adapters cannot bypass the
+  operation policy or apply pipeline.
+- The daemon is the source of truth for state, policy, versioning, and audit.
+
+## Architecture Direction
 
 ```text
-core/                   Python daemon (FastAPI + SQLite + Ollama)
-  spreadbread_core/     domain, store, parser, tools, llm, apply, http, config
-  tests/                pytest suites (unit + live LLM)
-  pyproject.toml
-extension/              LibreOffice .oxt extension (Python UNO)
-  manifest/             META-INF, description, Addons.xcu, ProtocolHandler.xcu
-  python/               UNO component + spreadbreadai package
-  tests/                pytest unit tests
-  build.sh              packages → .oxt
-docs/                   product, architecture, ADRs, runbooks, this plan
+User surfaces
+  LibreOffice sidebar
+  Local artifact UI
+  MCP clients
+  Future Google/Office surfaces
+
+Local gateway / daemon
+  sessions and run queue
+  agent modes
+  tool registry
+  permission policy
+  skill loader
+  MCP bridge
+  audit/event stream
+
+Document engine
+  spreadsheet model
+  text document model
+  typed operation IR
+  validators
+  dependency/risk analyzers
+  apply pipeline
+
+Provider adapters
+  LibreOffice/local xlsx
+  Google Sheets
+  Google Docs
+  Excel/Office later
+
+Storage
+  SQLite by default
+  local workbook/version bytes
+  normalized runs/events/operations where needed
+  Postgres only as a later optional backend
 ```
 
-## How the LLM Does Work
+## Core Contracts To Add
 
-The platform talks to Gemma 4 E2B through Ollama's tool-calling API.
-The daemon publishes a fixed catalog of tools — read tools have no side
-effects; write tools only stage proposal items for human approval and
-**cannot mutate workbooks directly**. This is the governance contract.
+### Operation IR
 
-Tool catalog (v0.1):
+The current `ProposalItem` model is spreadsheet-specific. The next
+contract is a typed operation IR that can represent spreadsheet and
+document actions before provider mutation.
 
-- `list_workbooks` — read
-- `get_review_snapshot(workbook_id)` — read
-- `inspect_sheet(workbook_id, sheet_name)` — read
-- `list_risks(workbook_id)` — read
-- `get_dependencies(workbook_id, cell)` — read
-- `find_external_references(workbook_id)` — read
-- `get_named_ranges(workbook_id)` — read
-- `propose_diff(workbook_id, cell, kind, before?, after?, rationale)` — stages a pending item
-- `add_comment(workbook_id, cell, body)` — stages a pending comment item
+Initial operation kinds:
 
-Loop:
+- `set_cell_value`
+- `set_cell_formula`
+- `add_cell_comment`
+- `replace_range_values`
+- `create_sheet`
+- `rename_sheet`
+- `add_document_comment`
+- `replace_document_text`
+- `insert_document_section`
 
-1. User asks the daemon to review a workbook.
-2. Daemon sends Gemma 4 the tool catalog and the request.
-3. Model emits tool calls; daemon executes and feeds results back.
-4. Model produces a final summary; daemon returns it with the trace.
-5. Approver flips items to `approved` or `rejected` via the daemon API;
-   only then can the apply flow write a new workbook version.
+Each operation carries:
 
-## Phased Plan
+- resource id and provider
+- target address or document range
+- before/after data where available
+- rationale
+- risk level
+- required capability
+- validation status
+- source run id
+- approval status
 
-### Phase 1 — Core Daemon (status: landed)
+### Provider Capability Model
 
-- Python package, Pydantic domain model, SQLite store.
-- Parser via openpyxl (formula counts, sample rows, seeded risks).
-- Tool registry with the v0.1 catalog.
-- Ollama tool-calling loop.
-- FastAPI HTTP daemon with healthz, upload, review, chat, decision.
-- Unit + live integration tests.
+Every provider adapter declares capabilities before tools can use it:
 
-### Phase 2 — LibreOffice Extension (status: scaffold landed; UI pending)
+- resource kinds: spreadsheet, text document, presentation, file
+- read capabilities
+- write capabilities
+- comment/suggestion support
+- version/revision support
+- conflict-detection support
+- batch apply support
+- offline/online requirement
 
-- (landed) Manifest scaffold (`META-INF/manifest.xml`, `description.xml`).
-- (landed) Calc menu entry (`Addons.xcu`) and protocol handler (`ProtocolHandler.xcu`).
-- (landed) Python UNO component — review action uploads the workbook,
-  asks the local LLM to draft proposals, shows snapshot.
-- (landed) `build.sh` packages `.oxt` cleanly (no `__pycache__`).
-- (in progress) Real sidebar `.ui` panel with per-item approve / reject
-  (replaces the v0.1 message-box UI).
+The engine chooses tools and apply paths from declared capabilities, not
+from provider-specific assumptions.
 
-### Phase 2.5 — End-to-end user-test affordances (status: landed)
+### Agent Modes
 
-- (landed) `POST /api/proposals/{id}/approve-all` flips all pending
-  items to approved with a single reviewer name. Still HITL — an
-  approver clicks the button.
-- (landed) Three-step LibreOffice menu (Review → Approve all → Apply)
-  so the full loop works without curl.
-- (landed) Confirmation dialog with item preview before bulk approval.
-- (landed) HTTP-level pytest coverage to guard against the
-  FastAPI / Pydantic forward-ref body-resolution trap (`test_http.py`).
+- `inspect` — read-only findings.
+- `plan` — read-only plan and impact estimate.
+- `propose` — creates operations/proposal items, no provider writes.
+- `apply` — commits approved/trusted operations through provider adapter.
+- `direct` — opt-in bounded auto-apply through the same apply pipeline.
+- `locked` — strict write policy requiring per-item approval.
 
-### Phase 3 — Apply Pipeline (status: landed)
+### Skills
 
-- (landed) Daemon endpoint `POST /api/proposals/{id}/apply` produces a
-  new workbook version (`.xlsx` bytes written to the data dir).
-- (landed) Idempotent: a proposal in `applied` state returns its
-  existing version.
-- (landed) Guards: pending items block apply; zero approved items
-  blocks apply.
-- (landed) Audit events written: `proposal.applied` and
-  `version.created`.
-- (landed) Extension `spreadbread:apply` asks the daemon to commit the
-  canonical version first, then mirrors approved cells into the active
-  Calc document as a UX courtesy.
-- (landed) Conflict detection when the stored workbook version diverges
-  from the version the proposal was generated against.
+Skills are workflow packs, preferably markdown/config first:
 
-### Phase 3.5 — Hardening (status: landed)
+- formula audit
+- month-end close review
+- scenario modeling
+- stale input cleanup
+- report generation
+- external reference repair
 
-- **Conflict detection on apply.** Track `source_version_id` and a
-  SHA-256 checksum of the base xlsx on the proposal at creation time.
-  Refuse `apply` if the workbook's latest version no longer matches.
-  Without this, applying a stale proposal silently overwrites the
-  user's later edits.
-- **Reorder extension apply.** Daemon commits the canonical version
-  first; only on success does the extension write to the active Calc
-  document as a UX courtesy. Daemon is the source of truth.
-- **Dedupe cell-ref parsing.** Single shared module covers absolute
-  refs (`$A$1`), ranges (`A1:B2`), and named ranges; fails loudly on
-  unsupported inputs instead of producing garbage.
+Skills teach the agent how to work. They do not get hidden write
+permissions. Any skill-triggered operation still goes through policy,
+validation, apply, and audit.
 
-The default model stays `gemma4:e2b` deliberately. The smallest viable
-local model keeps the install footprint and laptop-RAM bar low. Users
-who want stronger cell reasoning can swap to Qwen 3 8B or a cloud
-provider through the multi-LLM adapter (Phase 7) — but the default
-will not change before the rest of the platform is fast and stable.
+## Current Status Checklist
 
-### Phase 4 — Trust modes (status: landed in daemon; extension follow-up pending)
+Landed:
 
-- (landed) `TrustMode = Literal["direct", "review", "locked"]` added to
-  the domain model; `Workbook` carries `trust_mode: TrustMode = "review"`.
-- (landed) `POST /api/workbooks/{workbook_id}/trust-mode` validates the
-  mode, updates the workbook, and writes a `workbook.trust_mode_changed`
-  audit event.
-- (landed) `direct` mode: after `/chat` returns, the daemon automatically
-  approves all pending items on the latest proposal and calls apply in the
-  same request. Every direct-mode change still produces an immutable
-  workbook version and an audit event with actor `"user (direct mode)"`.
-  This mode is opt-in; the default `review` mode requires an explicit
-  approval click before apply. If auto-apply fails (e.g. conflict
-  detection), the error is surfaced in `auto_apply_error` without
-  failing the chat call.
-- (landed) `/chat` response shape extended with `auto_applied: bool`,
-  `applied_version_id: str | None`, and `auto_apply_error: str | None`.
-- (landed) `review` mode: existing behavior — items stage as pending,
-  an approver hits `/approve-all` or a per-item `/decision`, apply is
-  a separate call. No behavioral change, just an explicit mode value.
-- (landed) `locked` mode: `/approve-all` refuses with HTTP 403 on locked
-  workbooks. Every item must be approved individually via the per-item
-  `/decision` endpoint.
-- (landed) Four new HTTP-level pytest tests covering direct-mode auto-apply,
-  review-mode non-auto-apply, locked bulk-approve refusal, and invalid-mode
-  rejection.
-- (pending) Extension UI: the LibreOffice sidebar does not yet expose
-  trust-mode controls. The extension still uses the same Review / Approve
-  all / Apply menu regardless of the server-side trust mode. Extension
-  follow-up is a separate slice.
+- Core daemon, parser, store, tools, FastAPI API.
+- Ollama tool-calling loop with local model default.
+- LibreOffice extension v0.1 with menu actions.
+- Apply pipeline with conflict detection, base checksum guard,
+  idempotence, and audit events.
+- Trust modes in the daemon.
+- MCP stdio server.
+- Risk detection for external refs, broken sheet refs, stale markers,
+  named ranges, and dependencies.
+- Packaging scaffold with native bundle direction.
 
-### Phase 5 — MCP server (status: landed)
+Known gaps:
 
-For an AI-first product, MCP is not a "later" feature. Without it,
-users' existing AI tools (Claude Desktop, Cursor, VS Code agents)
-cannot drive SpreadbreadAI. With it, those tools become free
-distribution channels.
+- Message-box UI is not sufficient for artifact-centered workflows.
+- Proposal items are not yet a provider-neutral operation IR.
+- Tool permissions are implicit in the registry instead of an explicit
+  policy layer.
+- Agent modes exist only as trust/apply behavior, not as first-class run modes.
+- No local skills registry.
+- No run/session spine tying prompt, tool calls, proposals, apply, and
+  audit into one trace.
+- Roadmap expansion to Google Sheets/Docs needs provider contracts first.
 
-- (landed) `spreadbread-mcp` stdio entry point exposing the existing
-  tool registry. Same registry, same approval
-  pipeline — write tools stage items, apply requires approved items.
-- (landed) External MCP invocations write a distinct
-  `mcp.tool.<name>` audit event so traffic is traceable separately
-  from the local-LLM loop.
-- (in progress) Documented connection recipes for each major MCP
-  client (Claude Desktop config landed in README; Cursor and VS Code
-  to follow).
+## Multisession Sprint Plan
 
-### Phase 6 — Smarter Review (status: landed)
+Each session is intended to be small enough for one focused coding
+session. Do not start a later sprint if its acceptance criteria depend
+on an unfinished earlier contract.
 
-- (landed) Real risk detection replaces the placeholder "X formula
-  cells need review" risk.  The parser now emits three classes of
-  actual signal:
-  - **External workbook reference** (severity: medium) — any formula
-    containing `[filename.xlsx]` is flagged; the foreign filename
-    appears in the risk summary.
-  - **Broken sheet reference** (severity: high) — formulas that name
-    a sheet not present in the workbook are detected via the openpyxl
-    tokenizer and flagged with the missing sheet name.
-  - **Pending input** (severity: low) — non-formula text cells whose
-    stripped, lowercased value is one of `todo`, `tbd`, `fixme`, `?`,
-    `???`, or `xxx` are surfaced as stale-input markers.
-- (landed) Per-sheet tracking: `WorkbookSheet` carries
-  `external_references`, `broken_references`, and `stale_markers`
-  (short lists of cell addresses, capped at 50 entries each).
-- (landed) Named-range surfacing: the parser reads `book.defined_names`
-  and populates `Workbook.named_ranges` with `WorkbookNamedRange`
-  entries (`name`, `sheet_name`, `reference`).
-- (landed) Dependency graph: `Workbook.dependencies` maps each
-  formula cell's fully-qualified address (e.g. `Forecast!C7`) to the
-  list of cell addresses its formula references.  Capped at 500
-  entries to keep payloads bounded.
-- (landed) Three new read-only LLM tools:
-  - `get_dependencies(workbook_id, cell)` — returns depends_on list
-    for a cell; empty list if the cell has no captured formula.
-  - `find_external_references(workbook_id)` — flat list of
-    `{sheet, cell}` entries for every external-reference cell.
-  - `get_named_ranges(workbook_id)` — list of
-    `{name, sheet_name, reference}` from the workbook's named ranges.
-- (landed) The old placeholder "Formula review pending" risk is
-  removed.  Sheets with no detected real risks produce no risk entries.
-- (landed) 14 new parser tests + 1 new end-to-end tool test.
+### Sprint 0: Documentation And Baseline
 
-### Phase 7 — Multi-LLM adapter
+Goal: make the repo point in one direction and record the current green
+baseline before structural work.
 
-The LLM layer is already isolated in `core/spreadbread_core/llm.py`
-behind one client class. Generalize it into an `LLMAdapter` interface
-with three concrete implementations:
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 0.1 | Reconcile docs around local-first modular workspace direction. | README, PRD, roadmap, architecture, ADR, setup, handoff, templates, and component READMEs no longer contradict landed status or the new direction. |
+| 0.2 | Run baseline verification. | Core tests, extension tests, ruff, `.oxt` build, and daemon health check are recorded. Live Ollama test may skip if unavailable. |
+| 0.3 | Add a small architecture glossary if terms drift. | Operation, resource, provider, skill, tool, run, proposal, and artifact are defined consistently. |
 
-- `OllamaAdapter` (current; covers Gemma 4, Qwen 2.5/3, Llama 3.3,
-  Mistral Nemo).
-- `GeminiAdapter` (Google function-calling API).
-- `OpenAIAdapter` (covers gpt-4o / o-series; Anthropic later).
+### Sprint 1: Finish The Existing Local Loop
 
-Provider selection lives in `~/.config/spreadbreadai/config.toml` with
-the API key in a separate `credentials` file (`chmod 600`).
+Goal: improve the current LibreOffice/local xlsx experience without
+inventing the broader platform yet.
 
-### Phase 8 — Real installer (status: scaffolded)
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 1.1 | Replace message-box review with a sidebar/artifact skeleton. | Calc review populates findings, proposal items, and audit summary in a sidebar; extension remains a thin daemon client. |
+| 1.2 | Add per-item approve/reject UI. | Individual decisions call daemon APIs; audit records reviewer and decision; locked mode blocks bulk approval. |
+| 1.3 | Add visible trust/mode controls. | User can see and change `review`, `locked`, and `direct`; direct mode is clearly opt-in and auditable. |
+| 1.4 | Add extension tests around state and dispatch. | Upload/review, proposal rendering state, approve/reject dispatch, apply success, and apply failure display are covered without requiring LibreOffice UI automation. |
 
-`scripts/install.sh` only installs the daemon and assumes the user is a
-developer. A real installer ships a native bundle per OS so end users
-download one file and run it.
+### Sprint 2: Operation IR
 
-- (landed) `packaging/` directory with a Briefcase project. Briefcase
-  produces `.dmg` (macOS), `.msi` (Windows), and `.AppImage` (Linux)
-  from a single Python codebase.
-- (landed) `packaging/src/spreadbreadai_launcher/` is a tray app that
-  supervises the daemon as a subprocess: starts it, restarts on crash,
-  shuts it down on quit. End users never see a terminal.
-- (landed) `bootstrap.py` runs first-time setup on each launch
-  (idempotent): downloads + installs Ollama if absent, pulls
-  `gemma4:e2b`, and registers the bundled `.oxt` with LibreOffice via
-  `unopkg add`.
-- (landed) `.github/workflows/release.yml` builds the native bundle on
-  macOS, Windows, and Linux runners on every tag push and attaches the
-  artifacts to the GitHub Release.
-- (in progress) Real tray icon artwork (`resources/spreadbreadai.icns`,
-  `.ico`, `.png`).
-- (in progress) Code signing on Windows and notarization on macOS so
-  Gatekeeper / SmartScreen don't warn the user.
-- (planned) Homebrew formula in a tap repo for `brew install
-  spreadbreadai` on macOS / Linux.
+Goal: introduce typed operations while preserving the existing proposal
+and apply behavior.
 
-### Phase 9 — Schema normalization and concurrency
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 2.1 | Add `Operation` domain types for spreadsheet cell/comment operations. | Existing `ProposalItem` can be converted to/from operation objects without behavior changes. |
+| 2.2 | Add operation validation status and risk level. | Invalid addresses, unsupported kinds, stale base versions, and provider capability mismatches fail closed. |
+| 2.3 | Store operation metadata in proposals. | Existing APIs remain backward-compatible; review payloads include operation data for new clients. |
+| 2.4 | Update apply to execute operation batches internally. | Current cell diff/comment apply still passes all tests; idempotence and conflict checks remain intact. |
 
-JSON-blob storage of full proposals in a `payload` column was fine for
-the prototype but does not scale:
+### Sprint 3: Runs, Events, And Policy
 
-- Cannot query "pending proposals across all workbooks" without
-  loading and deserializing every row.
-- No referential integrity on proposal items (nested in JSON).
-- No interlock against two clients editing the same proposal.
+Goal: make agent work traceable and permissioned as a product feature.
 
-Migration:
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 3.1 | Add `AgentRun` or equivalent run id. | One chat/review run links prompt, tool calls, proposal items, decisions, apply, and audit events. |
+| 3.2 | Add a small event/tool-call table or normalized audit index. | UI can query a run timeline without deserializing every proposal blob. |
+| 3.3 | Introduce explicit permission policy: `allow`, `ask`, `deny`. | Tool availability and execution are filtered by mode, trust policy, provider capability, and resource. |
+| 3.4 | Convert tool registry metadata to include resource kind, capability, mode, and risk. | Ollama and MCP still expose the same usable tools; tests prove no tool can write directly. |
 
-- Promote `proposal_items` to its own table with indexed `status` and
-  `proposal_id`.
-- Add an optimistic-concurrency token (`updated_at` or a row version)
-  on `proposals` and check it on every write.
-- Postgres driver behind the same `Store` interface for shared-daemon
-  deployments.
+### Sprint 4: Agent Modes And Workspace Spine
 
-### Phase 10 — Test coverage gaps
+Goal: make modes and resources first-class without building a generic
+platform.
 
-Currently missing:
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 4.1 | Add a default local workspace. | Existing workbooks belong to one default workspace; current APIs keep working. |
+| 4.2 | Add `ResourceRef`/`ResourceKind`. | Workbook resources can be listed generically; no provider rewrite required. |
+| 4.3 | Add mode-aware chat/review entry points. | `inspect`, `plan`, `propose`, and `apply` produce predictable tool access and response shape. |
+| 4.4 | Expose workspace/resource discovery over HTTP and MCP. | External agents can discover resources without hard-coded workbook assumptions. |
 
-- Tests for `ToolRegistry._ensure_proposal` when the latest proposal
-  is already applied (does the model start a new one?).
-- Property-based tests for cell-reference parsing.
-- Extension-side tests for sidebar dispatch and the upload flow.
+### Sprint 5: Artifact-Centered UI
 
-### Phase 11 — Optional web review UI
+Goal: make the UX reflect the product: artifacts first, chat as entry.
 
-- Small focused single-page app (deliberately not the 5k-line
-  monolith of the original prototype).
-- Hits the same daemon on `127.0.0.1:8765`.
-- For users who want review without LibreOffice.
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 5.1 | Define artifact response models. | Findings, operations, validation results, dependency impact, and audit events have stable API shapes. |
+| 5.2 | Build local artifact UI surface. | User can start a run, inspect artifacts, approve/reject operations, apply, and view timeline locally. |
+| 5.3 | Add cost/status indicators. | UI shows model/provider, local/cloud status, trust mode, and whether paid services are in use. |
+| 5.4 | Add exportable run summary. | One run can be summarized as a report with prompt, tools, operations, decisions, versions, and audit. |
 
-### Phase 12 — Multi-user and cloud sync (post-MVP)
+### Sprint 6: Skills And MCP Hardening
 
-- Optional shared-daemon deployment for small teams.
-- Postgres driver (lands earlier in Phase 9 for normalization
-  reasons; team mode reuses it).
-- Reviewer profiles, RBAC, scoped access.
-- Notification feed.
+Goal: add repeatable workflows without a plugin marketplace or hidden
+permissions.
 
-## Known issues, scheduled
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 6.1 | Add local skills directory and loader. | `skills/<name>/SKILL.md` files can be discovered, listed, and selectively loaded. |
+| 6.2 | Add skill metadata and allowlists. | Skills declare resource kind, required tools, provider requirements, risk level, and optional env/binary requirements. |
+| 6.3 | Route skill execution through agent modes and policy. | Skill-triggered operations are validated, permission-gated, and audited. |
+| 6.4 | Harden MCP tool exposure. | MCP tools are filtered by the same mode/policy/capability rules as local agent tools. |
 
-The peer-review notes that drove Phases 3.5 / 4 / 5 / 7 / 8 / 9 / 10
-also surfaced these specific issues — each is now tracked as part of
-the phases above. Cross-reference for future contributors:
+### Sprint 7: Google Sheets Adapter
 
-| Issue | Phase |
+Goal: add the first non-LibreOffice provider after operation IR and
+policy are stable.
+
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 7.1 | Add provider adapter interface and capability declarations. | LibreOffice/local xlsx path implements the interface without behavior regression. |
+| 7.2 | Add Google Sheets read adapter with local/user-supplied credentials. | One spreadsheet can be inspected and converted into the shared resource/document model. |
+| 7.3 | Add Google Sheets propose/apply for basic cell/range operations. | Operations use Sheets API batch semantics, conflict checks where possible, and audit. |
+| 7.4 | Add provider-specific tests with mocked Google API. | No test requires paid services or real user data. |
+
+### Sprint 8: Model Adapter And Cost Controls
+
+Goal: support stronger models without making paid APIs required.
+
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 8.1 | Introduce `LLMAdapter` interface around current Ollama client. | Ollama remains default; existing live/local tests still pass or skip cleanly. |
+| 8.2 | Add config file support separate from credentials. | Model/provider selection lives in user config; secrets are not stored in repo or logs. |
+| 8.3 | Add one optional cloud adapter only. | Adapter has mocked contract tests; failure degrades cleanly; no cloud key required for default tests. |
+| 8.4 | Add usage/cost display hooks. | Runs record local/cloud provider, model, token/usage data when available, and cost estimate when applicable. |
+
+### Sprint 9: Beta Hardening
+
+Goal: make the local beta boring to install, test, and demo.
+
+| Session | Scope | Acceptance Criteria |
+|---|---|---|
+| 9.1 | Harden launcher and daemon supervision. | Fresh local install starts daemon, pulls/fetches local model when allowed, registers extension, and recovers from daemon crash. |
+| 9.2 | Add MCP client recipes. | Claude Desktop, Cursor, VS Code/Codex recipes can connect and list tools/resources. |
+| 9.3 | Add internal beta script. | One FP&A workbook, one local review, one MCP-driven review, one apply, and one reset path run offline. |
+| 9.4 | Fix documentation and onboarding gaps found during beta. | A new user can complete the demo without handholding. |
+
+### Sprint 10: Later Scale Work
+
+Do not start this until repeated local/beta usage proves the need.
+
+| Scope | Trigger |
 |---|---|
-| Config is ENV-only with a fragile path default that breaks pipx installs | 7/8 |
-| JSON-blob storage of proposals will not scale | 9 |
-| 2.3B default model is the weakest link in cell reasoning | 3.5 |
-| Test coverage gaps in `_ensure_proposal`, property-based cell parsing, and sidebar dispatch | 10 |
-| No concurrency control beyond SQLite's default locking | 9 |
+| Normalize proposal items/operations fully. | Query volume or UI needs exceed the minimal run/event indexes. |
+| Optional Postgres backend. | Real shared-daemon/team usage appears. |
+| Reviewer profiles/RBAC. | More than one human role participates in approvals. |
+| Google Docs/Excel providers. | Google Sheets adapter validates the provider model. |
+| Dynamic plugin runtime. | Markdown skills and static adapters are insufficient. |
+| Hosted connector/cloud sync. | Users explicitly need cross-device/team collaboration. |
 
-## Non-Goals (for the MVP)
+## Test Strategy
 
-- Excel add-in. Calc first; Excel parity comes after the Calc loop is
-  loved.
-- Full formula recalculation engine. The daemon reads formulas; it does
-  not evaluate them. LibreOffice / Excel evaluate.
-- A custom DSL or query language.
-- Cloud-only. The platform must work fully offline with local LLMs.
+- Core unit tests for domain, parser, tools, policy, operations, store,
+  apply, HTTP, and MCP.
+- Extension tests for client/state/dispatch without depending on full
+  LibreOffice UI automation.
+- Provider adapter contract tests with mocks for network providers.
+- Live LLM tests skip cleanly when Ollama is not reachable.
+- No default CI path requires paid API credentials.
 
-## Decisions and Why
+## Cost Controls
 
-- **Python over Rust for the core.** The LO extension is Python-native;
-  one language ships faster. A Rust rewrite is on the table once the
-  product shape is proven and the hot paths are visible.
-- **SQLite over Postgres by default.** Single-user plugin; one file is
-  the right footprint. Postgres becomes optional behind the same store
-  interface.
-- **Gemma 4 E2B as default model.** Smallest in the Gemma 4 family
-  (~2.3B effective params, 4 GB RAM), released April 2026, supports
-  tool calls via Ollama. Users can swap to Qwen 2.5, Llama 3.3, or a
-  cloud model with one settings change.
-- **Daemon, not embedded.** Keeps the extension thin, lets us reuse the
-  daemon from a future web UI / VS Code addin / Excel addin without a
-  second backend.
-- **Human-in-the-loop is the default.** No tool path can write directly
-  to a workbook; write tools stage proposals. The default `review` mode
-  requires human approval before apply. The opt-in `direct` mode still
-  routes through the daemon apply pipeline, immutable versions, and
-  audit events.
+- Default path: local model + SQLite + local files.
+- Google/Office work starts with local developer credentials and mocked tests.
+- Cloud LLM adapters are opt-in and tested with mocks by default.
+- Avoid hosted queues, vector DBs, multi-tenant auth, and managed
+  databases until usage proves need.
+- Use MCP clients as distribution rather than building integrations for
+  every AI tool separately.
 
-## Risks and Mitigations
+## Risks And Mitigations
 
-- **Python UNO is poorly documented.** Mitigation: keep the extension
-  dumb; everything interesting lives in the daemon.
-- **Local 2B-class models hallucinate cell references.** Mitigation:
-  every model action is staged for human review; the daemon validates
-  that proposed cells exist before staging an item.
-- **Distribution doubles the surface (.oxt, pipx, Ollama, model
-  downloads).** Mitigation: a single bootstrap command and clear docs.
-- **Excel parity will be requested immediately.** Mitigation: the
-  daemon is workbook-format-agnostic from day one; the LO extension is
-  the only LO-specific component.
+| Risk | Mitigation |
+|---|---|
+| The project becomes a generic agent platform rewrite. | Start with Calc/local loop; add only operation IR, runs, policy, skills, and provider contracts needed by real workflows. |
+| Sidebar/UI work consumes too much time. | Keep extension dumb; use daemon APIs and test UI state outside LibreOffice where possible. |
+| Local model quality is weak. | Add deterministic spreadsheet tools and validators before larger models; require approval for risky operations. |
+| Google integration creates cost/security drag. | Make it opt-in, local-credential based, and mocked in tests. |
+| SQLite JSON blobs become limiting. | Normalize run/event/operation indexes incrementally; postpone full store rewrite. |
+| Direct mode bypasses user trust. | Keep direct opt-in, bounded, validated, versioned, and audited. |
 
-## Validation Plan
+## Definition Of Ready For Broader Beta
 
-- **Daemon:** pytest suites in `core/tests/`, including a live test
-  that requires Ollama to be running.
-- **Extension:** unit tests for the daemon client; manual install +
-  smoke test inside LibreOffice Calc per release.
-- **End-to-end demo (the bar for MVP):**
-  1. Install the extension and run `spreadbread-core`.
-  2. Open an FP&A workbook in Calc.
-  3. Click "Review with SpreadbreadAI" — the extension shows risks and
-     staged proposals from Gemma 4.
-  4. Approve the staged diff.
-  5. Click "Apply approved" — Calc cell updates; daemon writes the new
-     version; audit trail shows every step.
-- All of the above must work fully offline.
+- Calc and MCP both drive the same daemon-owned workflow.
+- Operations are typed and policy-gated.
+- Agent modes are visible in APIs and UI.
+- Runs are traceable from prompt to tools, proposals, decisions, apply,
+  versions, and audit.
+- Artifact UI shows findings, operations, validation, and timeline.
+- Default install works offline with Ollama and SQLite.
+- No required paid API or hosted service exists in the happy path.

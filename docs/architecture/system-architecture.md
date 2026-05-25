@@ -1,81 +1,234 @@
 # System Architecture
 
-See [`docs/development-plan.md`](../development-plan.md) for the phased
-plan. This document describes the steady-state shape.
+See [`docs/development-plan.md`](../development-plan.md) for sprint
+sequencing. This document describes the target architecture and how the
+current implementation evolves without a rewrite.
 
-## Top-level components
+## Architecture Summary
 
-### LibreOffice extension (`extension/`)
+SpreadbreadAI is a local-first modular monolith. A single local daemon
+owns state, policy, agent runs, tools, operation validation, apply, and
+audit. Provider-specific surfaces stay thin.
 
-A Python UNO extension installed as `spreadbreadai.oxt`.
+```text
+User surfaces
+  LibreOffice extension
+  Local artifact UI
+  MCP clients
+  Future Google/Office entry points
+        |
+        v
+Local daemon / gateway
+  HTTP API
+  MCP stdio
+  run queue
+  agent modes
+  permission policy
+  tool registry
+  skill loader
+  event stream
+        |
+        v
+Document engine
+  spreadsheet/text models
+  risk analyzers
+  operation IR
+  validators
+  proposal/apply pipeline
+        |
+        v
+Provider adapters
+  LibreOffice/local xlsx
+  Google Sheets
+  Google Docs
+  Excel/Office later
+```
+
+## Current Provider: LibreOffice / Local XLSX
+
+The current LibreOffice extension is the first provider-specific shell.
 
 Responsibilities:
 
-- register Calc menu actions for Review, Approve all, and Apply
-- show workbook risks and staged proposal items
-- mirror approved cell diffs into the active sheet after daemon apply
-- track the uploaded workbook id for the active Calc document
-- talk to the local daemon over `127.0.0.1:8765`
+- register Calc actions for review, approval, trust/mode controls, and apply
+- show artifacts returned by the daemon
+- mirror applied changes into the active Calc document after daemon apply
+- upload/open workbook resources
+- talk to the daemon on `127.0.0.1:8765`
 
-The extension contains no business logic. Everything authoritative
-lives in the daemon.
+Non-responsibilities:
 
-### Core daemon (`core/`)
+- no business logic
+- no policy enforcement
+- no independent versioning
+- no direct model/tool writes
 
-A Python process serving FastAPI on `127.0.0.1:8765`, backed by SQLite.
+## Local Daemon
+
+The daemon is a Python process serving FastAPI on `127.0.0.1:8765`,
+backed by SQLite by default.
 
 Responsibilities:
 
-- own the canonical state of every workbook, proposal, item, and audit
-  event
-- parse `.xlsx` uploads (openpyxl)
-- expose the tool registry to the LLM
-- run the LLM tool-calling loop (Ollama by default)
-- enforce the default human-in-the-loop flow — write tools stage items;
-  apply requires approved items only
-- expose the same tool catalog over MCP stdio
+- own canonical state for workspaces, resources, runs, proposals,
+  operations, versions, and audit events
+- parse local `.xlsx` uploads
+- expose HTTP and MCP surfaces
+- run model/tool loops through explicit modes
+- load skills and tools under policy
+- validate proposed operations
+- route apply through provider adapters
+- emit audit and event timeline data
 
-### LLM adapter (`core/spreadbread_core/llm.py`)
+The daemon is intentionally not split into microservices during
+development. SQLite, local files, and one process are the right default
+until there is real multi-user demand.
 
-Default: Ollama, model `gemma4:e2b`. The adapter speaks the OpenAI-style
-tool-calling protocol Ollama exposes; cloud providers can be plugged in
-behind the same interface.
+## Agent Runtime
 
-The LLM never has direct workbook access. It uses tools.
+The runtime coordinates one agent run at a time per resource/session.
 
-### Optional review web UI (deferred)
+Core concepts:
 
-A small SPA that hits the same daemon. Out of scope for the MVP but the
-daemon API is shaped to support it without changes.
+- `AgentRun` — prompt, mode, model/provider, resource, tool calls,
+  produced artifacts, and outcome.
+- `Mode` — inspect, plan, propose, apply, direct, locked.
+- `ToolRegistry` — declared tool schemas plus metadata for resource
+  kind, capability, risk, and allowed modes.
+- `PermissionPolicy` — evaluates `allow`, `ask`, or `deny` for a tool,
+  operation, skill, or MCP call.
+- `SkillLoader` — discovers local workflow packs and exposes only the
+  relevant instructions/tools.
 
-## Domain objects
+## Document Engine
 
-These live in `core/spreadbread_core/domain.py`:
+The document engine converts provider data into shared internal models.
 
-- `Workbook` — id, name, owner, sheets, risks, versions, tags, status
-- `WorkbookSheet` — name, dimensions, formula counts, sample rows
-- `WorkbookRisk` — id, label, severity, location, summary
-- `WorkbookVersion` — id, created_at, created_by, note
-- `Proposal` — id, workbook_id, status, items, applied_*
-- `ProposalItem` — id, kind, cell, before, after, after_type, rationale, status
-- `AuditEvent` — id, workbook_id, actor, action, detail, created_at
-- `ReviewSnapshot` — Workbook + latest Proposal + audit list
+Spreadsheet model responsibilities:
+
+- sheet metadata
+- formulas and dependencies
+- named ranges
+- stale input markers
+- external references
+- broken sheet references
+- proposed cell/range/comment operations
+
+Text document model responsibilities, planned:
+
+- sections/headings
+- comments/suggestions
+- replace/insert operations
+- source/citation metadata
+- report generation artifacts
+
+## Operation IR
+
+Provider mutation is represented as typed operations before apply.
+
+Required operation fields:
+
+- operation id
+- resource id
+- provider id
+- kind
+- target address/range
+- before/after payload where available
+- rationale
+- risk level
+- required capability
+- validation status
+- source run id
+- approval status
+
+Initial spreadsheet operations:
+
+- `set_cell_value`
+- `set_cell_formula`
+- `add_cell_comment`
+- `replace_range_values`
+- `create_sheet`
+- `rename_sheet`
+
+Initial text document operations:
+
+- `add_document_comment`
+- `replace_document_text`
+- `insert_document_section`
+
+Existing `ProposalItem` records remain supported while operations are
+introduced. The migration path is additive: proposal items can carry
+operation metadata, then apply can execute operation batches internally.
+
+## Provider Adapter Contract
+
+Each provider adapter declares capabilities and implements only those
+operations.
+
+Capability examples:
+
+- `spreadsheet.read`
+- `spreadsheet.write_cell`
+- `spreadsheet.write_formula`
+- `spreadsheet.comment`
+- `spreadsheet.batch_update`
+- `document.read`
+- `document.suggest`
+- `document.replace_text`
+- `version.snapshot`
+- `revision.detect_conflict`
+
+Adapters planned:
+
+- `local_xlsx` / LibreOffice-backed local files
+- `google_sheets`
+- `google_docs`
+- `excel_office`
+
+The engine must not assume that all providers support the same actions.
+Unsupported operations fail closed before the model sees or executes a
+tool that depends on them.
+
+## Skills
+
+Skills are local workflow packs, preferably markdown/config first.
+
+Examples:
+
+- formula audit
+- month-end close review
+- scenario modeling
+- stale input cleanup
+- external reference repair
+- report generation
+
+Skills are not a security boundary and do not grant hidden powers. They
+can influence prompts and tool choice, but every tool call and operation
+still goes through policy, validation, apply, and audit.
 
 ## Storage
 
-SQLite by default. Schema in `core/spreadbread_core/store.py`:
+Current SQLite tables:
 
-- `workbooks(id, name, owner, created_at, payload JSON)`
-- `proposals(id, workbook_id, status, created_at, payload JSON)`
-- `audit_events(id, workbook_id, actor, action, detail, created_at)`
+- `workbooks`
+- `proposals`
+- `audit_events`
 
-Pydantic payloads are stored as JSON inside the row, with normalized
-columns for query and indexing. Postgres is a future option behind the
-same store interface.
+Near-term additive tables/indexes:
 
-## API surface
+- `agent_runs`
+- `tool_calls`
+- `operation_items`
+- `artifacts`
+- `resources`
+- `workspaces`
 
-Local HTTP (FastAPI), `127.0.0.1:8765`:
+SQLite remains the default. Postgres is optional later for shared
+daemon/team deployments, behind the same store interface.
+
+## API Surface
+
+Current HTTP API:
 
 - `GET  /healthz`
 - `GET  /api/workbooks`
@@ -88,23 +241,51 @@ Local HTTP (FastAPI), `127.0.0.1:8765`:
 - `POST /api/proposals/{proposal_id}/apply`
 - `GET  /api/tools`
 
-MCP stdio: `spreadbread-mcp`, mirrors the tool catalog.
+Planned additive API:
 
-## Design constraints
+- workspace/resource discovery
+- run creation and timeline
+- artifact listing
+- operation validation
+- skill listing and invocation
+- provider connection status
 
-- The LLM cannot write directly to a workbook. Write tools stage; apply
-  needs approved items. `direct` mode may auto-approve staged items,
-  but still goes through daemon apply, versioning, and audit.
-- Every state transition writes an audit event.
-- Workbook versions are immutable; new versions are created, never
-  edited.
-- The platform is model-agnostic; the LLM is replaceable.
-- Local-first; cloud is opt-in.
-- Apply must be idempotent — a proposal is applied at most once.
-- Request validation fails closed with explicit errors.
+MCP stdio: `spreadbread-mcp`, filtered through the same policy layer.
 
-## What is not here
+## UI Architecture
 
-The native installer, multi-LLM adapter, normalized storage, and the
-optional web review UI are documented in the development plan and
-tracked there.
+The target UX is not chat-only and not review-only.
+
+Primary surfaces:
+
+- composer for chat/commands
+- artifact board for findings, operations, validation, impact, and outputs
+- diff/review panel for risky operations
+- timeline for tool calls, decisions, apply, and audit
+- provider/status bar showing local/cloud model, trust mode, and cost state
+
+LibreOffice may host this as a sidebar. A local web UI may host the same
+daemon data later.
+
+## Security And Policy Constraints
+
+- Agents, skills, and MCP clients do not receive direct provider write
+  channels.
+- Write-capable tools stage operations first.
+- Apply commits approved or explicitly trusted operations only.
+- Every state transition emits an audit event.
+- Direct/autopilot behavior is opt-in, bounded, validated, versioned,
+  and audited.
+- Request validation fails closed.
+- Localhost API assumes a single local user; do not bind to the network
+  without auth.
+
+## What Is Intentionally Not Here Yet
+
+- multi-tenant cloud service
+- hosted queues
+- vector database requirement
+- Postgres requirement
+- dynamic plugin marketplace
+- broad Google/Office provider matrix
+- manager-of-agents orchestration framework

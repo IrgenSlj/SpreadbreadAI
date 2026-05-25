@@ -1,8 +1,8 @@
 # SpreadbreadAI native bundle
 
 Packaging glue that produces a native installer per OS. The user
-double-clicks one file and gets a working setup — no Python, no pip,
-no terminal.
+double-clicks one file and gets a working local gateway, provider UI,
+and default local model setup — no Python, no pip, no terminal.
 
 ## What's in the bundle
 
@@ -14,6 +14,9 @@ no terminal.
 - The compiled `spreadbreadai.oxt` LibreOffice extension as a
   resource, so the launcher can install it via `unopkg add` on first
   run.
+- Future provider adapters and skills should remain optional. The
+  development default stays local-first and low-cost; cloud models and
+  Google/Office connectors must be opt-in.
 
 ## What the user actually does
 
@@ -60,3 +63,10 @@ and uploads the artifacts to the GitHub Release. See
   set up).
 
 These are real shipping work but not blockers for an internal beta.
+
+## Cost control
+
+Development bundles should not require hosted infrastructure. Prefer
+local Ollama, local SQLite, and user-supplied API keys. Do not add paid
+services to the startup path unless the user explicitly enables that
+provider.

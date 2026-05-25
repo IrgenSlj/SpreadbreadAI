@@ -2,106 +2,169 @@
 
 ## Product
 
-SpreadbreadAI is an open-source spreadsheet AI assistant for
-enterprise and professional use. It pairs agentic LLM tool calling
-with human-in-the-loop approval, immutable workbook versioning, and an
-append-only audit trail. Delivered as a LibreOffice Calc plugin and a
-local Python daemon, with MCP support for external AI clients.
+SpreadbreadAI is an open-source, local-first agentic workspace for
+complex spreadsheet and document work. It gives users AI help for
+analysis, cleanup, formula review, scenario modeling, and report
+generation while preserving provider control, versioning, and audit.
+
+The current product ships as a LibreOffice Calc extension plus a local
+Python daemon. LibreOffice/local xlsx remains the first provider path.
+The product direction is provider-neutral: Google Sheets next, Google
+Docs and Excel later.
 
 ## Positioning
 
-An agentic spreadsheet assistant that reviewers and operators can
-trust with business-critical workbooks. The LLM works inside a defined
-tool catalog: it inspects sheets, lists risks, and stages proposed
-edits. Humans approve changes; the daemon writes a new versioned copy
-of the workbook and records every step.
+SpreadbreadAI is the expert agent layer above office documents. It is
+not a spreadsheet replacement and not a generic chatbot. Users can ask
+for work in natural language, but the app turns that work into
+structured artifacts: findings, proposed operations, diffs, validation
+results, dependency impact, and audit events.
+
+The UX principle is:
+
+**conversation-led, artifact-centered, policy-gated.**
+
+Chat starts the work. Artifacts hold the work. Policy decides whether
+the work can be applied automatically, needs review, or is blocked.
 
 ## Target Users
 
 - FP&A analysts and finance managers
-- finance operations teams
-- revenue operations and procurement teams that own large workbooks
+- finance operations, revenue operations, procurement, and planning teams
+- operators who maintain large spreadsheets across repeated business cycles
+- document-heavy teams that need AI-assisted reports with traceable changes
+- technically capable users who want local-first AI with MCP and skills
 
 ## Primary User Problems
 
-- Workbook logic is hard to review and easy to break.
-- Spreadsheet changes are hard to trace and approve at scale.
-- Formula and reference errors are common and expensive.
-- Generic AI copilots offer no controls strong enough for
+- Spreadsheet logic is hard to review and easy to break.
+- Changes across formulas, references, named ranges, and scenarios are
+  hard to trace.
+- Generic AI copilots do not provide strong enough controls for
   business-critical workbooks.
-- Cloud-only AI tooling is unsuitable for finance and operations data
-  in regulated organizations.
+- Chat-only AI loses the actual work inside a transcript.
+- Cloud-only AI is unsuitable for sensitive finance and operations data.
+- Teams want automation, but they need a clear record of what changed,
+  why, by which tool/model, and under which policy.
+
+## Product Principles
+
+- Local-first and low-cost by default.
+- Provider-neutral core; provider-specific adapters at the edge.
+- Agents use declared tools and capabilities only.
+- Typed operations precede provider mutation.
+- Review is risk-based, not universal friction.
+- Skills teach workflows; tools perform actions.
+- MCP integrations are permission-gated and audited.
+- SQLite/local files remain the default until multi-user demand is real.
 
 ## MVP Scope
 
-### In scope
+### In scope now
 
-- LibreOffice Calc plugin with a review sidebar
-- local Python daemon owning workbooks, proposals, diffs, and audit
-- xlsx parsing: sheet metadata, formulas, sample rows, seeded risks
-- LLM tool calling against a fixed catalog (read + staged-write)
-- diff cards: cell, before, after, rationale, approve/reject
-- apply pipeline: write approved diffs into a new workbook version
-- append-only audit trail for every state transition
-- offline operation with Gemma 4 E2B via Ollama as the default model
+- LibreOffice Calc extension with local daemon integration.
+- Local Python daemon owning workbooks, proposals, versions, and audit.
+- xlsx parsing: sheet metadata, formulas, risks, named ranges,
+  dependencies, and reference issues.
+- LLM tool calling against a fixed catalog.
+- Write staging, approval, apply, conflict checks, immutable versions,
+  and audit trail.
+- MCP stdio server exposing the same tool registry.
+- Offline operation with Ollama/Gemma as the default.
 
-### Out of scope (for the MVP)
+### Next MVP expansion
 
-- Excel add-in (Calc first; Excel comes after the loop is loved)
-- full formula recalculation engine — Calc / Excel evaluate
-- a custom DSL or query language
-- multi-tenant cloud deployment
-- autonomous AI execution without approval
+- Explicit agent modes: inspect, plan, propose, apply, and bounded direct.
+- Operation IR that generalizes current proposal items.
+- Provider capability model for spreadsheet/document adapters.
+- Artifact-centered UI surface for findings, proposed operations,
+  validation, dependency impact, and audit timeline.
+- Skills registry using local `SKILL.md`-style workflow packs.
+- Google Sheets adapter after operation IR is stable.
 
-## Success Metrics
+### Out of scope for the development/beta phase
 
-- workbook review time cut by at least 50%
-- broken formulas, missing references, or stale inputs detected before
-  close
-- repeat usage on weekly or monthly close cycles
-- zero unapproved AI writes to protected workbooks
-- the full demo runs offline on a laptop with 8 GB RAM
+- Multi-tenant cloud deployment.
+- Postgres requirement for the default path.
+- Plugin marketplace.
+- Large agent hierarchies or manager-of-agents frameworks.
+- Cloud sync as a required dependency.
+- Autonomous high-risk writes without policy, validation, and audit.
+- Replacing Google Sheets, LibreOffice, or Excel.
 
 ## Core User Stories
 
-1. As a finance manager, I open a workbook in Calc, click "Review with
-   SpreadbreadAI," and see a structured list of risks and proposed
-   changes drafted by a local model.
-2. As an analyst, I ask the AI to draft a scenario update; the
-   proposal appears in the sidebar without touching the workbook.
-3. As an approver, I review each diff card and approve or reject it
-   one at a time.
-4. As an operator, I see a complete audit trail of who proposed what,
-   when, and which model produced it.
-5. As a privacy-conscious user, I run the entire stack offline with
-   Gemma 4 E2B; no data leaves my machine.
+1. As an analyst, I ask SpreadbreadAI to inspect a workbook and receive
+   structured findings with locations, severity, and source context.
+2. As a finance manager, I ask for a scenario update and see proposed
+   operations before anything is changed.
+3. As an approver, I review high-risk formula changes as diff cards and
+   approve or reject them one at a time.
+4. As a power user, I run a repeatable skill such as month-end review,
+   formula audit, or report generation.
+5. As an MCP user, I let an external agent inspect a workbook while the
+   daemon still enforces permissions and audit.
+6. As a privacy-conscious user, I run the stack offline with a local
+   model and SQLite.
+7. As a Google Sheets user, I connect one spreadsheet and get the same
+   findings, operation proposals, and audit flow without changing the
+   core engine.
+
+## Agent Modes
+
+- `inspect` — read-only analysis and findings.
+- `plan` — read-only task plan and impact estimate.
+- `propose` — creates typed operations/proposal items, no provider writes.
+- `apply` — commits approved or trusted operations through the provider adapter.
+- `direct` — opt-in bounded auto-apply for low-risk or explicitly trusted tasks.
+- `locked` — strict mode requiring per-item approval for write operations.
+
+## Success Metrics
+
+- Workbook review time reduced by at least 50% on repeated workflows.
+- Broken formulas, missing references, stale inputs, or external-link
+  risks detected before a close/reporting cycle.
+- A complete local demo runs offline on commodity hardware.
+- Zero unapproved high-risk writes through agent, skill, or MCP paths.
+- Users can trace one run from prompt to tools, proposal, approval,
+  apply, version, and audit.
+- At least one repeatable skill becomes useful enough for weekly/monthly reuse.
 
 ## Differentiation
 
-- Agentic LLM tool calling combined with explicit approval and an
-  immutable audit trail.
-- Workbook diffs and version lineage are first-class objects, not
-  dressed-up chat history.
-- Runs fully offline on a free local model by default.
-- Model-agnostic LLM layer: local Gemma / Qwen / Llama or cloud
-  Claude / GPT / Gemini, swappable through the adapter.
-- MCP server lets users' existing AI tools (Claude Desktop, Cursor,
-  VS Code) drive the same workflow.
+- Artifact-first agent UX for spreadsheets and documents, not chat-only.
+- Typed operations and provider adapters instead of direct prompt-to-document edits.
+- Local-first default with optional cloud models.
+- MCP and skills as integration/workflow layers, not bypasses around policy.
+- Immutable versions and audit as core product objects.
+- Spreadsheet-specific intelligence: formulas, dependencies, named ranges,
+  external references, stale markers, and provider capability awareness.
 
 ## Risks
 
-- LibreOffice UNO API friction
-- 2B-class local models hallucinating cell references — mitigated by
-  staging-only writes and cell-existence validation in the registry
-- Excel parity expectation arriving immediately — mitigated by keeping
-  the daemon format-agnostic from day one
-- distribution surface (extension, daemon, Ollama, model files)
+- Broad provider ambitions could turn the project into an unfinished platform.
+- LibreOffice UNO UI work can consume time without improving the core engine.
+- Local small models may be weak at precise cell reasoning.
+- Google/Office integrations can introduce OAuth and API complexity early.
+- JSON payload storage will limit queryability as artifacts and runs grow.
+- A chat-first UI could bury the artifacts that make the app trustworthy.
 
-## MVP Exit Criteria
+## Mitigations
 
-- one finance review workflow runs end-to-end inside LibreOffice Calc
-- daemon, extension, and a local model run fully offline
-- approval state machine is canonical and enforced in the daemon
-- audit trail covers upload, proposal creation, every item decision,
-  and apply
-- a packaged `.oxt` and a `pipx`-installable daemon are available
+- Finish the local Calc loop and operation IR before adding Google.
+- Keep the extension thin; daemon APIs own behavior.
+- Add deterministic spreadsheet tools before relying on larger models.
+- Make cloud providers and Google connectors opt-in with user-supplied keys.
+- Normalize only the tables needed for runs, operations, and artifacts first.
+- Treat review as policy, not the primary UX.
+
+## Beta Exit Criteria
+
+- Calc and MCP both drive the same daemon-owned workflow.
+- Agent modes are explicit and permission-gated.
+- Proposed changes are represented as typed operations/proposal items.
+- Findings, operations, validation, and audit are visible as artifacts.
+- Apply remains idempotent and audited.
+- Default install still runs offline with Ollama and SQLite.
+- No required cloud service, hosted queue, vector DB, Postgres server, or
+  plugin runtime is introduced.

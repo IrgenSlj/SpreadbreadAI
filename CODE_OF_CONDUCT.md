@@ -1,5 +1,12 @@
 # Contributor Covenant Code of Conduct
 
+## Project collaboration note
+
+SpreadbreadAI is moving toward a safety-critical agentic document
+workspace. Technical disagreement is expected. Critique designs,
+interfaces, and tradeoffs directly, but keep discussion evidence-based
+and respectful of the people doing the work.
+
 ## Our pledge
 
 We as members, contributors, and leaders pledge to make participation in

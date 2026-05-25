@@ -2,47 +2,71 @@
 
 ## Status
 
-Accepted.
+Accepted. Updated 2026-05-25 for the modular agentic workspace
+direction.
 
 ## Context
 
-SpreadbreadAI must remain open-source, work offline on free local LLMs,
-support spreadsheet-heavy business workflows, and integrate with
-external AI agents without delegating policy enforcement to them. After
-an initial Node + React prototype, the product is being rebuilt as a
-LibreOffice Calc plugin backed by a local Python daemon.
+SpreadbreadAI must remain open-source, local-first, useful for
+spreadsheet-heavy professional workflows, and safe enough for sensitive
+business documents. The first implementation is a LibreOffice Calc
+extension backed by a local Python daemon. The next direction is a
+provider-neutral engine that can support LibreOffice/local xlsx, Google
+Sheets, Google Docs, Excel, MCP clients, and local skills without
+becoming an expensive generic agent platform.
 
 ## Decisions
 
-1. Human-in-the-loop approval is the default and is enforced in the
-   daemon, not in the prompt. Write tools stage proposal items only;
-   `apply` is the single code path that mutates workbook state and
-   requires approved items. Opt-in `direct` mode can auto-approve, but
-   it still routes through apply, versioning, and audit.
-2. The platform owns policy, audit, and versioning. Models are
-   replaceable; the platform is the system of record.
-3. Local-first by default. The default install runs fully offline
-   using Ollama with Gemma 4 E2B. Cloud LLMs are opt-in.
-4. Model-agnostic LLM layer. The adapter exposes one interface so
-   Gemma, Qwen, Llama, and cloud providers are interchangeable.
-5. Workbook versions are immutable. `apply` produces a new version;
-   it never edits in place.
-6. MCP is the integration boundary for external AI clients. Claude
-   Desktop, Cursor, VS Code agents, and Codex connect through the
-   same tool catalog the local LLM uses.
-7. The sketchpad is deferred until the core review and apply loop is
-   stable and adopted.
+1. **Local-first modular monolith.** The development/beta architecture
+   is one local daemon with SQLite/local files. No required hosted
+   service, paid API, Postgres server, vector database, or message
+   queue.
+2. **Provider adapters at the edge.** LibreOffice/local xlsx is the
+   first provider. Google Sheets, Google Docs, and Excel are adapters
+   behind shared document/operation contracts.
+3. **Typed operations before mutation.** Agents, skills, and MCP tools
+   propose operations. Provider mutation happens only through the apply
+   pipeline.
+4. **Policy is enforced in code, not in prompts.** Tool exposure and
+   execution are filtered by mode, trust policy, resource, provider
+   capability, and risk.
+5. **Artifact-centered UX.** Chat can start work, but findings,
+   operations, diffs, validation, dependency impact, and audit are the
+   durable product objects.
+6. **Review is risk-based.** Default review mode requires approval for
+   writes. Locked mode requires per-item approval. Direct mode is
+   opt-in, bounded, validated, versioned, and audited.
+7. **MCP is an integration boundary, not a bypass.** External clients
+   use the same tool registry and permission policy as the local agent.
+8. **Skills before plugins.** Prefer local markdown/config skills for
+   repeatable workflows. Add Python plugin runtimes only after skills
+   and static adapters prove insufficient.
+9. **Models are replaceable.** Ollama/local models are the default.
+   Cloud LLMs are optional adapters with user-supplied credentials.
+10. **Versions and audit are core product data.** Every meaningful
+    state transition is traceable; apply is idempotent per proposal or
+    operation batch.
 
 ## Consequences
 
-- Approval and audit are first-class concerns from day one.
-- The product can ship fully offline on commodity hardware.
-- Implementation complexity sits in the daemon, not in the extension or
-  the model.
-- The platform stays portable: the same daemon can power the LO
-  extension, an Excel add-in, an MCP client, or a web review UI.
+- The current LibreOffice path remains valuable and should be hardened
+  rather than replaced.
+- The core daemon grows explicit contracts: operation IR, provider
+  capabilities, agent modes, runs, policy, skills, and artifacts.
+- Expansion to Google/Office happens after these contracts exist.
+- Contributors must not add direct provider write paths from model,
+  skill, or MCP code.
+- SQLite remains acceptable until real shared/team usage proves the
+  need for Postgres.
+- UI work should expose artifacts and timelines, not just chat messages.
 
-## Superseded sections
+## Deferred Choices
 
-The original ADR predated the LibreOffice pivot and assumed a Node /
-React stack. The principles above are the current canonical version.
+- Postgres and multi-user RBAC.
+- Hosted connector/cloud sync.
+- Dynamic plugin marketplace.
+- Full Excel/Google Docs parity.
+- Heavy agent hierarchy/orchestration frameworks.
+
+These are not rejected forever; they are deferred until local workflow
+usage proves the need.

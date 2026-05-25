@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a defect in the daemon, extension, or apply pipeline
+about: Report a defect in the daemon, provider adapters, agent runtime, or apply pipeline
 title: "[bug] "
 labels: bug
 ---
@@ -24,6 +24,8 @@ What you expected to happen.
 - OS:
 - Python version:
 - LibreOffice version (if relevant):
+- Provider path: LibreOffice / local xlsx / Google Sheets / MCP / other
+- Agent mode: inspect / plan / propose / apply / direct / locked
 - Ollama version + model used:
 - SpreadbreadAI commit / version:
 
@@ -37,3 +39,10 @@ paste daemon logs, extension messages, or test output here
 
 Sheet count, formula density, anything notable. **Do not attach
 workbooks containing real business data.**
+
+## Safety impact
+
+- Did the bug affect staged operations, approval, apply, audit, or
+  provider synchronization?
+- Did any tool or MCP call perform an action that should have been
+  blocked by policy?
