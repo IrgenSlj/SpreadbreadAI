@@ -170,6 +170,46 @@ def test_apply_preserves_string_codes_and_typed_numbers(tmp_path: Path) -> None:
     assert sheet["B2"].value == 510000
 
 
+def test_apply_uses_operation_payload_when_present(tmp_path: Path) -> None:
+    store, wb_id, prop_id = _seed(tmp_path)
+    proposal = store.get_proposal(prop_id)
+    assert proposal is not None
+    proposal.items[0].ensure_operation(resource_id=wb_id, validation_status="valid")
+    proposal.items[0].after = "=B3*9.99"
+    store.save_proposal(proposal)
+
+    result = apply_proposal(store, prop_id, reviewer="finance")
+    raw_new = store.load_version_bytes(wb_id, result.version.id)
+    book = load_workbook(io.BytesIO(raw_new), data_only=False)
+    assert book["Forecast"]["C3"].value == "=B3*1.08"
+
+
+def test_apply_rejects_wrong_provider_operation(tmp_path: Path) -> None:
+    store, wb_id, prop_id = _seed(tmp_path)
+    proposal = store.get_proposal(prop_id)
+    assert proposal is not None
+    proposal.items[0].ensure_operation(resource_id=wb_id, validation_status="valid")
+    assert proposal.items[0].operation is not None
+    proposal.items[0].operation.provider_id = "google_sheets"
+    store.save_proposal(proposal)
+
+    with pytest.raises(ApplyError, match="unsupported provider"):
+        apply_proposal(store, prop_id, reviewer="finance")
+
+
+def test_apply_rejects_invalid_operation(tmp_path: Path) -> None:
+    store, wb_id, prop_id = _seed(tmp_path)
+    proposal = store.get_proposal(prop_id)
+    assert proposal is not None
+    proposal.items[0].ensure_operation(resource_id=wb_id, validation_status="invalid")
+    assert proposal.items[0].operation is not None
+    proposal.items[0].operation.validation.messages.append("target failed validation")
+    store.save_proposal(proposal)
+
+    with pytest.raises(ApplyError, match="target failed validation"):
+        apply_proposal(store, prop_id, reviewer="finance")
+
+
 def test_apply_remove_clears_cell(tmp_path: Path) -> None:
     store, wb_id, prop_id = _seed(tmp_path)
     proposal = store.get_proposal(prop_id)

@@ -28,7 +28,7 @@ from openpyxl import load_workbook as _load
 from openpyxl.comments import Comment
 
 from .cell_ref import parse_cell
-from .domain import AuditEvent, Proposal, ProposalItem, WorkbookVersion, _now, _id, mark_item_operation_applied
+from .domain import AuditEvent, Operation, Proposal, ProposalItem, WorkbookVersion, _now, _id, mark_item_operation_applied
 from .store import Store
 
 
@@ -78,7 +78,61 @@ def _typed_value(item: ProposalItem) -> Any:
     return value
 
 
-def _write_item(book, item: ProposalItem) -> None:
+def _operation_for_item(item: ProposalItem, workbook_id: str) -> Operation:
+    operation = item.ensure_operation(resource_id=workbook_id, validation_status="valid")
+    if operation.resource_id and operation.resource_id != workbook_id:
+        raise ApplyError(f"operation {operation.id} targets a different resource")
+    if operation.provider_id != "local_xlsx":
+        raise ApplyError(f"operation {operation.id} targets unsupported provider {operation.provider_id!r}")
+    if operation.resource_kind != "spreadsheet":
+        raise ApplyError(f"operation {operation.id} is not a spreadsheet operation")
+    if operation.validation.status == "invalid":
+        detail = "; ".join(operation.validation.messages) or "operation validation failed"
+        raise ApplyError(f"operation {operation.id} is invalid: {detail}")
+    return operation
+
+
+def _select_operation_cell(book, operation: Operation):
+    if not operation.target.cell:
+        raise ApplyError(f"operation {operation.id} has no target cell")
+    sheet = _select_sheet(book, operation.target.sheet)
+    return sheet[operation.target.cell]
+
+
+def _typed_operation_value(operation: Operation, item: ProposalItem) -> Any:
+    if operation.kind == "set_cell_formula":
+        return operation.after.get("formula")
+    if operation.kind == "set_cell_value":
+        value = operation.after.get("value")
+        if "value_type" not in operation.after:
+            return _typed_value(item)
+        value_type = operation.after.get("value_type")
+        proxy = item.model_copy(update={"after": value, "after_type": value_type})
+        return _typed_value(proxy)
+    raise ApplyError(f"operation {operation.id} cannot be converted to a cell value")
+
+
+def _write_operation(book, item: ProposalItem, workbook_id: str) -> None:
+    operation = _operation_for_item(item, workbook_id)
+    if operation.kind == "add_cell_comment":
+        cell = _select_operation_cell(book, operation)
+        cell.comment = Comment(operation.after.get("comment") or item.after or item.rationale, "spreadbreadai")
+        return
+    if operation.kind == "clear_cell":
+        cell = _select_operation_cell(book, operation)
+        cell.value = None
+        return
+    if operation.kind in ("set_cell_value", "set_cell_formula"):
+        cell = _select_operation_cell(book, operation)
+        cell.value = _typed_operation_value(operation, item)
+        return
+    raise ApplyError(f"operation {operation.id} has unsupported kind {operation.kind!r}")
+
+
+def _write_item(book, item: ProposalItem, workbook_id: str) -> None:
+    if item.operation is not None:
+        _write_operation(book, item, workbook_id)
+        return
     try:
         ref = parse_cell(item.cell)
     except ValueError as exc:
@@ -143,7 +197,7 @@ def apply_proposal(store: Store, proposal_id: str, reviewer: str = "system") -> 
     book = _load(io.BytesIO(base_bytes), data_only=False, read_only=False)
 
     for item in approved:
-        _write_item(book, item)
+        _write_item(book, item, proposal.workbook_id)
 
     out = io.BytesIO()
     book.save(out)
