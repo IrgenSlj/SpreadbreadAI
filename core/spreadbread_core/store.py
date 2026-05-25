@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from .domain import (
+    AgentRun,
     AuditEvent,
     Proposal,
     ProposalItem,
@@ -40,6 +41,15 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_proposals_workbook ON proposals(workbook_id);
 CREATE INDEX IF NOT EXISTS idx_audit_workbook ON audit_events(workbook_id, created_at);
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    workbook_id TEXT NOT NULL REFERENCES workbooks(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_workbook ON agent_runs(workbook_id, started_at);
 """
 
 
@@ -207,6 +217,36 @@ class Store:
                 flipped.append(item.id)
         self.save_proposal(proposal)
         return proposal, flipped
+
+    # --- agent runs ----------------------------------------------------
+    def save_agent_run(self, run: AgentRun) -> None:
+        with self._conn() as cx:
+            cx.execute(
+                """
+                INSERT INTO agent_runs(id, workbook_id, mode, status, started_at, payload)
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    workbook_id = excluded.workbook_id,
+                    mode = excluded.mode,
+                    status = excluded.status,
+                    started_at = excluded.started_at,
+                    payload = excluded.payload
+                """,
+                (run.id, run.workbook_id, run.mode, run.status, run.started_at, run.model_dump_json()),
+            )
+
+    def get_agent_run(self, run_id: str) -> Optional[AgentRun]:
+        with self._conn() as cx:
+            row = cx.execute("SELECT payload FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        return AgentRun.model_validate_json(row["payload"]) if row else None
+
+    def list_agent_runs(self, workbook_id: str) -> list[AgentRun]:
+        with self._conn() as cx:
+            rows = cx.execute(
+                "SELECT payload FROM agent_runs WHERE workbook_id = ? ORDER BY started_at ASC",
+                (workbook_id,),
+            ).fetchall()
+        return [AgentRun.model_validate_json(r["payload"]) for r in rows]
 
     # --- audit ---------------------------------------------------------
     def append_audit(self, event: AuditEvent) -> None:

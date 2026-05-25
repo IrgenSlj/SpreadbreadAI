@@ -81,6 +81,8 @@ packaging/              native bundle/launcher scaffold
 - Mode-aware tool policy: `/chat` and `/api/tools` can filter tools by
   inspect/plan/propose/apply/direct/locked mode. Default chat mode is
   `propose`.
+- Minimal `AgentRun` persistence: `/chat` returns `run_id` and writes
+  run started/completed audit events.
 
 ### LibreOffice extension
 

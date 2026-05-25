@@ -122,6 +122,10 @@ Inspect the filtered tool schema:
 curl "http://127.0.0.1:8765/api/tools?mode=inspect"
 ```
 
+The chat response includes `run_id`. The daemon also records
+`agent.run.started` and `agent.run.completed` audit events for that
+run.
+
 ## Configuration
 
 Environment variables, all optional:

@@ -122,6 +122,8 @@ Current implementation status:
 - The Ollama loop denies disallowed tool calls even if a model requests
   one that was not exposed.
 - `/api/tools?mode=...` exposes the mode-filtered schema.
+- `/chat` creates an `AgentRun` and returns `run_id` so prompt, mode,
+  audit, and future tool-call rows have a common trace id.
 
 ## MCP Rules
 

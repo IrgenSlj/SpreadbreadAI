@@ -38,6 +38,7 @@ OperationKind = Literal[
 OperationRisk = Literal["low", "medium", "high", "critical"]
 OperationStatus = Literal["draft", "valid", "invalid", "pending", "approved", "rejected", "applied", "failed"]
 OperationValidationStatus = Literal["not_validated", "valid", "invalid"]
+AgentRunStatus = Literal["running", "completed", "failed"]
 
 
 class OperationTarget(BaseModel):
@@ -219,6 +220,30 @@ class ReviewSnapshot(BaseModel):
     workbook: Workbook
     proposal: Optional[Proposal] = None
     audit_events: list[AuditEvent] = Field(default_factory=list)
+
+
+class AgentRun(BaseModel):
+    id: str = Field(default_factory=lambda: _id("run"))
+    workbook_id: str
+    mode: str
+    prompt: str
+    model: str
+    status: AgentRunStatus = "running"
+    started_at: str = Field(default_factory=_now)
+    completed_at: Optional[str] = None
+    summary: Optional[str] = None
+    error: Optional[str] = None
+
+    def mark_completed(self, summary: str) -> None:
+        self.status = "completed"
+        self.completed_at = _now()
+        self.summary = summary
+        self.error = None
+
+    def mark_failed(self, error: str) -> None:
+        self.status = "failed"
+        self.completed_at = _now()
+        self.error = error
 
 
 def sync_item_operation_status(item: ProposalItem) -> None:

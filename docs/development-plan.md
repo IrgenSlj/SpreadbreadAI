@@ -191,13 +191,18 @@ Landed:
 Known gaps:
 
 - Message-box UI is not sufficient for artifact-centered workflows.
-- Proposal items are not yet a provider-neutral operation IR.
-- Tool permissions are implicit in the registry instead of an explicit
-  policy layer.
-- Agent modes exist only as trust/apply behavior, not as first-class run modes.
+- Proposal items now carry provider-neutral operation metadata, but
+  storage and public review APIs are still proposal-first.
+- Tool permissions have an initial explicit policy/filtering layer;
+  UI prompts, user rules, and resource scoping are still pending.
+- Agent modes now exist at the `/chat`, LLM schema-filtering, and
+  `/api/tools` boundary; UI affordances and richer per-run artifacts
+  are still pending.
+- Minimal `agent_runs` persistence exists for chat/review runs; tool
+  call and artifact tables are still pending.
 - No local skills registry.
-- No run/session spine tying prompt, tool calls, proposals, apply, and
-  audit into one trace.
+- No complete run/session spine tying prompt, tool calls, proposals,
+  apply, and audit into one queryable trace.
 - Roadmap expansion to Google Sheets/Docs needs provider contracts first.
 
 ## Multisession Sprint Plan

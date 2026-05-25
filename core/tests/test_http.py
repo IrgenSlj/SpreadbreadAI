@@ -97,11 +97,25 @@ def test_chat_endpoint_accepts_json_body(client: TestClient, monkeypatch) -> Non
     response = client.post(f"/api/workbooks/{wb['id']}/chat", json={"message": "review", "mode": "inspect"})
     assert response.status_code == 200, response.text
     payload = response.json()
+    assert payload["run_id"].startswith("run_")
     assert payload["reply"] == "ok"
     assert payload["rounds"] == 1
     assert payload["mode"] == "inspect"
     assert "review" in captured["message"]
     assert captured["mode"] == "inspect"
+
+    from spreadbread_core.config import Config
+    from spreadbread_core.store import Store
+
+    store = Store(Config.load().db_path)
+    run = store.get_agent_run(payload["run_id"])
+    assert run is not None
+    assert run.status == "completed"
+    assert run.mode == "inspect"
+    assert run.prompt == "review"
+    actions = {event.action for event in store.list_audit(wb["id"])}
+    assert "agent.run.started" in actions
+    assert "agent.run.completed" in actions
 
 
 def test_chat_endpoint_rejects_invalid_mode(client: TestClient) -> None:

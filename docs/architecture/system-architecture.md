@@ -214,10 +214,10 @@ Current SQLite tables:
 - `workbooks`
 - `proposals`
 - `audit_events`
+- `agent_runs`
 
 Near-term additive tables/indexes:
 
-- `agent_runs`
 - `tool_calls`
 - `operation_items`
 - `artifacts`
@@ -245,6 +245,8 @@ Current HTTP API:
 `/chat` accepts an optional `mode` field. Default is `propose` to
 preserve the current review flow. `/api/tools?mode=inspect` and other
 mode-filtered requests expose only tools allowed by the policy layer.
+Each `/chat` call creates an `AgentRun`, returns `run_id`, and writes
+`agent.run.started` / `agent.run.completed` audit events.
 
 Planned additive API:
 

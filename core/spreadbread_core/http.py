@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from . import __version__
 from .apply import ApplyError, apply_proposal
 from .config import Config
-from .domain import AuditEvent
+from .domain import AgentRun, AuditEvent
 from .llm import OllamaClient
 from .parser import parse_xlsx
 from .policy import parse_agent_mode
@@ -126,7 +126,30 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         message = f"Workbook id: {workbook_id}\nUser request: {req.message}"
-        result = llm.chat(message, mode=mode)
+        run = AgentRun(workbook_id=workbook_id, mode=mode or "propose", prompt=req.message, model=cfg.model)
+        store.save_agent_run(run)
+        store.append_audit(
+            AuditEvent(
+                workbook_id=workbook_id,
+                actor="system",
+                action="agent.run.started",
+                detail=f"Started run {run.id} in {run.mode} mode",
+            )
+        )
+        try:
+            result = llm.chat(message, mode=mode)
+        except Exception as exc:
+            run.mark_failed(str(exc))
+            store.save_agent_run(run)
+            store.append_audit(
+                AuditEvent(
+                    workbook_id=workbook_id,
+                    actor="system",
+                    action="agent.run.failed",
+                    detail=f"Run {run.id} failed: {exc}",
+                )
+            )
+            raise
 
         auto_applied = False
         applied_version_id = None
@@ -143,7 +166,19 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 except ApplyError as exc:
                     auto_apply_error = str(exc)
 
+        run.mark_completed(result.final_message)
+        store.save_agent_run(run)
+        store.append_audit(
+            AuditEvent(
+                workbook_id=workbook_id,
+                actor="system",
+                action="agent.run.completed",
+                detail=f"Completed run {run.id} in {result.rounds} round(s)",
+            )
+        )
+
         return {
+            "run_id": run.id,
             "reply": result.final_message,
             "rounds": result.rounds,
             "tool_calls": result.tool_calls,
