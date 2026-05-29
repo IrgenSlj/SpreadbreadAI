@@ -7,6 +7,10 @@ from typing import Any, Iterator, Optional
 
 from .domain import (
     AgentRun,
+    ArtifactFinding,
+    ArtifactImpact,
+    ArtifactOperation,
+    ArtifactTimelineEntry,
     AuditEvent,
     Operation,
     OperationValidation,
@@ -14,6 +18,8 @@ from .domain import (
     ProposalItem,
     Resource,
     ReviewSnapshot,
+    RunArtifacts,
+    RunEvent,
     Workbook,
     _now,
     sync_item_operation_status,
@@ -89,6 +95,15 @@ CREATE TABLE IF NOT EXISTS operations (
 );
 CREATE INDEX IF NOT EXISTS idx_operations_resource ON operations(resource_id, status);
 CREATE INDEX IF NOT EXISTS idx_operations_status ON operations(status);
+CREATE TABLE IF NOT EXISTS run_events (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, created_at);
 """
 
 
@@ -195,6 +210,10 @@ class Store:
                 """,
                 (wb.id, wb.name, wb.owner, wb.created_at, wb.model_dump_json()),
             )
+
+    def delete_workbook(self, workbook_id: str) -> None:
+        with self._conn() as cx:
+            cx.execute("DELETE FROM workbooks WHERE id = ?", (workbook_id,))
 
     def get_workbook(self, workbook_id: str) -> Optional[Workbook]:
         with self._conn() as cx:
@@ -331,6 +350,45 @@ class Store:
                 (workbook_id,),
             ).fetchall()
         return [AgentRun.model_validate_json(r["payload"]) for r in rows]
+
+    # --- run events ----------------------------------------------------
+    def append_run_event(self, event: RunEvent) -> None:
+        with self._conn() as cx:
+            cx.execute(
+                """
+                INSERT INTO run_events(id, run_id, kind, detail, payload, created_at)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (event.id, event.run_id, event.kind, event.detail,
+                 event.model_dump_json(include={"payload"}), event.created_at),
+            )
+
+    def list_run_events(self, run_id: str) -> list[RunEvent]:
+        import json
+
+        with self._conn() as cx:
+            rows = cx.execute(
+                "SELECT * FROM run_events WHERE run_id = ? ORDER BY created_at ASC",
+                (run_id,),
+            ).fetchall()
+        result: list[RunEvent] = []
+        for r in rows:
+            payload = {}
+            try:
+                payload = json.loads(r["payload"]).get("payload", {})
+            except (json.JSONDecodeError, TypeError):
+                pass
+            result.append(
+                RunEvent(
+                    id=r["id"],
+                    run_id=r["run_id"],
+                    kind=r["kind"],
+                    detail=r["detail"],
+                    payload=payload,
+                    created_at=r["created_at"],
+                )
+            )
+        return result
 
     # --- operations ----------------------------------------------------
     def save_operation(self, op: Operation) -> None:
@@ -517,6 +575,97 @@ class Store:
             ).fetchall()
         return [AuditEvent(**dict(r)) for r in rows]
 
+    # --- artifacts -----------------------------------------------------
+    def build_artifacts(self, run: AgentRun) -> Optional[RunArtifacts]:
+        """Assemble RunArtifacts for a completed run by aggregating
+        workbook, proposal, operations, events, and audit data."""
+        wb = self.get_workbook(run.workbook_id)
+        if not wb:
+            return None
+
+        findings = [
+            ArtifactFinding(
+                id=r.id,
+                severity=r.severity,
+                location=r.location,
+                summary=r.summary,
+                detail=r.label,
+            )
+            for r in wb.risks
+        ]
+
+        operations: list[ArtifactOperation] = []
+        proposal = self.latest_proposal_for(run.workbook_id)
+        if proposal:
+            for item in proposal.items:
+                if item.operation:
+                    op = item.operation
+                    operations.append(
+                        ArtifactOperation(
+                            id=op.id,
+                            kind=op.kind,
+                            target=_artifact_target(op),
+                            before=op.before.get("value") or op.before.get("formula") or op.before.get("comment"),
+                            after=op.after.get("value") or op.after.get("formula") or op.after.get("comment"),
+                            rationale=op.rationale,
+                            risk=op.risk,
+                            status=op.status,
+                            validation=op.validation.status,
+                        )
+                    )
+                else:
+                    operations.append(
+                        ArtifactOperation(
+                            id=item.id,
+                            kind="set_cell_value",
+                            target=item.cell,
+                            before=item.before,
+                            after=item.after,
+                            rationale=item.rationale,
+                            risk="medium",
+                            status=item.status,
+                            validation="not_validated",
+                        )
+                    )
+
+        events = self.list_run_events(run.id)
+        timeline = [
+            ArtifactTimelineEntry(
+                id=e.id,
+                kind=e.kind,
+                detail=e.detail,
+                created_at=e.created_at,
+                payload=e.payload,
+            )
+            for e in events
+        ]
+
+        dependency_impact = [
+            ArtifactImpact(cell=cell, dependents=deps)
+            for cell, deps in wb.dependencies.items()
+        ]
+
+        return RunArtifacts(
+            run_id=run.id,
+            workbook_id=run.workbook_id,
+            workbook_name=wb.name,
+            latest_proposal_id=proposal.id if proposal else None,
+            prompt=run.prompt,
+            mode=run.mode,
+            model=run.model,
+            status=run.status,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            summary=run.summary,
+            findings=findings,
+            operations=operations,
+            timeline=timeline,
+            dependency_impact=dependency_impact,
+            tool_calls=run.tool_calls,
+            proposals_created=run.proposals_created,
+            items_decided=run.items_decided,
+        )
+
     # --- snapshots -----------------------------------------------------
     def review_snapshot(self, workbook_id: str) -> Optional[ReviewSnapshot]:
         wb = self.get_workbook(workbook_id)
@@ -527,3 +676,14 @@ class Store:
             proposal=self.latest_proposal_for(workbook_id),
             audit_events=self.list_audit(workbook_id),
         )
+
+
+def _artifact_target(op: Operation) -> str:
+    parts = []
+    if op.target.sheet:
+        parts.append(op.target.sheet)
+    if op.target.cell:
+        parts.append(op.target.cell)
+    elif op.target.range:
+        parts.append(op.target.range)
+    return "!".join(parts)

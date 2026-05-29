@@ -211,18 +211,18 @@ still goes through policy, validation, apply, and audit.
 
 Current SQLite tables:
 
-- `workbooks`
-- `proposals`
-- `audit_events`
-- `agent_runs`
+- `workbooks` — workbook metadata + serialized payload
+- `proposals` — proposal with items, decisions, and applied version link
+- `audit_events` — immutably ordered state transitions
+- `agent_runs` — per-chat run metadata (counters, summary)
+- `resources` — generic resource metadata (provider_id, resource_kind, external_id)
+- `operations` — standalone operation IR with lifecycle transitions
+- `run_events` — per-run event timeline (tool calls, decisions, apply events)
 
 Near-term additive tables/indexes:
 
-- `tool_calls`
-- `operation_items`
-- `artifacts`
-- `resources`
-- `workspaces`
+- `artifacts` — findings, validation results, generated reports
+- `workspaces` — logical grouping of resources
 
 SQLite remains the default. Postgres is optional later for shared
 daemon/team deployments, behind the same store interface.
@@ -239,25 +239,33 @@ Current HTTP API:
 - `POST /api/workbooks/{id}/trust-mode`
 - `POST /api/workbooks/{id}/chat`
 - `GET  /api/runs/{run_id}`
+- `GET  /api/runs/{run_id}/events`
+- `GET  /api/workbooks/{id}/runs`
 - `POST /api/proposals/{proposal_id}/items/{item_id}/decision`
 - `POST /api/proposals/{proposal_id}/approve-all`
 - `POST /api/proposals/{proposal_id}/apply`
 - `GET  /api/tools`
+- `GET  /api/resources` — list resources
+- `GET  /api/operations` — list/filter operations
+- `GET  /api/operations/{id}` — single operation
+- `POST /api/operations/validate` — validate an operation
+- `POST /api/operations/{id}/transition` — lifecycle transition
+- `POST /api/decisions/item` — decide a single proposal item (syncs operation)
+- `POST /api/decisions/approve-all` — approve all pending items for a proposal
+- All workbooks routes also accept `/api/resources/{resource_id}` aliases
 
 `/chat` accepts an optional `mode` field. Default is `propose` to
 preserve the current review flow. `/api/tools?mode=inspect` and other
 mode-filtered requests expose only tools allowed by the policy layer.
-Each `/chat` call creates an `AgentRun`, returns `run_id`, and writes
-`agent.run.started` / `agent.run.completed` audit events.
+Each `/chat` call creates an `AgentRun`, returns `run_id`, records tool
+calls as `run_events`, and writes audit events.
 
 Planned additive API:
 
-- workspace/resource discovery
-- run creation and timeline
-- artifact listing
-- operation validation
+- artifact listing and export
 - skill listing and invocation
 - provider connection status
+- workspace management
 
 MCP stdio: `spreadbread-mcp`, filtered through the same policy layer.
 

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpreadbreadAI - Artifact Viewer</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f7;color:#1d1d1f;padding:24px;max-width:1200px;margin:0 auto}
+h1{font-size:1.6rem;margin-bottom:4px}
+h2{font-size:1.2rem;margin:24px 0 8px;padding-bottom:4px;border-bottom:2px solid #e0e0e0}
+h3{font-size:1rem;margin:12px 0 4px}
+a{color:#0066cc}
+input,select{font-size:0.9rem;padding:6px 12px;border:1px solid #c7c7cc;border-radius:6px;margin-right:8px}
+button{font-size:0.9rem;padding:6px 16px;border:1px solid #c7c7cc;border-radius:6px;background:#fff;cursor:pointer}
+button:hover{background:#e8e8ed}
+.run-header{background:#fff;border-radius:10px;padding:16px;margin:16px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.run-header span{color:#86868b;font-size:0.85rem}
+.card{background:#fff;border-radius:10px;padding:16px;margin:8px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.severity{display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.75rem;font-weight:600}
+.severity.low{background:#e8f5e9;color:#2e7d32}
+.severity.medium{background:#fff3e0;color:#e65100}
+.severity.high,.severity.critical{background:#ffebee;color:#c62828}
+.risk{display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.75rem;font-weight:600}
+.risk.low{background:#e8f5e9;color:#2e7d32}
+.risk.medium{background:#fff3e0;color:#e65100}
+.risk.high{background:#ffebee;color:#c62828}
+.risk.critical{background:#d32f2f;color:#fff}
+.status{padding:2px 8px;border-radius:4px;font-size:0.75rem;font-weight:600}
+.status.approved,.status.completed{background:#e8f5e9;color:#2e7d32}
+.status.pending,.status.running{background:#fff3e0;color:#e65100}
+.status.rejected,.status.failed{background:#ffebee;color:#c62828}
+.status.applied{background:#e3f2fd;color:#1565c0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.timeline{list-style:none}
+.timeline li{padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:0.9rem}
+.timeline .time{color:#86868b;font-size:0.8rem;margin-right:8px}
+.timeline .kind{font-weight:600;margin-right:8px}
+pre{background:#f5f5f7;border-radius:6px;padding:8px;font-size:0.8rem;overflow-x:auto}
+.nav{display:flex;align-items:center;gap:8px;margin-bottom:16px}
+.empty{color:#86868b;font-style:italic}
+.loading{text-align:center;padding:40px;color:#86868b}
+@media(prefers-color-scheme:dark){
+body{background:#1c1c1e;color:#f5f5f7}
+.run-header,.card{background:#2c2c2e;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+h2{border-bottom-color:#3a3a3c}
+input,select,button{background:#3a3a3c;border-color:#545458;color:#f5f5f7}
+pre{background:#3a3a3c}
+.severity.low,.risk.low{background:#1b5e20;color:#a5d6a7}
+.severity.medium,.risk.medium{background:#e65100;color:#ffe0b2}
+.severity.high,.severity.critical,.risk.high{background:#b71c1c;color:#ffcdd2}
+.status.approved,.status.completed{background:#1b5e20;color:#a5d6a7}
+.status.pending,.status.running{background:#e65100;color:#ffe0b2}
+.status.rejected,.status.failed{background:#b71c1c;color:#ffcdd2}
+.status.applied{background:#0d47a1;color:#90caf9}
+.risk.critical{background:#b71c1c;color:#fff}
+}
+</style>
+</head>
+<body>
+<div class="nav">
+  <h1>SpreadbreadAI</h1>
+  <span style="color:#86868b;margin:0 8px">/</span>
+  <label for="runSelect">Run:</label>
+  <select id="runSelect" onchange="loadRun()">
+    <option value="">— select —</option>
+  </select>
+  <button onclick="loadRun()">Refresh</button>
+</div>
+
+<div id="content"></div>
+
+<script>
+let runs = {};
+
+async function api(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+function severityClass(s) {
+  return 'severity ' + (s || 'low').toLowerCase();
+}
+
+function riskClass(r) {
+  return 'risk ' + (r || 'medium').toLowerCase();
+}
+
+function statusClass(s) {
+  return 'status ' + (s || 'pending').toLowerCase();
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s ?? '';
+  return d.innerHTML;
+}
+
+async function loadRunList() {
+  const sel = document.getElementById('runSelect');
+  const wbs = await api('/api/workbooks');
+  runs = {};
+  sel.innerHTML = '<option value="">— select —</option>';
+  for (const wb of wbs) {
+    const rs = await api(`/api/workbooks/${wb.id}/runs`);
+    for (const r of rs) {
+      runs[r.id] = r;
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = `${r.id.slice(0, 12)}… — ${wb.name} (${r.mode}) — ${r.status}`;
+      sel.appendChild(opt);
+    }
+  }
+}
+
+async function loadRun() {
+  const runId = document.getElementById('runSelect').value;
+  const content = document.getElementById('content');
+  if (!runId) { content.innerHTML = '<p class="empty">Select a run to view artifacts.</p>'; return; }
+  content.innerHTML = '<div class="loading">Loading artifacts…</div>';
+  try {
+    const data = await api(`/api/runs/${runId}/artifacts`);
+    renderArtifacts(data);
+  } catch (e) {
+    content.innerHTML = `<div class="card"><p style="color:#c62828">Error: ${esc(e.message)}</p></div>`;
+  }
+}
+
+function renderArtifacts(d) {
+  const html = `
+    <div class="run-header">
+      <h2>${esc(d.workbook_name)}</h2>
+      <span>Run ${esc(d.run_id)} · ${esc(d.mode)} mode · ${esc(d.model)} · </span>
+      <span class="${statusClass(d.status)}">${d.status}</span>
+      <span style="margin-left:12px;color:#86868b">${d.tool_calls} tool calls · ${d.operations.length} operations · ${d.timeline.length} events</span>
+      ${d.summary ? `<p style="margin-top:8px">${esc(d.summary)}</p>` : ''}
+    </div>
+
+    <h2>Findings (${d.findings.length})</h2>
+    ${d.findings.length === 0 ? '<p class="empty">No findings.</p>' : ''}
+    ${d.findings.map(f => `
+      <div class="card">
+        <span class="${severityClass(f.severity)}">${f.severity}</span>
+        <strong style="margin-left:8px">${esc(f.location)}</strong>
+        <p style="margin-top:4px">${esc(f.summary)}</p>
+        <p style="color:#86868b;font-size:0.85rem;margin-top:2px">${esc(f.detail)}</p>
+      </div>
+    `).join('')}
+
+    <h2>Operations (${d.operations.length})</h2>
+    ${d.operations.length === 0 ? '<p class="empty">No operations.</p>' : ''}
+    ${d.operations.map(o => `
+      <div class="card">
+        <span class="${riskClass(o.risk)}">${o.risk}</span>
+        <span class="${statusClass(o.status)}" style="margin-left:4px">${o.status}</span>
+        <strong style="margin-left:8px">${esc(o.kind)}</strong>
+        <span style="color:#86868b;font-size:0.85rem">${esc(o.target)}</span>
+        <p style="margin-top:4px">${esc(o.rationale)}</p>
+        ${o.before !== null ? `<div style="margin-top:4px"><span style="color:#86868b;font-size:0.8rem">Before:</span> <code>${esc(o.before)}</code></div>` : ''}
+        ${o.after !== null ? `<div><span style="color:#86868b;font-size:0.8rem">After:</span> <code>${esc(o.after)}</code></div>` : ''}
+        <div style="margin-top:2px"><span class="${statusClass('val_' + o.validation)}" style="font-size:0.7rem">${o.validation}</span></div>
+      </div>
+    `).join('')}
+
+    <h2>Timeline (${d.timeline.length})</h2>
+    ${d.timeline.length === 0 ? '<p class="empty">No timeline events.</p>' : ''}
+    <ul class="timeline">
+    ${d.timeline.map(e => `
+      <li>
+        <span class="time">${esc(e.created_at.slice(11, 19))}</span>
+        <span class="kind">${esc(e.kind)}</span>
+        <span>${esc(e.detail)}</span>
+      </li>
+    `).join('')}
+    </ul>
+
+    <h2>Dependency Impact (${d.dependency_impact.length})</h2>
+    ${d.dependency_impact.length === 0 ? '<p class="empty">No dependency data.</p>' : ''}
+    ${d.dependency_impact.map(di => `
+      <div class="card">
+        <strong>${esc(di.cell)}</strong>
+        <span style="color:#86868b;font-size:0.85rem"> → ${di.dependents.length} dependent(s)</span>
+        ${di.dependents.length > 0 ? `<pre>${esc(di.dependents.join('\n'))}</pre>` : ''}
+      </div>
+    `).join('')}
+  `;
+  document.getElementById('content').innerHTML = html;
+}
+
+loadRunList();
+</script>
+</body>
+</html>

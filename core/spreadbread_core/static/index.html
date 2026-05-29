@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpreadbreadAI</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#f5f5f7;--surface:#fff;--border:#e0e0e0;--text:#1d1d1f;--text2:#86868b;--accent:#0066cc;--accent-hover:#0055aa;--danger:#c62828;--success:#2e7d32;--warn:#e65100}
+@media(prefers-color-scheme:dark){
+:root{--bg:#1c1c1e;--surface:#2c2c2e;--border:#3a3a3c;--text:#f5f5f7;--text2:#98989d;--accent:#64a8ff;--accent-hover:#7bb8ff;--danger:#ef5350;--success:#66bb6a;--warn:#ffa726}
+}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column}
+.app{display:flex;flex:1;overflow:hidden}
+/* Sidebar */
+.sidebar{width:280px;min-width:220px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.sidebar h2{font-size:1rem;padding:16px 16px 8px}
+.sidebar .file-area{padding:8px 16px}
+.sidebar .file-area input[type=file]{display:none}
+.sidebar .file-label{display:block;padding:8px 12px;border:2px dashed var(--border);border-radius:8px;text-align:center;font-size:0.85rem;color:var(--text2);cursor:pointer;transition:border-color .2s}
+.sidebar .file-label:hover{border-color:var(--accent)}
+.sidebar .wb-list{flex:1;overflow-y:auto;padding:0 16px 16px}
+.sidebar .wb-item{padding:8px 12px;border-radius:6px;cursor:pointer;margin-bottom:2px;font-size:0.85rem;transition:background .15s}
+.sidebar .wb-item:hover{background:var(--bg)}
+.sidebar .wb-item.active{background:var(--accent);color:#fff}
+.sidebar .wb-item .name{font-weight:600}
+.sidebar .wb-item .meta{font-size:0.75rem;color:var(--text2)}
+.sidebar .wb-item.active .meta{color:rgba(255,255,255,.7)}
+.sidebar .run-list{flex:1;overflow-y:auto;padding:0 16px 16px}
+.sidebar .run-item{padding:6px 10px;border-radius:4px;cursor:pointer;font-size:0.8rem;margin-bottom:1px;transition:background .15s}
+.sidebar .run-item:hover{background:var(--bg)}
+.sidebar .run-item.active{background:var(--accent);color:#fff}
+/* Main */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.chat-area{flex:1;overflow-y:auto;padding:16px 24px}
+.chat-area .msg{margin-bottom:16px;max-width:720px}
+.chat-area .msg.user{text-align:right;margin-left:auto}
+.chat-area .msg .bubble{display:inline-block;padding:10px 16px;border-radius:12px;font-size:0.9rem;line-height:1.4;text-align:left;max-width:600px}
+.chat-area .msg.user .bubble{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+.chat-area .msg.assistant .bubble{background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:4px}
+.chat-area .msg .meta{font-size:0.75rem;color:var(--text2);margin-top:2px}
+.chat-area .empty{color:var(--text2);text-align:center;padding:40px;font-style:italic}
+/* Artifact panel */
+.artifact-panel{display:none;flex:1;overflow-y:auto;padding:16px 24px}
+.artifact-panel.visible{display:block}
+.artifact-panel h3{font-size:1rem;margin:16px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.artifact-panel .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px}
+.artifact-panel .card .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:0.7rem;font-weight:600;margin-right:4px}
+.tag.sev-low,.tag.risk-low,.tag.status-success{background:#e8f5e9;color:#2e7d32}
+.tag.sev-med,.tag.risk-med,.tag.status-pending{background:#fff3e0;color:#e65100}
+.tag.sev-high,.tag.risk-high,.tag.status-fail{background:#ffebee;color:#c62828}
+.tag.risk-crit{background:#d32f2f;color:#fff}
+.tag.status-applied{background:#e3f2fd;color:#1565c0}
+@media(prefers-color-scheme:dark){
+.tag.sev-low,.tag.risk-low,.tag.status-success{background:#1b5e20;color:#a5d6a7}
+.tag.sev-med,.tag.risk-med,.tag.status-pending{background:#e65100;color:#ffe0b2}
+.tag.sev-high,.tag.risk-high,.tag.status-fail{background:#b71c1c;color:#ffcdd2}
+.tag.status-applied{background:#0d47a1;color:#90caf9}
+.tag.risk-crit{background:#b71c1c;color:#fff}
+}
+.artifact-panel .card .target{margin:4px 0}
+.artifact-panel .card .target code{font-size:0.8rem}
+.artifact-panel .card .actions{margin-top:8px;display:flex;gap:4px}
+.artifact-panel .card .actions button{font-size:0.75rem;padding:4px 12px;border:1px solid var(--border);border-radius:4px;background:var(--surface);cursor:pointer}
+.artifact-panel .card .actions button:hover{background:var(--bg)}
+.artifact-panel .card .actions .btn-approve{border-color:var(--success);color:var(--success)}
+.artifact-panel .card .actions .btn-reject{border-color:var(--danger);color:var(--danger)}
+.artifact-panel .card .before-after{display:flex;gap:12px;margin-top:4px;font-size:0.8rem}
+.artifact-panel .card .before-after span{display:block}
+.artifact-panel .card .before-after .bef{color:var(--danger)}
+.artifact-panel .card .before-after .aft{color:var(--success)}
+/* Input */
+.input-area{padding:12px 24px;border-top:1px solid var(--border);background:var(--surface)}
+.input-area form{display:flex;gap:8px}
+.input-area input[type=text]{flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:8px;font-size:0.9rem;background:var(--bg);color:var(--text)}
+.input-area input[type=text]:focus{outline:none;border-color:var(--accent)}
+.input-area select{padding:8px;border:1px solid var(--border);border-radius:6px;font-size:0.85rem;background:var(--bg);color:var(--text)}
+.input-area button{padding:8px 20px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:0.9rem;cursor:pointer;font-weight:500}
+.input-area button:hover{background:var(--accent-hover)}
+.input-area button:disabled{opacity:.5;cursor:default}
+/* Toolbar */
+.toolbar{display:flex;align-items:center;gap:8px;padding:8px 24px;border-top:1px solid var(--border);background:var(--surface);font-size:0.8rem}
+.toolbar .label{color:var(--text2)}
+.toolbar .badge{padding:2px 8px;border-radius:4px;font-size:0.75rem;font-weight:600}
+.badge.review{background:#fff3e0;color:#e65100}
+.badge.locked{background:#ffebee;color:#c62828}
+.badge.direct{background:#e8f5e9;color:#2e7d32}
+.toolbar .btn-sm{font-size:0.75rem;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:var(--surface);cursor:pointer}
+.toolbar .btn-sm:hover{background:var(--bg)}
+/* Loading */
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* Scrollbar */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <h2>SpreadbreadAI</h2>
+    <div class="file-area">
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" onchange="uploadWorkbook()">
+      <label class="file-label" for="fileInput" id="uploadLabel">📁 Upload workbook</label>
+      <div style="display:flex;gap:4px;margin-top:6px">
+        <input type="text" id="newWbName" placeholder="New workbook name" style="flex:1;font-size:0.8rem;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+        <button onclick="createWorkbook()" style="font-size:0.8rem;padding:4px 10px;border:1px solid var(--accent);border-radius:4px;background:var(--accent);color:#fff;cursor:pointer;white-space:nowrap">+ New</button>
+      </div>
+      <button id="deleteWbBtn" onclick="deleteWorkbook()" style="display:none;width:100%;margin-top:4px;font-size:0.75rem;padding:4px;border:1px solid var(--danger);border-radius:4px;background:transparent;color:var(--danger);cursor:pointer">Delete current workbook</button>
+    </div>
+    <h2>Workbooks</h2>
+    <div class="wb-list" id="wbList"></div>
+    <h2>Runs</h2>
+    <div class="run-list" id="runList"><div class="empty" style="color:var(--text2);font-size:0.8rem;text-align:center;padding:12px">Select a workbook</div></div>
+  </div>
+  <!-- Main -->
+  <div class="main">
+    <div id="chatArea" class="chat-area">
+      <div class="empty">Select a workbook and start a conversation.</div>
+    </div>
+    <div id="artifactPanel" class="artifact-panel"></div>
+    <div class="input-area" id="inputArea" style="display:none">
+      <form id="chatForm" onsubmit="sendMessage(event)">
+        <select id="modeSelect">
+          <option value="propose">propose</option>
+          <option value="inspect">inspect</option>
+          <option value="plan">plan</option>
+          <option value="apply">apply</option>
+          <option value="direct">direct</option>
+          <option value="locked">locked</option>
+        </select>
+        <input type="text" id="chatInput" placeholder="Ask something..." autocomplete="off">
+        <button id="sendBtn">Send</button>
+      </form>
+    </div>
+    <div class="toolbar" id="toolbar" style="display:none">
+      <span class="label">Trust:</span>
+      <span id="trustBadge" class="badge review">review</span>
+      <select id="trustSelect" onchange="changeTrustMode()" style="font-size:0.75rem;padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text)">
+        <option value="review">review</option>
+        <option value="locked">locked</option>
+        <option value="direct">direct</option>
+      </select>
+      <span style="flex:1"></span>
+      <span id="artifactsBtn" class="btn-sm" onclick="toggleArtifacts()" style="display:none">📋 Artifacts</span>
+      <span id="approveAllBtn" class="btn-sm" onclick="approveAll()" style="display:none">✓ Approve all</span>
+      <span id="applyBtn" class="btn-sm" onclick="applyProposal()" style="display:none">▶ Apply</span>
+      <span id="clearChatBtn" class="btn-sm" onclick="clearChat()" style="display:none">✕ Clear chat</span>
+    </div>
+  </div>
+</div>
+<script>
+let state = {workbooks:[], currentWb:null, currentRun:null, latestProposalId:null, replies:{}, artifactsVisible:false};
+
+async function api(method, path, body) {
+  const opts = {method, headers:{}};
+  if (body instanceof FormData) {
+    opts.body = body;
+  } else if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  const txt = await res.text();
+  if (!res.ok) throw new Error(txt);
+  try { return JSON.parse(txt); } catch { return txt; }
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+
+// --- Workbooks ---
+async function loadWorkbooks() {
+  state.workbooks = await api('GET', '/api/workbooks');
+  const list = document.getElementById('wbList');
+  list.innerHTML = state.workbooks.length === 0 ? '<div style="color:var(--text2);font-size:0.8rem;text-align:center;padding:12px">No workbooks yet.</div>' : '';
+  for (const wb of state.workbooks) {
+    const div = document.createElement('div');
+    div.className = 'wb-item' + (state.currentWb?.id === wb.id ? ' active' : '');
+    div.innerHTML = `<div class="name">${esc(wb.name)}</div><div class="meta">${wb.sheets?.length || 0} sheets · ${esc(wb.status)}</div>`;
+    div.onclick = () => selectWorkbook(wb);
+    list.appendChild(div);
+  }
+}
+
+async function createWorkbook() {
+  const name = document.getElementById('newWbName').value.trim() || 'Untitled';
+  try {
+    const wb = await api('POST', '/api/workbooks/create', {name});
+    document.getElementById('newWbName').value = '';
+    await loadWorkbooks();
+    selectWorkbook({id: wb.id, name: wb.name, sheets: wb.sheets, status: wb.status, trust_mode: wb.trust_mode});
+  } catch(e) { alert('Create failed: ' + e.message); }
+}
+
+async function uploadWorkbook() {
+  const file = document.getElementById('fileInput').files[0];
+  if (!file) return;
+  document.getElementById('uploadLabel').textContent = 'Uploading...';
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const wb = await api('POST', '/api/workbooks/upload', fd);
+    document.getElementById('uploadLabel').textContent = '+ Upload workbook';
+    document.getElementById('fileInput').value = '';
+    await loadWorkbooks();
+    selectWorkbook({id: wb.id, name: wb.name, sheets: wb.sheets, status: wb.status, trust_mode: wb.trust_mode});
+  } catch(e) {
+    document.getElementById('uploadLabel').textContent = '+ Upload workbook';
+    alert('Upload failed: ' + e.message);
+  }
+}
+
+// --- Select workbook ---
+async function selectWorkbook(wb) {
+  state.currentWb = wb;
+  document.querySelectorAll('.wb-item').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.wb-item').forEach(el => { if (el.textContent.includes(wb.name)) el.classList.add('active'); });
+  document.getElementById('inputArea').style.display = 'flex';
+  document.getElementById('toolbar').style.display = 'flex';
+  document.getElementById('deleteWbBtn').style.display = 'block';
+  document.getElementById('clearChatBtn').style.display = 'inline';
+  document.getElementById('trustSelect').value = wb.trust_mode || 'review';
+  updateTrustBadge(wb.trust_mode || 'review');
+  loadRuns(wb.id);
+  addChatMessage('assistant', `Loaded **${esc(wb.name)}**. What would you like to do?`);
+  state.currentRun = null;
+  state.latestProposalId = null;
+  state.artifactsVisible = false;
+  document.getElementById('artifactPanel').classList.remove('visible');
+  hideActionButtons();
+}
+
+async function loadRuns(wbId) {
+  const runs = await api('GET', `/api/workbooks/${wbId}/runs`);
+  const list = document.getElementById('runList');
+  list.innerHTML = runs.length === 0 ? '<div style="color:var(--text2);font-size:0.8rem;text-align:center;padding:12px">No runs yet. Send a message!</div>' : '';
+  for (const r of runs) {
+    const div = document.createElement('div');
+    div.className = 'run-item' + (state.currentRun?.id === r.id ? ' active' : '');
+    const short = r.id.length > 14 ? r.id.slice(0,14)+'…' : r.id;
+    div.innerHTML = `<strong>${short}</strong> ${esc(r.mode)} · ${esc(r.status)}`;
+    div.title = `${r.prompt?.slice(0,80) || ''}`;
+    div.onclick = () => selectRun(r);
+    list.appendChild(div);
+  }
+}
+
+// --- Select run ---
+async function selectRun(run) {
+  state.currentRun = run;
+  document.querySelectorAll('.run-item').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.run-item').forEach(el => { if (el.textContent.includes(run.id.slice(0,14))) el.classList.add('active'); });
+  document.getElementById('artifactPanel').classList.remove('visible');
+  state.artifactsVisible = false;
+  // Load artifacts
+  try {
+    const art = await api('GET', `/api/runs/${run.id}/artifacts`);
+    state.latestProposalId = art.latest_proposal_id;
+    renderArtifacts(art);
+    document.getElementById('artifactsBtn').style.display = 'inline';
+    if (state.latestProposalId) {
+      fetchProposalStatus(state.latestProposalId);
+    }
+    // Add a message about the run
+    addChatMessage('assistant', `Run **${esc(run.id.slice(0,12))}…** (${esc(run.mode)}) — ${esc(run.summary || run.status)}`);
+  } catch(e) {
+    state.latestProposalId = null;
+    hideActionButtons();
+  }
+}
+
+async function fetchProposalStatus(propId) {
+  try {
+    // We need proposal details. The closest is the review snapshot.
+    const snap = await api('GET', `/api/workbooks/${state.currentWb.id}/review`);
+    if (snap.proposal && snap.proposal.id === propId) {
+      const hasPending = snap.proposal.items?.some(i => i.status === 'pending');
+      const hasApproved = snap.proposal.items?.some(i => i.status === 'approved');
+      document.getElementById('approveAllBtn').style.display = hasPending ? 'inline' : 'none';
+      document.getElementById('applyBtn').style.display = hasApproved ? 'inline' : 'none';
+      // Update artifact panel with item-level actions
+      if (state.artifactsVisible) renderProposalItems(snap.proposal);
+    } else {
+      hideActionButtons();
+    }
+  } catch { hideActionButtons(); }
+}
+
+function hideActionButtons() {
+  document.getElementById('artifactsBtn').style.display = 'none';
+  document.getElementById('approveAllBtn').style.display = 'none';
+  document.getElementById('applyBtn').style.display = 'none';
+}
+
+// --- Chat ---
+async function sendMessage(e) {
+  e.preventDefault();
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg || !state.currentWb) return;
+  input.value = '';
+  document.getElementById('sendBtn').disabled = true;
+  const mode = document.getElementById('modeSelect').value;
+  addChatMessage('user', msg);
+  const loadingId = addChatMessage('assistant', '<span class="spinner"></span> Thinking...');
+  try {
+    const res = await api('POST', `/api/workbooks/${state.currentWb.id}/chat`, {message: msg, mode});
+    document.getElementById('sendBtn').disabled = false;
+    // Remove loading message
+    const loadingEl = document.getElementById(loadingId);
+    if (loadingEl) loadingEl.remove();
+    addChatMessage('assistant', res.reply + (res.auto_applied ? '\n\n✅ Auto-applied.' : '') + (res.auto_apply_error ? `\n\n⚠️ Auto-apply error: ${esc(res.auto_apply_error)}` : ''));
+    state.currentRun = {id: res.run_id, mode, status: 'completed', prompt: msg};
+    await loadRuns(state.currentWb.id);
+    // Select the new run
+    setTimeout(async () => {
+      try {
+        const art = await api('GET', `/api/runs/${res.run_id}/artifacts`);
+        state.latestProposalId = art.latest_proposal_id;
+        renderArtifacts(art);
+        document.getElementById('artifactsBtn').style.display = 'inline';
+        if (state.latestProposalId) fetchProposalStatus(state.latestProposalId);
+      } catch {}
+    }, 100);
+  } catch(e) {
+    document.getElementById('sendBtn').disabled = false;
+    const loadingEl = document.getElementById(loadingId);
+    if (loadingEl) loadingEl.remove();
+    addChatMessage('assistant', '❌ Error: ' + esc(e.message));
+  }
+}
+
+function addChatMessage(role, text) {
+  const area = document.getElementById('chatArea');
+  const id = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.id = id;
+  div.innerHTML = `<div class="bubble">${text}</div><div class="meta">${role === 'user' ? 'You' : 'SpreadbreadAI'}</div>`;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+  return id;
+}
+
+// --- Trust mode ---
+function updateTrustBadge(mode) {
+  const badge = document.getElementById('trustBadge');
+  badge.textContent = mode;
+  badge.className = 'badge ' + mode;
+}
+
+async function changeTrustMode() {
+  const mode = document.getElementById('trustSelect').value;
+  if (!state.currentWb) return;
+  try {
+    const wb = await api('POST', `/api/workbooks/${state.currentWb.id}/trust-mode`, {mode});
+    state.currentWb.trust_mode = mode;
+    updateTrustBadge(mode);
+  } catch(e) { alert('Failed: ' + e.message); }
+}
+
+// --- Artifacts ---
+function toggleArtifacts() {
+  state.artifactsVisible = !state.artifactsVisible;
+  const panel = document.getElementById('artifactPanel');
+  const chat = document.getElementById('chatArea');
+  if (state.artifactsVisible) {
+    panel.classList.add('visible');
+    chat.style.display = 'none';
+    document.getElementById('artifactsBtn').textContent = '💬 Chat';
+  } else {
+    panel.classList.remove('visible');
+    chat.style.display = 'block';
+    document.getElementById('artifactsBtn').textContent = '📋 Artifacts';
+  }
+}
+
+let _cachedArtifacts = null;
+function renderArtifacts(art) {
+  _cachedArtifacts = art;
+  const panel = document.getElementById('artifactPanel');
+  let html = `<h3 style="margin-top:0">${esc(art.workbook_name)} — Findings (${art.findings.length})</h3>`;
+  if (art.findings.length === 0) html += '<p style="color:var(--text2);font-size:0.85rem">No findings.</p>';
+  for (const f of art.findings) {
+    html += `<div class="card"><span class="tag sev-${f.severity}">${f.severity}</span> <strong>${esc(f.location)}</strong><div class="target">${esc(f.summary)}</div></div>`;
+  }
+  html += `<h3>Operations (${art.operations.length})</h3>`;
+  if (art.operations.length === 0) html += '<p style="color:var(--text2);font-size:0.85rem">No operations.</p>';
+  for (const o of art.operations) {
+    const stCls = o.status === 'approved' || o.status === 'applied' ? 'status-success' : o.status === 'rejected' || o.status === 'failed' || o.status === 'invalid' ? 'status-fail' : 'status-pending';
+    html += `<div class="card" id="opcard-${esc(o.id)}">
+      <span class="tag risk-${o.risk}">${o.risk}</span>
+      <span class="tag ${stCls}">${o.status}</span>
+      <span class="tag status-success" style="${o.validation === 'valid' ? '' : 'display:none'}">✓ validated</span>
+      <strong>${esc(o.kind)}</strong> <span style="color:var(--text2);font-size:0.85rem">${esc(o.target)}</span>
+      <div class="target">${esc(o.rationale)}</div>
+      ${o.before !== null ? `<div class="before-after"><span class="bef">− ${esc(o.before)}</span>` : ''}
+      ${o.after !== null ? `<span class="aft">+ ${esc(o.after)}</span></div>` : ''}
+      ${o.status === 'pending' ? `<div class="actions">
+        <button class="btn-approve" onclick="decideItem('${esc(art.latest_proposal_id)}','${esc(o.id)}','approve',this)">✓ Approve</button>
+        <button class="btn-reject" onclick="decideItem('${esc(art.latest_proposal_id)}','${esc(o.id)}','reject',this)">✗ Reject</button>
+      </div>` : ''}
+    </div>`;
+  }
+  html += `<h3>Timeline (${art.timeline.length})</h3>`;
+  if (art.timeline.length === 0) html += '<p style="color:var(--text2);font-size:0.85rem">No events.</p>';
+  for (const e of art.timeline) {
+    html += `<div class="card" style="font-size:0.85rem"><strong>${esc(e.kind)}</strong> · <span style="color:var(--text2)">${esc(e.created_at.slice(11,19))}</span><div>${esc(e.detail)}</div></div>`;
+  }
+  html += `<h3>Dependency Impact (${art.dependency_impact.length})</h3>`;
+  if (art.dependency_impact.length > 0) {
+    for (const di of art.dependency_impact) {
+      html += `<div class="card" style="font-size:0.85rem"><strong>${esc(di.cell)}</strong> → ${di.dependents.length} dependent(s)${di.dependents.length > 0 ? `<div style="color:var(--text2);font-size:0.8rem">${esc(di.dependents.join(', '))}</div>` : ''}</div>`;
+    }
+  } else {
+    html += '<p style="color:var(--text2);font-size:0.85rem">No dependency data.</p>';
+  }
+  panel.innerHTML = html;
+}
+
+async function decideItem(propId, opId, decision, btn) {
+  if (!propId) return alert('No proposal found');
+  // The opId is an operation id, we need the item id. For now, find by operation id from review snapshot.
+  try {
+    const snap = await api('GET', `/api/workbooks/${state.currentWb.id}/review`);
+    const item = snap.proposal?.items?.find(i => i.operation?.id === opId || i.id === opId);
+    if (!item) return alert('Item not found');
+    await api('POST', `/api/proposals/${propId}/items/${item.id}/decision`, {decision, reviewer:'user'});
+    btn.textContent = decision === 'approve' ? '✓ Approved' : '✗ Rejected';
+    btn.disabled = true;
+    // Refresh
+    const art = await api('GET', `/api/runs/${state.currentRun.id}/artifacts`);
+    renderArtifacts(art);
+    if (state.latestProposalId) fetchProposalStatus(state.latestProposalId);
+  } catch(e) { alert('Failed: ' + e.message); }
+}
+
+async function approveAll() {
+  if (!state.latestProposalId) return;
+  try {
+    await api('POST', `/api/proposals/${state.latestProposalId}/approve-all`, {decision:'approve', reviewer:'user'});
+    const art = await api('GET', `/api/runs/${state.currentRun.id}/artifacts`);
+    renderArtifacts(art);
+    fetchProposalStatus(state.latestProposalId);
+    addChatMessage('assistant', '✅ All pending items approved.');
+  } catch(e) { alert('Approve all failed: ' + e.message); }
+}
+
+async function applyProposal() {
+  if (!state.latestProposalId) return;
+  try {
+    const res = await api('POST', `/api/proposals/${state.latestProposalId}/apply`, {reviewer:'user'});
+    const art = await api('GET', `/api/runs/${state.currentRun.id}/artifacts`);
+    renderArtifacts(art);
+    hideActionButtons();
+    addChatMessage('assistant', `✅ Applied — new version **${esc(res.version.id.slice(0,12))}**`);
+    // Reload workbooks to refresh version state
+    loadWorkbooks();
+  } catch(e) { alert('Apply failed: ' + e.message); }
+}
+
+function clearChat() {
+  document.getElementById('chatArea').innerHTML = '<div class="empty">Chat cleared. Start a new conversation.</div>';
+  document.getElementById('artifactPanel').classList.remove('visible');
+  document.getElementById('chatArea').style.display = 'block';
+  state.artifactsVisible = false;
+  document.getElementById('artifactsBtn').textContent = '📋 Artifacts';
+}
+
+async function deleteWorkbook() {
+  if (!state.currentWb) return;
+  if (!confirm(`Delete "${state.currentWb.name}" and all its runs? This cannot be undone.`)) return;
+  try {
+    await api('DELETE', `/api/workbooks/${state.currentWb.id}`);
+    state.currentWb = null;
+    state.currentRun = null;
+    state.latestProposalId = null;
+    document.getElementById('deleteWbBtn').style.display = 'none';
+    document.getElementById('chatArea').innerHTML = '<div class="empty">Workbook deleted. Select another or create a new one.</div>';
+    document.getElementById('artifactPanel').classList.remove('visible');
+    document.getElementById('inputArea').style.display = 'none';
+    document.getElementById('toolbar').style.display = 'none';
+    hideActionButtons();
+    clearChat();
+    await loadWorkbooks();
+  } catch(e) { alert('Delete failed: ' + e.message); }
+}
+
+// --- Init ---
+loadWorkbooks();
+</script>
+</body>
+</html>

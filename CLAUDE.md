@@ -43,20 +43,24 @@ Important principles:
 ```text
 core/                   Python daemon/gateway
   spreadbread_core/
-    domain.py           Pydantic models: Workbook, Proposal, Item, Audit
+    domain.py           Pydantic models: Workbook, Resource, Property, RunEvent, Audit, Operation
     store.py            SQLite repository + xlsx version bytes
     parser.py           openpyxl-based .xlsx parser
     tools.py            tool registry exposed to LLM/MCP
-    llm.py              Ollama tool-calling loop
-    apply.py            apply pipeline
+    apply.py            apply pipeline with model dispatch
     http.py             FastAPI app + uvicorn entry
     config.py
-  tests/                pytest suites
+    policy.py           mode-aware tool permission policy
+    validators.py       circular-ref and broken-sheet-ref validators
+    llm/                LLM adapter package (base, ollama, gemini, router, prompts)
+    providers/          adapter interfaces + lazy registry (local_xlsx, google_sheets)
+  evals/                eval harness (fixtures, cases, runner)
+  tests/                pytest suites (132 tests)
   pyproject.toml
 extension/              LibreOffice .oxt extension
   manifest/             META-INF, description, Addons.xcu, ProtocolHandler.xcu
   python/               main.py + spreadbreadai package
-  tests/                pytest tests
+  tests/                pytest tests (15 tests)
   build.sh              packages spreadbreadai.oxt
 docs/                   product, architecture, ADRs, runbooks, plan
 packaging/              native bundle/launcher scaffold
@@ -84,6 +88,20 @@ packaging/              native bundle/launcher scaffold
 - Minimal `AgentRun` persistence: `/chat` returns `run_id` and writes
   run started/completed audit events. Run history is exposed at
   `/api/workbooks/{id}/runs` and `/api/runs/{run_id}`.
+- Operation IR: standalone `operations` table, lifecycle CRUD, HTTP API,
+  sync from proposal item decisions.
+- Provider adapter contract: `ProviderAdapter` ABC, `ProviderCapabilities`,
+  lazy registry with `LocalXlsxAdapter` and `GoogleSheetsAdapter`.
+- Run/session tracing: `run_events` table, tool-call recording from
+  `/chat`, `GET /api/runs/{id}/events`.
+- Agent run counters: `tool_calls`, `proposals_created`, `items_decided`.
+- Resource model: `resources` table, `/api/resources/` aliased routes.
+- LLM adapter package: `llm/base.py`, `llm/ollama.py`, `llm/gemini.py`,
+  `llm/router.py`, `llm/prompts.py`.
+- Gemini cloud LLM adapter (opt-in, mocked in tests).
+- Validators: circular-ref and broken-sheet-ref pre-apply validation.
+- Eval harness: 4 synthetic workbooks, 7 cases, offline + LLM-gated.
+- 132 core tests pass.
 
 ### LibreOffice extension
 
@@ -115,18 +133,14 @@ There is no model-exposed direct provider write tool. Do not add one.
 
 ## Next architecture contracts
 
-Add these incrementally:
+Priority for future sessions:
 
-1. Operation IR mapped from current proposal items.
-2. Provider capability model.
-3. Explicit agent modes: inspect, plan, propose, apply, direct, locked.
-4. Run/session tracing across prompt, tools, proposal, decisions, apply,
-   versions, and audit.
-5. Permission policy returning `allow`, `ask`, or `deny`.
-6. Local skills registry using `skills/<name>/SKILL.md`.
-7. Artifact API/UI for findings, operations, validation, impact, and timeline.
-8. Google Sheets provider adapter only after the operation/policy
-   contracts are stable.
+1. Artifact API/UI for findings, operations, validation, impact, and timeline.
+2. Explicit permission policy returning `allow`, `ask`, or `deny`.
+3. Local skills registry using `skills/<name>/SKILL.md`.
+4. MCP hardening (filtered by same policy as local tools).
+5. Google Sheets end-to-end integration (adapter exists, registered, tested with mocks).
+6. Workspace spine for multi-resource organization.
 
 ## Working rules for agents
 

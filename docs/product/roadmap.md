@@ -3,30 +3,39 @@
 This roadmap summarizes direction. The execution source of truth is
 [`docs/development-plan.md`](../development-plan.md).
 
-## Now: implemented local foundation
+## Now: implemented core engine + provider-neutral contracts
 
-- Core daemon: domain, store, parser, tools, Ollama loop, FastAPI.
-- LibreOffice Calc extension with Review, Approve all, and Apply menu
-  actions.
-- Apply pipeline with immutable workbook versions, idempotence,
-  conflict detection, and audit events.
-- Trust modes: `direct`, `review`, and `locked`.
-- MCP stdio server exposing the existing tool registry.
-- Smarter workbook review: external refs, broken sheet refs, stale
-  markers, named ranges, and dependencies.
-- Native packaging scaffold and launcher.
+- Core daemon: domain, store, parser, tools, Ollama loop, FastAPI,
+  Gemini adapter, evals harness.
+- Operation IR: typed operations, standalone `operations` table, lifecycle
+  CRUD, HTTP API.
+- Provider adapter contract: `ProviderAdapter` ABC, `ProviderCapabilities`,
+  lazy provider registry.
+- Google Sheets adapter (Sheets API v4, OAuth, mocked tests, registered).
+- Local XLSX adapter wrapping existing parser/apply.
+- Run/session tracing: `run_events` table, tool-call recording from `/chat`,
+  event API.
+- Resource model: `resources` table, `/api/resources/` aliased routes.
+- Agent modes: inspect, plan, propose, apply, direct, locked (wired in
+  `/chat` and `/api/tools`).
+- LibreOffice Calc extension (Review, Approve all, Apply; sidebar pending).
+- Apply pipeline with immutable versions, conflict detection, idempotence,
+  audit events.
+- Trust modes: `review`, `locked`, and opt-in `direct`.
+- MCP stdio server.
+- Validators: circular-ref and broken-sheet-ref pre-apply.
+- Native packaging scaffold.
 
-## Next: prepare the codebase for the new direction
+## Next: artifact-centered local beta
 
-- Reconcile documentation around the local-first modular workspace
-  direction.
-- Introduce typed operation IR and map current proposal items onto it.
-- Add explicit agent modes: inspect, plan, propose, apply, direct, locked.
-- Add minimal run/session tracking so prompts, tool calls, proposals,
-  decisions, apply, and audit can be traced together.
-- Refactor the tool registry metadata around capability, resource kind,
-  mode, and policy.
-- Keep SQLite/local files as the default; no hosted services required.
+- Replace message-box review with artifact-centered Calc sidebar or
+  local web UI surface.
+- Show findings, proposed operations, validation status, dependency
+  impact, and audit timeline.
+- Add per-item approve/reject and clear trust-mode controls.
+- Add explicit permission policy returning `allow`, `ask`, `deny`.
+- Add local skills registry for repeatable workflows.
+- Add config-file-based model selection.
 
 ## Near term: artifact-centered local beta
 

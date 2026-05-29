@@ -72,15 +72,27 @@ the work can be applied automatically, needs review, or is blocked.
 - MCP stdio server exposing the same tool registry.
 - Offline operation with Ollama/Gemma as the default.
 
-### Next MVP expansion
+### Done since initial MVP
 
-- Explicit agent modes: inspect, plan, propose, apply, and bounded direct.
-- Operation IR that generalizes current proposal items.
-- Provider capability model for spreadsheet/document adapters.
+- Explicit agent modes: inspect, plan, propose, apply, and bounded direct
+  (wired in `/chat` and `/api/tools`; UI affordances still pending).
+- Operation IR: standalone `operations` table, lifecycle CRUD, HTTP API,
+  sync from proposal item decisions.
+- Provider capability model: `ProviderCapabilities` dataclass,
+  `ProviderAdapter` ABC, lazy registry (`get_provider`, `register_provider`).
+- Google Sheets adapter: Sheets API v4 read/write, OAuth, mocked tests,
+  registered in provider registry.
+- Run/session tracing: `run_events` table, tool-call recording, event API.
+- Gemini cloud LLM adapter (opt-in, mocked in tests).
+- Validators: circular-ref and broken-sheet-ref pre-apply validation.
+- Eval harness: 4 synthetic workbooks, 7 cases, offline + LLM-gated.
+
+### Still to do
+
 - Artifact-centered UI surface for findings, proposed operations,
   validation, dependency impact, and audit timeline.
 - Skills registry using local `SKILL.md`-style workflow packs.
-- Google Sheets adapter after operation IR is stable.
+- Explicit permission policy returning `allow`, `ask`, `deny`.
 
 ### Out of scope for the development/beta phase
 

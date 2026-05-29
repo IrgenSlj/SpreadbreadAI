@@ -10,12 +10,13 @@ from typing import Any, Optional
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__
 from .apply import ApplyError, apply_proposal
 from .config import Config
-from .domain import AgentRun, AuditEvent
+from .domain import AgentRun, AuditEvent, RunEvent
 from .llm import OllamaClient, create_llm  # noqa: F401 — OllamaClient import kept for test monkeypatch
 from .parser import parse_xlsx
 from .policy import parse_agent_mode
@@ -32,6 +33,10 @@ class DecisionRequest(BaseModel):
     decision: str
     reviewer: str
     comment: Optional[str] = None
+
+
+class CreateWorkbookRequest(BaseModel):
+    name: str = "Untitled"
 
 
 class ApplyRequest(BaseModel):
@@ -67,6 +72,45 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     @app.get("/api/workbooks")
     def list_workbooks() -> list[dict[str, Any]]:
         return [wb.model_dump() for wb in store.list_workbooks()]
+
+    @app.delete("/api/workbooks/{workbook_id}")
+    def delete_workbook(workbook_id: str) -> dict[str, str]:
+        wb = store.get_workbook(workbook_id)
+        if not wb:
+            raise HTTPException(404, "workbook not found")
+        store.delete_workbook(workbook_id)
+        return {"status": "deleted", "id": workbook_id}
+
+    @app.post("/api/workbooks/create")
+    def create_workbook(req: CreateWorkbookRequest = ...) -> dict[str, Any]:  # type: ignore[assignment]
+        import io
+        from openpyxl import Workbook as XlsxWorkbook
+        book = XlsxWorkbook()
+        sheet = book.active
+        if sheet:
+            sheet.title = "Sheet1"
+        raw = io.BytesIO()
+        book.save(raw)
+        raw.seek(0)
+        raw_bytes = raw.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            tmp.write(raw_bytes)
+            tmp_path = Path(tmp.name)
+        try:
+            wb = parse_xlsx(tmp_path, name=req.name)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        store.save_workbook(wb)
+        store.save_version_bytes(wb.id, wb.latest_version_id, raw_bytes)
+        store.append_audit(
+            AuditEvent(
+                workbook_id=wb.id,
+                actor="user",
+                action="workbook.created",
+                detail=f"Created empty workbook {req.name!r}",
+            )
+        )
+        return wb.model_dump()
 
     @app.post("/api/workbooks/upload")
     async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
@@ -115,7 +159,23 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         run = store.get_agent_run(run_id)
         if not run:
             raise HTTPException(404, "run not found")
-        return run.model_dump()
+        data = run.model_dump()
+        data["events"] = [e.model_dump() for e in store.list_run_events(run_id)]
+        return data
+
+    @app.get("/api/runs/{run_id}/events")
+    def list_run_events_endpoint(run_id: str) -> list[dict[str, Any]]:
+        return [e.model_dump() for e in store.list_run_events(run_id)]
+
+    @app.get("/api/runs/{run_id}/artifacts")
+    def get_run_artifacts(run_id: str) -> dict[str, Any]:
+        run = store.get_agent_run(run_id)
+        if not run:
+            raise HTTPException(404, "run not found")
+        artifacts = store.build_artifacts(run)
+        if not artifacts:
+            raise HTTPException(404, "artifacts not available (workbook gone?)")
+        return artifacts.model_dump()
 
     @app.post("/api/workbooks/{workbook_id}/trust-mode")
     @app.post("/api/resources/{resource_id}/trust-mode")
@@ -176,6 +236,18 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             )
             raise
 
+        # Record tool call events
+        for tc in (result.tool_calls or []):
+            store.append_run_event(
+                RunEvent(
+                    run_id=run.id,
+                    kind="tool_call",
+                    detail=f"LLM called {tc.get('name', 'unknown')}",
+                    payload={"tool_call": tc},
+                )
+            )
+        run.tool_calls = len(result.tool_calls or [])
+
         auto_applied = False
         applied_version_id = None
         auto_apply_error = None
@@ -188,6 +260,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                     apply_result = apply_proposal(store, proposal.id, reviewer="user (direct mode)")
                     auto_applied = True
                     applied_version_id = apply_result.version.id
+                    store.append_run_event(
+                        RunEvent(
+                            run_id=run.id,
+                            kind="proposal_applied",
+                            detail=f"Auto-applied proposal {proposal.id}",
+                            payload={"proposal_id": proposal.id, "version_id": applied_version_id},
+                        )
+                    )
                 except ApplyError as exc:
                     auto_apply_error = str(exc)
 
@@ -332,6 +412,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return registry.to_ollama_schema(agent_mode)
+
+    # --- static UI ------------------------------------------------------
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.is_dir():
+        app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="ui")
 
     return app
 

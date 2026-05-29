@@ -16,7 +16,7 @@ from openpyxl.comments import Comment
 
 from .cell_ref import parse_cell
 from .domain import AuditEvent, Operation, Proposal, ProposalItem, WorkbookVersion, _now, _id, mark_item_operation_applied
-from .providers.local_xlsx import LocalXlsxAdapter
+from .providers import get_provider
 from .store import Store
 from .validators import validate_operation
 
@@ -33,16 +33,13 @@ class ApplyResult:
 
 
 # -- provider adapter registry ------------------------------------------------
-_ADAPTERS: dict[str, Any] = {}
 
 
 def _get_adapter(provider_id: str):
-    if not _ADAPTERS:
-        _ADAPTERS["local_xlsx"] = LocalXlsxAdapter()
-    adapter = _ADAPTERS.get(provider_id)
-    if adapter is None:
+    try:
+        return get_provider(provider_id)
+    except KeyError:
         raise ApplyError(f"unsupported provider {provider_id!r}")
-    return adapter
 
 
 def _select_sheet(book, sheet_name: str | None):

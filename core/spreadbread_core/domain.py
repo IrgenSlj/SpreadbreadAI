@@ -251,6 +251,15 @@ class ReviewSnapshot(BaseModel):
     audit_events: list[AuditEvent] = Field(default_factory=list)
 
 
+class RunEvent(BaseModel):
+    id: str = Field(default_factory=lambda: _id("evt"))
+    run_id: str
+    kind: str  # tool_call, proposal_created, item_decided, proposal_applied, agent_reply
+    detail: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=_now)
+
+
 class AgentRun(BaseModel):
     id: str = Field(default_factory=lambda: _id("run"))
     workbook_id: str
@@ -262,6 +271,10 @@ class AgentRun(BaseModel):
     completed_at: Optional[str] = None
     summary: Optional[str] = None
     error: Optional[str] = None
+    tool_calls: int = 0
+    proposals_created: int = 0
+    items_decided: int = 0
+    events: list[RunEvent] = Field(default_factory=list)
 
     def mark_completed(self, summary: str) -> None:
         self.status = "completed"
@@ -347,6 +360,66 @@ def _required_capability_for_operation(operation_kind: OperationKind) -> str:
     if operation_kind == "insert_document_section":
         return "document.insert_section"
     return "provider.write"
+
+
+# ---------------------------------------------------------------------------
+# Artifact models
+# ---------------------------------------------------------------------------
+
+
+class ArtifactFinding(BaseModel):
+    id: str
+    severity: RiskSeverity
+    location: str
+    summary: str
+    detail: str
+
+
+class ArtifactOperation(BaseModel):
+    id: str
+    kind: OperationKind
+    target: str
+    before: Optional[str] = None
+    after: Optional[str] = None
+    rationale: str
+    risk: OperationRisk
+    status: OperationStatus
+    validation: str  # "valid", "invalid", "not_validated"
+
+
+class ArtifactTimelineEntry(BaseModel):
+    id: str
+    kind: str
+    detail: str
+    created_at: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ArtifactImpact(BaseModel):
+    cell: str
+    dependents: list[str] = Field(default_factory=list)
+    sheets_affected: list[str] = Field(default_factory=list)
+
+
+class RunArtifacts(BaseModel):
+    run_id: str
+    workbook_id: str
+    workbook_name: str = ""
+    latest_proposal_id: Optional[str] = None
+    prompt: str
+    mode: str
+    model: str
+    status: str
+    started_at: str
+    completed_at: Optional[str] = None
+    summary: Optional[str] = None
+    findings: list[ArtifactFinding] = Field(default_factory=list)
+    operations: list[ArtifactOperation] = Field(default_factory=list)
+    timeline: list[ArtifactTimelineEntry] = Field(default_factory=list)
+    dependency_impact: list[ArtifactImpact] = Field(default_factory=list)
+    tool_calls: int = 0
+    proposals_created: int = 0
+    items_decided: int = 0
 
 
 def new_workbook(name: str, owner: str = "user") -> Workbook:

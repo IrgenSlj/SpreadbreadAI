@@ -10,15 +10,21 @@ picture, including the LibreOffice extension that talks to this daemon.
 
 ## Direction
 
-`core/` is becoming the provider-neutral engine for spreadsheet and
-document work:
+`core/` is the provider-neutral engine for spreadsheet and document work.
+Landed:
 
-- agent modes: inspect, plan, propose, apply, and bounded direct mode
-- typed operation IR before provider mutation
-- permission policy for native tools, skills, and MCP tools
-- artifact-centered proposal and audit data for UI clients
-- provider adapters for LibreOffice/local xlsx first, Google Sheets
-  next, and document providers later
+- agent modes: inspect, plan, propose, apply, direct, locked
+- typed operation IR with lifecycle CRUD and HTTP API
+- provider adapters: `LocalXlsxAdapter`, `GoogleSheetsAdapter` (lazy registry)
+- run/session tracing with tool-call recording
+- resource model with generic `/api/resources/` routes
+- permission policy filtering by mode (explicit allow/ask/deny pending)
+
+Still building:
+
+- artifact-centered UI
+- skills registry
+- MCP hardening
 
 ## Install (from a checkout)
 
@@ -36,6 +42,8 @@ All optional, all environment variables:
 - `SPREADBREAD_MODEL` — Ollama model tag (default `gemma4:e2b`)
 - `OLLAMA_HOST` — Ollama URL (default `http://127.0.0.1:11434`)
 - `SPREADBREAD_HOST` / `SPREADBREAD_PORT` — bind (default `127.0.0.1:8765`)
+- `SPREADBREAD_GEMINI_KEY` — Google Gemini API key (optional, enables Gemini adapter)
+- `SPREADBREAD_GOOGLE_TOKEN` — Google Sheets OAuth access token (optional)
 
 ## Test
 

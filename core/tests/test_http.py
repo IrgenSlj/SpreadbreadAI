@@ -356,3 +356,37 @@ def test_decision_and_approve_all_endpoints(client: TestClient) -> None:
     again = client.post(f"/api/proposals/{proposal.id}/apply", json={"reviewer": "finance"})
     assert again.status_code == 200
     assert again.json()["version"]["id"] == apply_resp.json()["version"]["id"]
+
+
+def test_artifacts_endpoint(client: TestClient) -> None:
+    resp = client.get("/api/runs/nonexistent/artifacts")
+    assert resp.status_code == 404
+
+    # Upload a workbook and create a run via chat to get real artifacts
+    book = XlsxWorkbook()
+    sheet = book.active
+    sheet.title = "Sheet1"
+    buf = io.BytesIO()
+    book.save(buf)
+    buf.seek(0)
+    upload = client.post("/api/workbooks/upload", files={"file": ("test.xlsx", buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert upload.status_code == 200
+    wb_id = upload.json()["id"]
+
+    chat_resp = client.post(
+        f"/api/workbooks/{wb_id}/chat",
+        json={"message": "hello", "mode": "inspect"},
+    )
+    assert chat_resp.status_code == 200
+    run_id = chat_resp.json()["run_id"]
+
+    artifacts = client.get(f"/api/runs/{run_id}/artifacts")
+    assert artifacts.status_code == 200
+    data = artifacts.json()
+    assert data["run_id"] == run_id
+    assert data["workbook_id"] == wb_id
+    assert "findings" in data
+    assert "operations" in data
+    assert "timeline" in data
+    assert "dependency_impact" in data
+    assert data["tool_calls"] >= 0

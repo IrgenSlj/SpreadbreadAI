@@ -190,7 +190,7 @@ def test_apply_rejects_wrong_provider_operation(tmp_path: Path) -> None:
     assert proposal is not None
     proposal.items[0].ensure_operation(resource_id=wb_id, validation_status="valid")
     assert proposal.items[0].operation is not None
-    proposal.items[0].operation.provider_id = "google_sheets"
+    proposal.items[0].operation.provider_id = "nonexistent_provider"
     store.save_proposal(proposal)
 
     with pytest.raises(ApplyError, match="unsupported provider"):

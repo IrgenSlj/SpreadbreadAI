@@ -78,28 +78,31 @@ directly:
 The next architecture slice generalizes these into a typed operation
 IR so providers can implement the same operations with different APIs.
 
-## Status
+## Current status
 
 Landed:
 
 - Core daemon: domain model, SQLite store, xlsx parser, tool registry,
-  Ollama tool-calling loop, FastAPI HTTP API.
+  Ollama/Gemini tool-calling loops, FastAPI HTTP API, MCP server.
+- Operation IR: standalone `operations` table, lifecycle CRUD, HTTP API.
+- Provider adapter contract: `ProviderAdapter` ABC, `ProviderCapabilities`,
+  lazy registry with `LocalXlsxAdapter` and `GoogleSheetsAdapter`.
+- Run/session tracing: `run_events` table, tool-call recording, event API.
+- Agent modes: inspect, plan, propose, apply, direct, locked (chat + tools
+  API). Resource model with `/api/resources/` routes.
 - Apply pipeline with conflict detection, sha256 base-bytes guard, and
-  idempotent re-apply.
-- LibreOffice extension v0.1 with Review, Approve all, and Apply menu
-  actions.
-- MCP stdio server (`spreadbread-mcp`) for external AI clients.
-- Risk detection for external workbook refs, broken sheet refs, stale
-  markers, named ranges, and dependencies.
+  idempotent re-apply. Validators: circular-ref, broken-sheet-ref.
+- LibreOffice extension v0.1 with Review, Approve all, and Apply actions.
+- Eval harness: 4 synthetic workbooks, 7 cases.
 - Trust modes: `direct`, `review`, and `locked`.
+- Packaging scaffold and native bundle direction.
 
-Current direction:
+Next work:
 
-- operation IR and provider capability model
-- explicit agent modes: inspect, plan, propose, apply, direct
 - artifact-centered UI instead of message-box review
-- skills registry and permission-gated MCP/tool exposure
-- Google Sheets adapter after the core operation model is stable
+- explicit permission policy (`allow`, `ask`, `deny`)
+- skills registry and MCP hardening
+- Google Sheets end-to-end integration
 
 See [`docs/development-plan.md`](docs/development-plan.md) for the
 multisession sprint plan.

@@ -1,6 +1,6 @@
 # SpreadbreadAI Development Plan
 
-Last updated: 2026-05-25.
+Last updated: 2026-05-29.
 
 This document is the source of truth for implementation sequencing.
 The product is moving from a LibreOffice-only spreadsheet assistant
@@ -179,6 +179,7 @@ Landed:
 
 - Core daemon, parser, store, tools, FastAPI API.
 - Ollama tool-calling loop with local model default.
+- Gemini adapter as first cloud LLM (opt-in, mocked in tests).
 - LibreOffice extension v0.1 with menu actions.
 - Apply pipeline with conflict detection, base checksum guard,
   idempotence, and audit events.
@@ -187,6 +188,17 @@ Landed:
 - Risk detection for external refs, broken sheet refs, stale markers,
   named ranges, and dependencies.
 - Packaging scaffold with native bundle direction.
+- Operation IR: standalone operations table, CRUD, lifecycle transitions,
+  validation, and HTTP API; ProposalItem operations synced on decision.
+- Provider adapter contract: `ProviderAdapter` ABC, `ProviderCapabilities`,
+  lazy provider registry with `get_provider()` / `register_provider()`.
+- `LocalXlsxAdapter` wrapping existing parser/apply; `GoogleSheetsAdapter`
+  via Sheets API v4 (read + write, OAuth, mocked tests).
+- Validators: circular-ref and broken-sheet-ref pre-apply validation.
+- Eval harness: 4 synthetic workbooks, 7 cases, offline + LLM-gated.
+- Agent run/session tracing: `run_events` table, tool-call recording
+  from `/chat`, event endpoints, counter fields on `AgentRun`.
+- `Resource` model, resources table, `/api/resources/` aliased routes.
 
 Known gaps:
 
@@ -198,18 +210,27 @@ Known gaps:
 - Agent modes now exist at the `/chat`, LLM schema-filtering, and
   `/api/tools` boundary; UI affordances and richer per-run artifacts
   are still pending.
-- Minimal `agent_runs` persistence exists for chat/review runs; tool
-  call and artifact tables are still pending.
 - No local skills registry.
-- No complete run/session spine tying prompt, tool calls, proposals,
-  apply, and audit into one queryable trace.
-- Roadmap expansion to Google Sheets/Docs needs provider contracts first.
+- No fully normalized queryable run spine — `run_events` table exists
+  and events are wired; further normalization can wait.
+- Google Sheets adapter is wired into the provider registry but has
+  no end-to-end integration test without real credentials.
 
-## Multisession Sprint Plan
+## Sprint Status
 
-Each session is intended to be small enough for one focused coding
-session. Do not start a later sprint if its acceptance criteria depend
-on an unfinished earlier contract.
+| Sprint | Status |
+|---|---|
+| Sprint 0 — Documentation And Baseline | Complete |
+| Sprint 1 — Local Loop / Sidebar UI | Partial (sidebar not started) |
+| Sprint 2 — Operation IR | Complete |
+| Sprint 3 — Runs, Events, And Policy | Partial (run_events done; policy/permission metadata pending) |
+| Sprint 4 — Agent Modes And Workspace Spine | Partial (modes exist in chat/tools API; resource model added) |
+| Sprint 5 — Artifact-Centered UI | Not started |
+| Sprint 6 — Skills And MCP Hardening | Not started |
+| Sprint 7 — Google Sheets Adapter | Partial (adapter created, registered, tested with mocks; no end-to-end) |
+| Sprint 8 — Model Adapter And Cost Controls | Partial (LLM package created; Gemini adapter done; cost hooks pending) |
+| Sprint 9 — Beta Hardening | Not started |
+| Sprint 10 — Later Scale Work | Not started |
 
 ### Sprint 0: Documentation And Baseline
 
@@ -234,10 +255,9 @@ inventing the broader platform yet.
 | 1.3 | Add visible trust/mode controls. | User can see and change `review`, `locked`, and `direct`; direct mode is clearly opt-in and auditable. |
 | 1.4 | Add extension tests around state and dispatch. | Upload/review, proposal rendering state, approve/reject dispatch, apply success, and apply failure display are covered without requiring LibreOffice UI automation. |
 
-### Sprint 2: Operation IR
+### Sprint 2: Operation IR (Complete)
 
-Goal: introduce typed operations while preserving the existing proposal
-and apply behavior.
+Introduced typed operations while preserving the existing proposal/apply behavior.
 
 | Session | Scope | Acceptance Criteria |
 |---|---|---|
@@ -265,7 +285,7 @@ platform.
 | Session | Scope | Acceptance Criteria |
 |---|---|---|
 | 4.1 | Add a default local workspace. | Existing workbooks belong to one default workspace; current APIs keep working. |
-| 4.2 | Add `ResourceRef`/`ResourceKind`. | Workbook resources can be listed generically; no provider rewrite required. |
+| 4.2 | Add `Resource`/`ResourceKind`. | Workbook resources can be listed generically; no provider rewrite required. |
 | 4.3 | Add mode-aware chat/review entry points. | `inspect`, `plan`, `propose`, and `apply` produce predictable tool access and response shape. |
 | 4.4 | Expose workspace/resource discovery over HTTP and MCP. | External agents can discover resources without hard-coded workbook assumptions. |
 
@@ -332,7 +352,7 @@ Do not start this until repeated local/beta usage proves the need.
 
 | Scope | Trigger |
 |---|---|
-| Normalize proposal items/operations fully. | Query volume or UI needs exceed the minimal run/event indexes. |
+| Normalize proposal items/operations fully. | Query volume or UI needs exceed the minimum run/event indexes. |
 | Optional Postgres backend. | Real shared-daemon/team usage appears. |
 | Reviewer profiles/RBAC. | More than one human role participates in approvals. |
 | Google Docs/Excel providers. | Google Sheets adapter validates the provider model. |

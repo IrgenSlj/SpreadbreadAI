@@ -75,3 +75,43 @@ class ProviderAdapter(ABC):
             Raw bytes of the new version.
         """
         ...
+
+
+# ---------------------------------------------------------------------------
+# Lazy provider registry
+# ---------------------------------------------------------------------------
+
+_PROVIDERS: dict[str, type[ProviderAdapter]] = {}
+
+
+def register_provider(provider_id: str, cls: type[ProviderAdapter]) -> None:
+    _PROVIDERS[provider_id] = cls
+
+
+def get_provider(provider_id: str, **kwargs: Any) -> ProviderAdapter:
+    """Return an instance of the registered provider adapter.
+
+    Raises KeyError if the provider_id is not registered.
+    """
+    cls = _PROVIDERS.get(provider_id)
+    if cls is None:
+        msg = f"unknown provider: {provider_id}"
+        raise KeyError(msg)
+    return cls(**kwargs)
+
+
+def list_providers() -> list[str]:
+    return list(_PROVIDERS.keys())
+
+
+# Register built-in providers (lazy imports for optional-dependency adapters)
+from .local_xlsx import LocalXlsxAdapter  # noqa: E402
+
+register_provider("local_xlsx", LocalXlsxAdapter)
+
+try:
+    from .google_sheets import GoogleSheetsAdapter  # noqa: E402
+
+    register_provider("google_sheets", GoogleSheetsAdapter)
+except ImportError:
+    pass  # google-auth not installed
