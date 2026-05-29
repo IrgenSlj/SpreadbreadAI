@@ -16,7 +16,7 @@ from . import __version__
 from .apply import ApplyError, apply_proposal
 from .config import Config
 from .domain import AgentRun, AuditEvent
-from .llm import OllamaClient
+from .llm import OllamaClient, create_llm  # noqa: F401 — OllamaClient import kept for test monkeypatch
 from .parser import parse_xlsx
 from .policy import parse_agent_mode
 from .store import Store
@@ -52,7 +52,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     cfg = config or Config.load()
     store = Store(cfg.db_path)
     registry = ToolRegistry(store)
-    llm = OllamaClient(cfg.ollama_host, cfg.model, registry)
+    llm = create_llm(cfg, registry)
 
     app = FastAPI(title="SpreadbreadAI Core", version=__version__)
 

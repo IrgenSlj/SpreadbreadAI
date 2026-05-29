@@ -4,8 +4,6 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
-
 def _default_data_dir() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "SpreadbreadAI" / "data"
@@ -26,6 +24,8 @@ class Config:
     model: str
     host: str
     port: int
+    provider: str
+    gemini_api_key: str
 
     @classmethod
     def load(cls) -> "Config":
@@ -38,4 +38,6 @@ class Config:
             model=os.environ.get("SPREADBREAD_MODEL", "gemma4:e2b"),
             host=os.environ.get("SPREADBREAD_HOST", "127.0.0.1"),
             port=int(os.environ.get("SPREADBREAD_PORT", "8765")),
+            provider=os.environ.get("SPREADBREAD_PROVIDER", "ollama"),
+            gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
         )
