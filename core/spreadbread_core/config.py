@@ -26,6 +26,7 @@ class Config:
     port: int
     provider: str
     gemini_api_key: str
+    google_api_token: str
 
     @classmethod
     def load(cls) -> "Config":
@@ -40,4 +41,5 @@ class Config:
             port=int(os.environ.get("SPREADBREAD_PORT", "8765")),
             provider=os.environ.get("SPREADBREAD_PROVIDER", "ollama"),
             gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
+            google_api_token=os.environ.get("SPREADBREAD_GOOGLE_TOKEN", ""),
         )
