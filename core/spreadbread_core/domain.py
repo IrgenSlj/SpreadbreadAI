@@ -78,6 +78,35 @@ class Operation(BaseModel):
     approval_status: ProposalItemStatus = "pending"
 
 
+class Resource(BaseModel):
+    """A generic resource (spreadsheet or document) tracked by the system.
+
+    Bridges the gap between the legacy ``Workbook``-centric identity and
+    multi-provider resources.  A ``Resource`` with ``provider_id="local_xlsx"``
+    maps 1:1 to a ``Workbook`` whose ``id`` equals ``resource.id``.
+    """
+    id: str = Field(default_factory=lambda: _id("res"))
+    provider_id: str = "local_xlsx"
+    resource_kind: ResourceKind = "spreadsheet"
+    external_id: Optional[str] = None
+    name: str = ""
+    created_at: str = Field(default_factory=_now)
+
+
+def new_resource(
+    provider_id: str = "local_xlsx",
+    resource_kind: ResourceKind = "spreadsheet",
+    name: str = "",
+    external_id: Optional[str] = None,
+) -> Resource:
+    return Resource(
+        provider_id=provider_id,
+        resource_kind=resource_kind,
+        name=name,
+        external_id=external_id,
+    )
+
+
 class WorkbookNamedRange(BaseModel):
     name: str
     sheet_name: Optional[str] = None

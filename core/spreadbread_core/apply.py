@@ -1,21 +1,8 @@
 """Apply pipeline.
 
 Takes a proposal whose items have been reviewed and produces a new
-workbook version by writing approved diffs into a copy of the base
-xlsx. Idempotent per proposal: a proposal in `applied` status returns
-its existing version without rewriting.
-
-Rules:
-- Every item in the proposal must have a non-pending status. If any
-  item is still pending, apply is rejected (409).
-- At least one item must be approved. A proposal with all items
-  rejected has nothing to apply (409).
-- The base version is the workbook's `latest_version_id` at the time
-  of apply. The new version is appended to the workbook.
-- Comment items are written as openpyxl Comment objects on their cell.
-- Add / update items write a value or a formula (formula if the value
-  starts with `=`).
-- Remove items clear the cell.
+workbook version by dispatching approved operations through the
+appropriate provider adapter. Idempotent per proposal.
 """
 from __future__ import annotations
 
@@ -29,6 +16,7 @@ from openpyxl.comments import Comment
 
 from .cell_ref import parse_cell
 from .domain import AuditEvent, Operation, Proposal, ProposalItem, WorkbookVersion, _now, _id, mark_item_operation_applied
+from .providers.local_xlsx import LocalXlsxAdapter
 from .store import Store
 from .validators import validate_operation
 
@@ -42,6 +30,19 @@ class ApplyResult:
     proposal: Proposal
     version: WorkbookVersion
     applied_item_ids: list[str]
+
+
+# -- provider adapter registry ------------------------------------------------
+_ADAPTERS: dict[str, Any] = {}
+
+
+def _get_adapter(provider_id: str):
+    if not _ADAPTERS:
+        _ADAPTERS["local_xlsx"] = LocalXlsxAdapter()
+    adapter = _ADAPTERS.get(provider_id)
+    if adapter is None:
+        raise ApplyError(f"unsupported provider {provider_id!r}")
+    return adapter
 
 
 def _select_sheet(book, sheet_name: str | None):
@@ -83,8 +84,6 @@ def _operation_for_item(item: ProposalItem, workbook_id: str, store: Store) -> O
     operation = item.ensure_operation(resource_id=workbook_id, validation_status="not_validated")
     if operation.resource_id and operation.resource_id != workbook_id:
         raise ApplyError(f"operation {operation.id} targets a different resource")
-    if operation.provider_id != "local_xlsx":
-        raise ApplyError(f"operation {operation.id} targets unsupported provider {operation.provider_id!r}")
     if operation.resource_kind != "spreadsheet":
         raise ApplyError(f"operation {operation.id} is not a spreadsheet operation")
 
@@ -183,11 +182,7 @@ def apply_proposal(store: Store, proposal_id: str, reviewer: str = "system") -> 
     if not approved:
         raise ApplyError("no approved items to apply")
 
-    # Conflict detection: refuse if the workbook has moved since the
-    # proposal was generated. source_version_id is set by _ensure_proposal
-    # at proposal-creation time. If unset (legacy proposals), fall back
-    # to the current latest version, but log it so the audit trail shows
-    # we trusted the workbook implicitly.
+    # Conflict detection
     base_version_id = proposal.source_version_id or workbook.latest_version_id
     if proposal.source_version_id and proposal.source_version_id != workbook.latest_version_id:
         raise ApplyError(
@@ -205,15 +200,32 @@ def apply_proposal(store: Store, proposal_id: str, reviewer: str = "system") -> 
                 "was created (sha256 mismatch)"
             )
 
-    base_bytes = store.load_version_bytes(workbook.id, base_version_id)
-    book = _load(io.BytesIO(base_bytes), data_only=False, read_only=False)
-
+    # Determine which provider to use for this proposal's items.
+    # All items in a proposal must share the same provider for now.
+    provider_id = "local_xlsx"
     for item in approved:
-        _write_item(book, item, proposal.workbook_id, store)
+        if item.operation is not None and item.operation.provider_id != provider_id:
+            provider_id = item.operation.provider_id
+            break
 
-    out = io.BytesIO()
-    book.save(out)
-    new_bytes = out.getvalue()
+    base_bytes = store.load_version_bytes(workbook.id, base_version_id)
+
+    if provider_id == "local_xlsx":
+        # Legacy apply path for local_xlsx (preserves exact existing behaviour)
+        book = _load(io.BytesIO(base_bytes), data_only=False, read_only=False)
+        for item in approved:
+            _write_item(book, item, proposal.workbook_id, store)
+        out = io.BytesIO()
+        book.save(out)
+        new_bytes = out.getvalue()
+    else:
+        # Adapter-based apply for other providers
+        adapter = _get_adapter(provider_id)
+        operations = []
+        for item in approved:
+            op = _operation_for_item(item, proposal.workbook_id, store)
+            operations.append(op)
+        new_bytes = adapter.apply_operations(operations, base_bytes)
 
     new_version_id = _id("wbv")
     now = _now()

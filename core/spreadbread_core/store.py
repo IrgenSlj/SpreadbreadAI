@@ -10,6 +10,7 @@ from .domain import (
     AuditEvent,
     Proposal,
     ProposalItem,
+    Resource,
     ReviewSnapshot,
     Workbook,
     _now,
@@ -17,6 +18,16 @@ from .domain import (
 )
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS resources (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    resource_kind TEXT NOT NULL,
+    external_id TEXT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resources_provider ON resources(provider_id, resource_kind);
 CREATE TABLE IF NOT EXISTS workbooks (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -97,6 +108,45 @@ class Store:
             cx.commit()
         finally:
             cx.close()
+
+    # --- resources -----------------------------------------------------
+    def save_resource(self, res: Resource) -> None:
+        with self._conn() as cx:
+            cx.execute(
+                """
+                INSERT INTO resources(id, provider_id, resource_kind, external_id, name, created_at, payload)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    provider_id = excluded.provider_id,
+                    resource_kind = excluded.resource_kind,
+                    external_id = excluded.external_id,
+                    name = excluded.name,
+                    created_at = excluded.created_at,
+                    payload = excluded.payload
+                """,
+                (res.id, res.provider_id, res.resource_kind, res.external_id,
+                 res.name, res.created_at, res.model_dump_json()),
+            )
+
+    def get_resource(self, resource_id: str) -> Optional[Resource]:
+        with self._conn() as cx:
+            row = cx.execute("SELECT payload FROM resources WHERE id = ?", (resource_id,)).fetchone()
+        return Resource.model_validate_json(row["payload"]) if row else None
+
+    def list_resources(self, provider_id: Optional[str] = None) -> list[Resource]:
+        with self._conn() as cx:
+            if provider_id:
+                rows = cx.execute(
+                    "SELECT payload FROM resources WHERE provider_id = ? ORDER BY created_at DESC",
+                    (provider_id,),
+                ).fetchall()
+            else:
+                rows = cx.execute("SELECT payload FROM resources ORDER BY created_at DESC").fetchall()
+        return [Resource.model_validate_json(r["payload"]) for r in rows]
+
+    def delete_resource(self, resource_id: str) -> None:
+        with self._conn() as cx:
+            cx.execute("DELETE FROM resources WHERE id = ?", (resource_id,))
 
     # --- workbooks -----------------------------------------------------
     def save_workbook(self, wb: Workbook) -> None:

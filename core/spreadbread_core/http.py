@@ -90,17 +90,21 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         return wb.model_dump()
 
     @app.get("/api/workbooks/{workbook_id}/review")
-    def review(workbook_id: str) -> dict[str, Any]:
-        snap = store.review_snapshot(workbook_id)
+    @app.get("/api/resources/{resource_id}/review")
+    def review(workbook_id: str = "", resource_id: str = "") -> dict[str, Any]:
+        rid = workbook_id or resource_id
+        snap = store.review_snapshot(rid)
         if not snap:
             raise HTTPException(404, "workbook not found")
         return snap.model_dump()
 
     @app.get("/api/workbooks/{workbook_id}/runs")
-    def list_runs(workbook_id: str) -> list[dict[str, Any]]:
-        if not store.get_workbook(workbook_id):
+    @app.get("/api/resources/{resource_id}/runs")
+    def list_runs(workbook_id: str = "", resource_id: str = "") -> list[dict[str, Any]]:
+        rid = workbook_id or resource_id
+        if not store.get_workbook(rid):
             raise HTTPException(404, "workbook not found")
-        return [run.model_dump() for run in store.list_agent_runs(workbook_id)]
+        return [run.model_dump() for run in store.list_agent_runs(rid)]
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> dict[str, Any]:
@@ -110,18 +114,20 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         return run.model_dump()
 
     @app.post("/api/workbooks/{workbook_id}/trust-mode")
-    def set_trust_mode(workbook_id: str, req: TrustModeRequest) -> dict[str, Any]:
+    @app.post("/api/resources/{resource_id}/trust-mode")
+    def set_trust_mode(workbook_id: str = "", resource_id: str = "", req: TrustModeRequest = ...) -> dict[str, Any]:  # type: ignore[assignment]
+        rid = workbook_id or resource_id
         valid_modes = ("direct", "review", "locked")
         if req.mode not in valid_modes:
             raise HTTPException(400, f"mode must be one of {valid_modes}")
-        wb = store.get_workbook(workbook_id)
+        wb = store.get_workbook(rid)
         if not wb:
             raise HTTPException(404, "workbook not found")
         wb.trust_mode = req.mode  # type: ignore[assignment]
         store.save_workbook(wb)
         store.append_audit(
             AuditEvent(
-                workbook_id=workbook_id,
+                workbook_id=rid,
                 actor="user",
                 action="workbook.trust_mode_changed",
                 detail=f"Trust mode set to {req.mode!r}",
@@ -130,20 +136,22 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         return wb.model_dump()
 
     @app.post("/api/workbooks/{workbook_id}/chat")
-    def chat(workbook_id: str, req: ChatRequest) -> dict[str, Any]:
-        wb = store.get_workbook(workbook_id)
+    @app.post("/api/resources/{resource_id}/chat")
+    def chat(workbook_id: str = "", resource_id: str = "", req: ChatRequest = ...) -> dict[str, Any]:  # type: ignore[assignment]
+        rid = workbook_id or resource_id
+        wb = store.get_workbook(rid)
         if not wb:
             raise HTTPException(404, "workbook not found")
         try:
             mode = parse_agent_mode(req.mode, default="propose")
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        message = f"Workbook id: {workbook_id}\nUser request: {req.message}"
-        run = AgentRun(workbook_id=workbook_id, mode=mode or "propose", prompt=req.message, model=cfg.model)
+        message = f"Workbook id: {rid}\nUser request: {req.message}"
+        run = AgentRun(workbook_id=rid, mode=mode or "propose", prompt=req.message, model=cfg.model)
         store.save_agent_run(run)
         store.append_audit(
             AuditEvent(
-                workbook_id=workbook_id,
+                workbook_id=rid,
                 actor="system",
                 action="agent.run.started",
                 detail=f"Started run {run.id} in {run.mode} mode",
@@ -156,7 +164,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             store.save_agent_run(run)
             store.append_audit(
                 AuditEvent(
-                    workbook_id=workbook_id,
+                    workbook_id=rid,
                     actor="system",
                     action="agent.run.failed",
                     detail=f"Run {run.id} failed: {exc}",
@@ -169,7 +177,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         auto_apply_error = None
 
         if wb.trust_mode == "direct" and mode in ("propose", "direct"):
-            proposal = store.latest_proposal_for(workbook_id)
+            proposal = store.latest_proposal_for(rid)
             if proposal and any(item.status == "pending" for item in proposal.items):
                 try:
                     store.decide_all_pending(proposal.id, "approve", "user (direct mode)")
@@ -183,7 +191,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         store.save_agent_run(run)
         store.append_audit(
             AuditEvent(
-                workbook_id=workbook_id,
+                workbook_id=rid,
                 actor="system",
                 action="agent.run.completed",
                 detail=f"Completed run {run.id} in {result.rounds} round(s)",
