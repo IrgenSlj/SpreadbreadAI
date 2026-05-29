@@ -3,11 +3,13 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from .domain import (
     AgentRun,
     AuditEvent,
+    Operation,
+    OperationValidation,
     Proposal,
     ProposalItem,
     Resource,
@@ -16,6 +18,7 @@ from .domain import (
     _now,
     sync_item_operation_status,
 )
+from .validators import validate_operation
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS resources (
@@ -61,6 +64,31 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_workbook ON agent_runs(workbook_id, started_at);
+CREATE TABLE IF NOT EXISTS operations (
+    id TEXT PRIMARY KEY,
+    resource_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL DEFAULT 'local_xlsx',
+    resource_kind TEXT NOT NULL DEFAULT 'spreadsheet',
+    kind TEXT NOT NULL,
+    target_sheet TEXT,
+    target_cell TEXT,
+    target_range TEXT,
+    target_path TEXT,
+    before TEXT NOT NULL DEFAULT '{}',
+    after TEXT NOT NULL DEFAULT '{}',
+    rationale TEXT NOT NULL DEFAULT '',
+    risk TEXT NOT NULL DEFAULT 'medium',
+    required_capability TEXT NOT NULL DEFAULT '',
+    validation_status TEXT NOT NULL DEFAULT 'not_validated',
+    validation_messages TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'draft',
+    approval_status TEXT NOT NULL DEFAULT 'pending',
+    source_run_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_operations_resource ON operations(resource_id, status);
+CREATE INDEX IF NOT EXISTS idx_operations_status ON operations(status);
 """
 
 
@@ -216,6 +244,10 @@ class Store:
         self.save_proposal(proposal)
         return proposal
 
+    def _sync_operation(self, item: ProposalItem) -> None:
+        if item.operation is not None:
+            self.save_operation(item.operation)
+
     def decide_item(
         self,
         proposal_id: str,
@@ -236,6 +268,7 @@ class Store:
                 item.reviewed_at = _now()
                 item.review_comment = comment
                 sync_item_operation_status(item)
+                self._sync_operation(item)
                 break
         else:
             raise KeyError(f"item {item_id} not found in proposal {proposal_id}")
@@ -264,6 +297,7 @@ class Store:
                 item.reviewed_at = now
                 item.review_comment = comment
                 sync_item_operation_status(item)
+                self._sync_operation(item)
                 flipped.append(item.id)
         self.save_proposal(proposal)
         return proposal, flipped
@@ -297,6 +331,174 @@ class Store:
                 (workbook_id,),
             ).fetchall()
         return [AgentRun.model_validate_json(r["payload"]) for r in rows]
+
+    # --- operations ----------------------------------------------------
+    def save_operation(self, op: Operation) -> None:
+        import json
+
+        with self._conn() as cx:
+            cx.execute(
+                """
+                INSERT INTO operations(
+                    id, resource_id, provider_id, resource_kind, kind,
+                    target_sheet, target_cell, target_range, target_path,
+                    before, after, rationale, risk, required_capability,
+                    validation_status, validation_messages,
+                    status, approval_status, source_run_id, created_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    resource_id = excluded.resource_id,
+                    provider_id = excluded.provider_id,
+                    resource_kind = excluded.resource_kind,
+                    kind = excluded.kind,
+                    target_sheet = excluded.target_sheet,
+                    target_cell = excluded.target_cell,
+                    target_range = excluded.target_range,
+                    target_path = excluded.target_path,
+                    before = excluded.before,
+                    after = excluded.after,
+                    rationale = excluded.rationale,
+                    risk = excluded.risk,
+                    required_capability = excluded.required_capability,
+                    validation_status = excluded.validation_status,
+                    validation_messages = excluded.validation_messages,
+                    status = excluded.status,
+                    approval_status = excluded.approval_status,
+                    source_run_id = excluded.source_run_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    op.id, op.resource_id or "", op.provider_id, op.resource_kind, op.kind,
+                    op.target.sheet, op.target.cell, op.target.range, op.target.path,
+                    json.dumps(op.before), json.dumps(op.after),
+                    op.rationale, op.risk, op.required_capability,
+                    op.validation.status, json.dumps(op.validation.messages),
+                    op.status, op.approval_status, op.source_run_id,
+                    _now(), _now(),
+                ),
+            )
+
+    def get_operation(self, operation_id: str) -> Optional[Operation]:
+        with self._conn() as cx:
+            row = cx.execute("SELECT * FROM operations WHERE id = ?", (operation_id,)).fetchone()
+        if not row:
+            return None
+        return self._row_to_operation(row)
+
+    def list_operations(
+        self,
+        resource_id: Optional[str] = None,
+        status: Optional[str] = None,
+        kind: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[Operation]:
+        clauses: list[str] = []
+        params: list[str] = []
+        if resource_id is not None:
+            clauses.append("resource_id = ?")
+            params.append(resource_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind)
+        where = " AND ".join(clauses) if clauses else "1"
+        with self._conn() as cx:
+            rows = cx.execute(
+                f"SELECT * FROM operations WHERE {where} ORDER BY created_at DESC LIMIT ?",
+                [*params, str(limit)],
+            ).fetchall()
+        return [self._row_to_operation(r) for r in rows]
+
+    def delete_operation(self, operation_id: str) -> None:
+        with self._conn() as cx:
+            cx.execute("DELETE FROM operations WHERE id = ?", (operation_id,))
+
+    def validate_and_save_operation(
+        self,
+        op: Operation,
+        dependencies: Optional[dict[str, list[str]]] = None,
+        known_sheets: Optional[list[str]] = None,
+    ) -> Operation:
+        if op.kind == "set_cell_formula":
+            op.validation = validate_operation(
+                op,
+                dependencies or {},
+                known_sheets or [],
+            )
+        else:
+            op.validation = OperationValidation(status="valid")
+        op.status = "valid" if op.validation.status == "valid" else "invalid"
+        self.save_operation(op)
+        return op
+
+    def transition_operation(
+        self, operation_id: str, new_status: str
+    ) -> Operation:
+        op = self.get_operation(operation_id)
+        if not op:
+            raise KeyError(f"operation {operation_id} not found")
+        allowed: dict[str, list[str]] = {
+            "draft": ["valid", "invalid"],
+            "valid": ["pending", "invalid"],
+            "invalid": ["draft"],
+            "pending": ["approved", "rejected"],
+            "approved": ["applied", "pending"],
+            "rejected": ["pending"],
+            "applied": [],
+            "failed": ["draft"],
+        }
+        permitted = allowed.get(op.status, [])
+        if new_status not in permitted:
+            raise ValueError(
+                f"Cannot transition operation {operation_id} from {op.status!r} to {new_status!r}. "
+                f"Allowed: {permitted}"
+            )
+        op.status = new_status  # type: ignore[assignment]
+        if new_status in ("approved", "rejected"):
+            op.approval_status = new_status  # type: ignore[assignment]
+        self.save_operation(op)
+        return op
+
+    @staticmethod
+    def _row_to_operation(row: sqlite3.Row) -> Operation:
+        import json
+        from .domain import OperationTarget, OperationValidation
+
+        target = OperationTarget(
+            sheet=row["target_sheet"],
+            cell=row["target_cell"],
+            range=row["target_range"],
+            path=row["target_path"],
+        )
+
+        def _safe_json(raw: str, default: Any) -> Any:
+            try:
+                return json.loads(raw) if raw else default
+            except (json.JSONDecodeError, TypeError):
+                return default
+
+        return Operation(
+            id=row["id"],
+            resource_id=row["resource_id"] or None,
+            provider_id=row["provider_id"],
+            resource_kind=row["resource_kind"],
+            kind=row["kind"],
+            target=target,
+            before=_safe_json(row["before"], {}),
+            after=_safe_json(row["after"], {}),
+            rationale=row["rationale"],
+            risk=row["risk"],
+            required_capability=row["required_capability"],
+            validation=OperationValidation(
+                status=row["validation_status"],
+                messages=_safe_json(row["validation_messages"], []),
+            ),
+            status=row["status"],
+            approval_status=row["approval_status"],
+            source_run_id=row["source_run_id"],
+        )
 
     # --- audit ---------------------------------------------------------
     def append_audit(self, event: AuditEvent) -> None:

@@ -48,6 +48,10 @@ class TrustModeRequest(BaseModel):
     mode: str
 
 
+class TransitionRequest(BaseModel):
+    status: str
+
+
 def create_app(config: Optional[Config] = None) -> FastAPI:
     cfg = config or Config.load()
     store = Store(cfg.db_path)
@@ -264,6 +268,62 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             "version": result.version.model_dump(),
             "applied_item_ids": result.applied_item_ids,
         }
+
+    # -- operation IR endpoints -----------------------------------------
+    @app.get("/api/operations")
+    def list_operations(
+        resource_id: Optional[str] = None,
+        status: Optional[str] = None,
+        kind: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return [
+            op.model_dump()
+            for op in store.list_operations(
+                resource_id=resource_id, status=status, kind=kind, limit=limit
+            )
+        ]
+
+    @app.get("/api/operations/{operation_id}")
+    def get_operation(operation_id: str) -> dict[str, Any]:
+        op = store.get_operation(operation_id)
+        if not op:
+            raise HTTPException(404, "operation not found")
+        return op.model_dump()
+
+    @app.post("/api/operations/{operation_id}/validate")
+    def validate_operation_endpoint(operation_id: str) -> dict[str, Any]:
+        op = store.get_operation(operation_id)
+        if not op:
+            raise HTTPException(404, "operation not found")
+        deps: dict[str, list[str]] = {}
+        sheets: list[str] = []
+        if op.resource_id:
+            wb = store.get_workbook(op.resource_id)
+            if wb:
+                deps = wb.dependencies
+                sheets = [s.name for s in wb.sheets]
+        op = store.validate_and_save_operation(op, deps, sheets)
+        return op.model_dump()
+
+    @app.post("/api/operations/{operation_id}/transition")
+    def transition_operation(operation_id: str, req: TransitionRequest) -> dict[str, Any]:
+        try:
+            op = store.transition_operation(operation_id, req.status)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if op.resource_id and store.get_workbook(op.resource_id):
+            store.append_audit(
+                AuditEvent(
+                    workbook_id=op.resource_id,
+                    actor="user",
+                    action=f"operation.{req.status}",
+                    detail=f"Operation {operation_id} transitioned to {req.status}",
+                )
+            )
+        return op.model_dump()
 
     @app.get("/api/tools")
     def tools(mode: Optional[str] = None) -> list[dict[str, Any]]:
