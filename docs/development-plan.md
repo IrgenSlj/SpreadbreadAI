@@ -12,7 +12,7 @@ provider-neutral contracts, then expand to Google and other providers.
 Supporting contracts:
 
 - [`architecture/operation-ir.md`](architecture/operation-ir.md)
-- [`architecture/skills-and-policy.md`](architecture/skills-and-policy.md)
+- [`architecture/skills-tools-and-policy.md`](architecture/skills-tools-and-policy.md)
 - [`product/ux-principles.md`](product/ux-principles.md)
 
 ## Current Product Shape
@@ -199,6 +199,11 @@ Landed:
 - Agent run/session tracing: `run_events` table, tool-call recording
   from `/chat`, event endpoints, counter fields on `AgentRun`.
 - `Resource` model, resources table, `/api/resources/` aliased routes.
+- Artifact API (`GET /api/runs/{id}/artifacts`) with structured findings,
+  operations, timeline, and dependency impact.
+- Prototype web UI (`/ui/`) with chat, artifact viewer, per-item
+  approve/reject, approve-all, apply, create/delete workbook, mode
+  selector, trust mode, and dark mode.
 
 Known gaps:
 
@@ -225,7 +230,7 @@ Known gaps:
 | Sprint 2 — Operation IR | Complete |
 | Sprint 3 — Runs, Events, And Policy | Partial (run_events done; policy/permission metadata pending) |
 | Sprint 4 — Agent Modes And Workspace Spine | Partial (modes exist in chat/tools API; resource model added) |
-| Sprint 5 — Artifact-Centered UI | Not started |
+| Sprint 5 — Artifact-Centered UI | Partial (artifact models, API, and prototype UI built; redesign pending) |
 | Sprint 6 — Skills And MCP Hardening | Not started |
 | Sprint 7 — Google Sheets Adapter | Partial (adapter created, registered, tested with mocks; no end-to-end) |
 | Sprint 8 — Model Adapter And Cost Controls | Partial (LLM package created; Gemini adapter done; cost hooks pending) |
@@ -294,9 +299,9 @@ platform.
 Goal: make the UX reflect the product: artifacts first, chat as entry.
 
 | Session | Scope | Acceptance Criteria |
-|---|---|---|
-| 5.1 | Define artifact response models. | Findings, operations, validation results, dependency impact, and audit events have stable API shapes. |
-| 5.2 | Build local artifact UI surface. | User can start a run, inspect artifacts, approve/reject operations, apply, and view timeline locally. |
+|---|---|---|---|
+| 5.1 | Define artifact response models. (done) | Findings, operations, validation results, dependency impact, and audit events have stable API shapes. |
+| 5.2 | Build local artifact UI surface. (done — prototype; redesign pending) | User can start a run, inspect artifacts, approve/reject operations, apply, and view timeline locally. |
 | 5.3 | Add cost/status indicators. | UI shows model/provider, local/cloud status, trust mode, and whether paid services are in use. |
 | 5.4 | Add exportable run summary. | One run can be summarized as a report with prompt, tools, operations, decisions, versions, and audit. |
 

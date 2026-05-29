@@ -1,4 +1,4 @@
-# Tool, Skill, And MCP Surface
+# Skills, Tools, And Policy
 
 SpreadbreadAI exposes tools to the local LLM and to MCP clients. The
 same permission policy must govern native tools, skills, MCP calls, and
@@ -17,6 +17,13 @@ future provider adapters.
 
 Tools act. Skills teach. MCP connects. Operations describe changes.
 Apply mutates providers.
+
+Skills and policy are separate concepts:
+
+- Skills teach workflows.
+- Policy decides what can run.
+
+No skill should grant itself extra permissions.
 
 ## Current Tool Catalog
 
@@ -39,8 +46,8 @@ Write-staging tools cannot mutate providers:
 - `propose_diff(workbook_id, cell, kind, before?, after?, after_type?, rationale)`
 - `add_comment(workbook_id, cell, body)`
 
-These currently create proposal items. The next contract maps proposal
-items onto typed operations.
+These create proposal items and/or typed operations. There is no
+model-exposed direct provider write tool.
 
 ## Planned Tool Metadata
 
@@ -71,33 +78,6 @@ Example:
 }
 ```
 
-## Permission Policy
-
-Policy evaluates a requested tool/operation as:
-
-- `allow` — execute immediately.
-- `ask` — require user approval or a UI permission prompt.
-- `deny` — do not expose or execute.
-
-Inputs to policy:
-
-- agent mode
-- trust mode
-- provider capability
-- resource kind
-- operation risk
-- caller: local UI, local LLM, MCP client, skill
-- workbook/document protection state
-- user-configured allow/deny rules
-
-Default stance:
-
-- read-only inspection: allow
-- write staging: allow in propose/direct modes, otherwise deny
-- apply: ask or require prior approval unless explicitly trusted
-- destructive operations: ask/deny until implemented with strong undo
-- MCP write-capable tools: stage only, never direct provider write
-
 ## Agent Modes And Tool Exposure
 
 | Mode | Tool exposure |
@@ -123,35 +103,109 @@ Current implementation status:
   one that was not exposed.
 - `/api/tools?mode=...` exposes the mode-filtered schema.
 - `/chat` creates an `AgentRun` and returns `run_id` so prompt, mode,
-  audit, and future tool-call rows have a common trace id.
+  audit, and tool-call events have a common trace id.
 
-## MCP Rules
+## Permission Policy
 
-MCP is an integration boundary, not a bypass.
+Policy evaluates a requested tool/operation as:
 
-- MCP clients use the same tool registry as the local LLM.
-- MCP tool calls write distinct audit events.
-- MCP write-capable tools stage operations/proposal items only.
-- MCP exposure is filtered by mode, policy, provider capability, and
-  resource.
-- External MCP clients should be treated as local untrusted callers
-  unless explicitly configured otherwise.
+- `allow` — execute immediately.
+- `ask` — require user approval or a UI permission prompt.
+- `deny` — do not expose or execute.
 
-## Skills Rules
+### Policy Inputs
 
-Skills are local workflow packs. Initial format should be a directory
-with a `SKILL.md` and optional metadata.
+- agent mode
+- trust mode
+- provider capability
+- resource kind
+- operation risk
+- caller: local UI, local LLM, MCP client, skill
+- workbook/document protection state
+- user-configured allow/deny rules
 
-Skill metadata should include:
+### Default Policy
 
-- name
-- description
-- supported resource kinds
-- required tools/capabilities
-- risk level
-- allowed modes
-- optional model/provider recommendation
-- optional environment/binary requirements
+| Request | Default |
+|---|---|
+| Read workbook/document metadata | allow |
+| Inspect formulas/dependencies | allow |
+| Stage comments | allow in propose/direct |
+| Stage formula/value operations | allow in propose/direct |
+| Apply approved operations | allow through apply endpoint |
+| Auto-apply low-risk direct-mode operations | allow only when configured |
+| Apply high-risk operations | ask |
+| Destructive operations | deny until explicitly implemented |
+| MCP direct provider write | deny |
+
+### Cost Policy
+
+Default development behavior:
+
+- local model first
+- no paid API calls unless configured
+- no background cloud sync
+- no provider connector enabled without explicit user setup
+
+Cloud model/provider adapters should expose usage data when available so
+the UI can display cost status.
+
+### MCP And Skills Filtering
+
+MCP tools and skills must be filtered through the same policy layer.
+
+Rules:
+
+- If a tool is denied, do not expose it to the model/client for that run.
+- If a tool requires approval, return a structured permission request.
+- Every MCP tool call writes an audit event.
+- Every skill-selected tool call writes an audit event.
+- Skills can recommend operations but cannot apply them directly.
+
+## Skills
+
+### Skill Shape
+
+Initial skills should be local folders:
+
+```text
+skills/
+  formula-audit/
+    SKILL.md
+  month-end-review/
+    SKILL.md
+```
+
+Recommended `SKILL.md` frontmatter:
+
+```yaml
+---
+name: formula-audit
+description: Review formulas, dependencies, named ranges, and reference risks.
+resource_kinds: [spreadsheet]
+allowed_modes: [inspect, plan, propose]
+required_capabilities:
+  - spreadsheet.read
+  - spreadsheet.comment
+risk: medium
+---
+```
+
+The body should describe the workflow, validation checklist, tool order,
+and expected artifacts.
+
+### Built-In Starter Skills
+
+- `formula-audit`
+- `month-end-review`
+- `scenario-modeling`
+- `stale-input-cleanup`
+- `external-reference-repair`
+- `report-generation`
+
+These should start as instructions and checklists, not Python plugins.
+
+### Skills Rules
 
 Skills may:
 
@@ -166,6 +220,18 @@ Skills may not:
 - call provider APIs directly
 - hide write operations from audit
 - require paid services by default
+
+## MCP Rules
+
+MCP is an integration boundary, not a bypass.
+
+- MCP clients use the same tool registry as the local LLM.
+- MCP tool calls write distinct audit events.
+- MCP write-capable tools stage operations/proposal items only.
+- MCP exposure is filtered by mode, policy, provider capability, and
+  resource.
+- External MCP clients should be treated as local untrusted callers
+  unless explicitly configured otherwise.
 
 ## Operation And Apply Flow
 
