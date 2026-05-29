@@ -15,6 +15,7 @@ from .domain import (
     CellValueType,
     DiffKind,
     OperationRisk,
+    OperationValidation,
     Proposal,
     ProposalItem,
     ResourceKind,
@@ -22,6 +23,7 @@ from .domain import (
 )
 from .policy import AgentMode, PermissionDecision, evaluate_tool_metadata
 from .store import Store
+from .validators import validate_operation
 
 ToolSideEffect = Literal["read", "stage", "apply_request", "provider_write"]
 
@@ -333,7 +335,16 @@ class ToolRegistry:
             after_type=after_type,
             rationale=rationale,
         )
-        item.ensure_operation(resource_id=workbook_id, validation_status="valid")
+        op = item.ensure_operation(resource_id=workbook_id, validation_status="not_validated")
+        wb = self.store.get_workbook(workbook_id)
+        if wb is not None and op.kind == "set_cell_formula":
+            op.validation = validate_operation(
+                op,
+                wb.dependencies,
+                [s.name for s in wb.sheets],
+            )
+        else:
+            op.validation = OperationValidation(status="valid")
         self.store.append_proposal_item(proposal.id, item)
         self.store.append_audit(
             AuditEvent(

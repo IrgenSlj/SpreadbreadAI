@@ -30,6 +30,7 @@ from openpyxl.comments import Comment
 from .cell_ref import parse_cell
 from .domain import AuditEvent, Operation, Proposal, ProposalItem, WorkbookVersion, _now, _id, mark_item_operation_applied
 from .store import Store
+from .validators import validate_operation
 
 
 class ApplyError(Exception):
@@ -78,14 +79,25 @@ def _typed_value(item: ProposalItem) -> Any:
     return value
 
 
-def _operation_for_item(item: ProposalItem, workbook_id: str) -> Operation:
-    operation = item.ensure_operation(resource_id=workbook_id, validation_status="valid")
+def _operation_for_item(item: ProposalItem, workbook_id: str, store: Store) -> Operation:
+    operation = item.ensure_operation(resource_id=workbook_id, validation_status="not_validated")
     if operation.resource_id and operation.resource_id != workbook_id:
         raise ApplyError(f"operation {operation.id} targets a different resource")
     if operation.provider_id != "local_xlsx":
         raise ApplyError(f"operation {operation.id} targets unsupported provider {operation.provider_id!r}")
     if operation.resource_kind != "spreadsheet":
         raise ApplyError(f"operation {operation.id} is not a spreadsheet operation")
+
+    # Safety-net re-validation before apply.
+    if operation.validation.status != "invalid" and operation.kind == "set_cell_formula":
+        wb = store.get_workbook(workbook_id)
+        if wb is not None:
+            operation.validation = validate_operation(
+                operation,
+                wb.dependencies,
+                [s.name for s in wb.sheets],
+            )
+
     if operation.validation.status == "invalid":
         detail = "; ".join(operation.validation.messages) or "operation validation failed"
         raise ApplyError(f"operation {operation.id} is invalid: {detail}")
@@ -112,8 +124,8 @@ def _typed_operation_value(operation: Operation, item: ProposalItem) -> Any:
     raise ApplyError(f"operation {operation.id} cannot be converted to a cell value")
 
 
-def _write_operation(book, item: ProposalItem, workbook_id: str) -> None:
-    operation = _operation_for_item(item, workbook_id)
+def _write_operation(book, item: ProposalItem, workbook_id: str, store: Store) -> None:
+    operation = _operation_for_item(item, workbook_id, store)
     if operation.kind == "add_cell_comment":
         cell = _select_operation_cell(book, operation)
         cell.comment = Comment(operation.after.get("comment") or item.after or item.rationale, "spreadbreadai")
@@ -129,9 +141,9 @@ def _write_operation(book, item: ProposalItem, workbook_id: str) -> None:
     raise ApplyError(f"operation {operation.id} has unsupported kind {operation.kind!r}")
 
 
-def _write_item(book, item: ProposalItem, workbook_id: str) -> None:
+def _write_item(book, item: ProposalItem, workbook_id: str, store: Store) -> None:
     if item.operation is not None:
-        _write_operation(book, item, workbook_id)
+        _write_operation(book, item, workbook_id, store)
         return
     try:
         ref = parse_cell(item.cell)
@@ -197,7 +209,7 @@ def apply_proposal(store: Store, proposal_id: str, reviewer: str = "system") -> 
     book = _load(io.BytesIO(base_bytes), data_only=False, read_only=False)
 
     for item in approved:
-        _write_item(book, item, proposal.workbook_id)
+        _write_item(book, item, proposal.workbook_id, store)
 
     out = io.BytesIO()
     book.save(out)
