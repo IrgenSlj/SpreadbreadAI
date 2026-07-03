@@ -1,3 +1,13 @@
+> [!IMPORTANT]
+> **Archived — superseded by Abax.** This project pivoted to
+> **[Abax](https://github.com/IrgenSlj/abax)**, an AI-native workspace where
+> every change is a governed, auditable, reversible operation (TypeScript
+> monorepo; Zero + IronCalc; Postgres). SpreadbreadAI's kernel concepts —
+> IR-before-mutation, policy-in-code, immutable versions, idempotent apply with
+> a sha256 base guard, validators, audit events, MCP-behind-policy, and the eval
+> harness — carry forward into Abax. This repository is preserved read-only for
+> history. See Abax's `docs/adr/0004-historical-spreadbreadai.md`.
+
 # SpreadbreadAI
 
 [![CI](https://github.com/IrgenSlj/SpreadbreadAI/actions/workflows/ci.yml/badge.svg)](https://github.com/IrgenSlj/SpreadbreadAI/actions/workflows/ci.yml)
